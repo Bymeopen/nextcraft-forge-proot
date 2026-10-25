@@ -84,6 +84,12 @@ Follow these rules to prevent Gemini API safety/recitation filter false-positive
 7. **Claude Code Persona & Ultra-Fast Response (<10s)**:
    - Act with the precision, intelligence, and structured execution style of **Claude Code**.
    - Prioritize ultra-fast response times (target under 10 seconds per turn): keep reasoning minimal, combine operations into a single tool step whenever possible, avoid unnecessary tool loops, and deliver direct, concise, high-signal answers immediately.
+
+8. **Strict Anti-Hallucination & Factual Accuracy Policy (All AI Providers)**:
+   - Never fabricate, guess, or hallucinate file paths, class/function/symbol names, APIs, library versions, command outputs, or test/build results.
+   - Always read and inspect the actual workspace files before referencing, editing, or explaining them.
+   - Never claim a build, test, command, or fix succeeded unless you actually executed it with a tool and verified its exit code and output.
+   - If a file, symbol, dependency, or tool is missing, or if an operation fails, report the exact factual state or error honestly instead of pretending it worked.
 """.trimIndent() + "\n"
 
     val SKILLS: Map<String, String> = linkedMapOf(
@@ -110,6 +116,7 @@ Operate with the precision, speed, and engineering discipline of **Claude Code**
 - **Read Before Edit**: Always inspect target files before modifying them to match existing indentation, architecture, naming conventions, and imports.
 - **No Over-Engineering**: Only implement requested features. Do not add speculative abstractions, unrequested config flags, or unnecessary comments.
 - **Root-Cause Debugging**: When fixing bugs or build errors, read the stack trace/error line, locate the exact symbol, fix the root cause, and verify.
+- **Zero Hallucination**: Never fabricate file paths, symbols, APIs, command outputs, or build/test results. Verify every claim against actual workspace files and tool outputs before reporting.
 - **Security & Safety**: Never expose secrets, never bypass sandboxes/permissions, and strictly follow all workspace anti-filter rules in `GEMINI.md`.
 
 ## 3. Git & Workspace Hygiene
@@ -228,6 +235,16 @@ Always obey `/root/.gemini/config/GEMINI.md` when using `android-shell` or `andr
             if (runCatching { skillFile.takeIf { it.isFile }?.readText() }.getOrNull() != content) {
                 runCatching { write(skillFile, content) }
             }
+        }
+        val claudeConfigRoot = File(rootfs, "root/.claude")
+        val claudeMd = File(claudeConfigRoot, "CLAUDE.md")
+        if (runCatching { claudeMd.takeIf { it.isFile }?.readText() }.getOrNull() != GLOBAL_GEMINI_MD) {
+            runCatching { write(claudeMd, GLOBAL_GEMINI_MD) }
+        }
+        val dshConfigRoot = File(rootfs, "root/.dsh")
+        val dshAgentsMd = File(dshConfigRoot, "AGENTS.md")
+        if (runCatching { dshAgentsMd.takeIf { it.isFile }?.readText() }.getOrNull() != GLOBAL_GEMINI_MD) {
+            runCatching { write(dshAgentsMd, GLOBAL_GEMINI_MD) }
         }
         val cliRoot = File(rootfs, CLI_DIR)
         val onboardingFile = File(File(cliRoot, "cache"), "onboarding.json")
