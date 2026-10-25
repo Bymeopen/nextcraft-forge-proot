@@ -93,7 +93,7 @@ fun FilesAndDiffScreen(
     /** Set when this is one workspace opened from the global file manager: Back then returns to the workspace list. */
     onBackToWorkspaces: (() -> Unit)? = null,
 ) {
-    var mode by rememberSaveable { mutableStateOf(if (state.selectedFilePath != null) "editor" else "files") } // "files" | "editor" | "diff"
+    var mode by rememberSaveable(state.activeProjectId) { mutableStateOf(if (state.selectedFilePath != null) "editor" else "files") } // "files" | "editor" | "diff"
     var showNewFileDialog by rememberSaveable { mutableStateOf(false) }
     var newFileBaseDir by rememberSaveable { mutableStateOf("") }
     var newFolderBaseDir by rememberSaveable { mutableStateOf<String?>(null) }

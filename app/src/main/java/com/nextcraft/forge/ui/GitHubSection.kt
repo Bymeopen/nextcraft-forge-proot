@@ -187,7 +187,7 @@ fun GitHubSection(state: ForgeUiState, viewModel: MainViewModel) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ForgePrimaryButton(
                             text = stringResource(R.string.settings_push_workspace),
-                            onClick = { viewModel.syncProjectWithGitHub() },
+                            onClick = { viewModel.syncProjectWithGitHub(reportStatus = true) },
                             modifier = Modifier.weight(1f),
                         )
                         OutlinedButton(

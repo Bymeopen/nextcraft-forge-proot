@@ -153,14 +153,19 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
             ForgePrimaryButton(
                 text = stringResource(R.string.connector_add),
                 onClick = {
-                    viewModel.saveConnector(
-                        name = name,
-                        transport = if (kind == 0) McpTransport.HTTP else McpTransport.COMMAND,
-                        target = target,
-                        secretName = envName,
-                        secret = secret,
-                    )
-                    secret = ""
+                    if (viewModel.saveConnector(
+                            name = name,
+                            transport = if (kind == 0) McpTransport.HTTP else McpTransport.COMMAND,
+                            target = target,
+                            secretName = envName,
+                            secret = secret,
+                        )
+                    ) {
+                        name = ""
+                        target = ""
+                        envName = ""
+                        secret = ""
+                    }
                 },
                 enabled = name.isNotBlank() && target.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),

@@ -30,7 +30,7 @@ import com.nextcraft.forge.schedule.ScheduleRules
 @Composable
 internal fun ScheduleDialog(state: ForgeUiState, viewModel: MainViewModel, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    val tasks = state.scheduledTasks.filter { it.chatId == state.activeChatId }
+    val tasks = state.scheduledTasks.filter { it.projectId == state.activeProjectId && it.chatId == state.activeChatId }
     var prompt by rememberSaveable { mutableStateOf("") }
     var minutes by rememberSaveable { mutableIntStateOf(30) }
     ForgeAlertDialog(

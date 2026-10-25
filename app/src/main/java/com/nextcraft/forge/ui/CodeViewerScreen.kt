@@ -1,5 +1,6 @@
 package com.nextcraft.forge.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -49,8 +50,9 @@ internal fun fileAsViewerLines(content: String): List<DiffLine> =
 fun CodeViewerScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
     // Open on the files when there is nothing to review, instead of an empty "changes" tab.
-    var showChanges by rememberSaveable { mutableStateOf(state.changedItems.isNotEmpty()) }
-    var openPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var showChanges by rememberSaveable(state.activeProjectId) { mutableStateOf(state.changedItems.isNotEmpty()) }
+    var openPath by rememberSaveable(state.activeProjectId) { mutableStateOf<String?>(null) }
+    BackHandler(enabled = openPath != null) { openPath = null }
     // Generated and vendored folders would bury the project's own files and make the list thousands of rows long.
     val allFiles = remember(state.workspaceFiles) {
         state.workspaceFiles.filter { entry -> !entry.isDirectory && skippedFolders.none { "/$it/" in "/${entry.path}" } }

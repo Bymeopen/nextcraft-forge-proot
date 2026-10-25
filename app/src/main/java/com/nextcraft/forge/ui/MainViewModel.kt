@@ -778,6 +778,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeLogcatProcess?.destroyForcibly()
         activeLogcatProcess = null
         activeLogcatJob?.cancel()
+        rea.clearAnalysis()
         // A file read still running for the previous project must not land in this one.
         openFileRequest++
 
@@ -970,6 +971,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selectProject(updated.first().id)
             } else {
                 // The last project is gone: leave the project context empty (the Projects screen offers a new one).
+                rea.clearAnalysis()
                 _state.update {
                     it.copy(
                         activeProjectId = "",
@@ -1323,7 +1325,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Adds or updates a connector; a blank [secret] keeps the saved one when editing and means none when new. */
-    fun saveConnector(name: String, transport: McpTransport, target: String, secretName: String, secret: String) {
+    fun saveConnector(name: String, transport: McpTransport, target: String, secretName: String, secret: String): Boolean {
         val id = McpNames.id(name)
         val cleanTarget = target.trim()
         val invalid = when {
@@ -1337,7 +1339,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (invalid != null || id == null) {
             _state.update { it.copy(bannerMessage = UiText.res(invalid ?: R.string.connector_invalid_name)) }
-            return
+            return false
         }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -1350,6 +1352,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(bannerMessage = UiText.res(R.string.connector_saved)) }
             loadConnectors()
         }
+        return true
     }
 
     fun setConnectorEnabled(id: String, enabled: Boolean) {
@@ -3141,6 +3144,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Opens a workspace in the Tools file manager, asking about unsaved edits in the current file first. */
+    fun openWorkspaceInFileManager(projectId: String, onOpened: () -> Unit) = leaveOpenFile {
+        selectProject(projectId)
+        if (_state.value.activeProjectId == projectId) onOpened()
+    }
+
     /** Switches the in-project bottom bar; Files and Preview refresh their data like the global tabs do. */
     fun selectProjectPane(pane: ProjectPane) {
         _state.update { it.copy(activeTab = ForgeTab.PROJECTS, projectPane = pane) }
@@ -3367,7 +3376,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val copied = withContext(Dispatchers.IO) { copyUrisIntoWorkspace(project.id, uris, dir) }
             if (copied.isNotEmpty()) {
-                _state.update { it.copy(fileSavedBanner = quantity(R.plurals.msg_files_uploaded, copied.size)) }
+                val msg = quantity(R.plurals.msg_files_uploaded, copied.size)
+                _state.update { it.copy(fileSavedBanner = msg, bannerMessage = UiText.Raw(msg)) }
                 refreshWorkspaceFilesAndChanges(project.id)
             }
         }
@@ -3513,9 +3523,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     written
                 }.getOrElse { Log.w("MainViewModel", "ZIP export failed", it); -1 }
             }
+            val msg = if (count >= 0) quantity(R.plurals.msg_zip_saved, count) else str(R.string.msg_zip_failed)
             _state.update {
                 it.copy(
-                    fileSavedBanner = if (count >= 0) quantity(R.plurals.msg_zip_saved, count) else str(R.string.msg_zip_failed),
+                    fileSavedBanner = msg,
+                    bannerMessage = UiText.Raw(msg),
                 )
             }
         }
@@ -3536,9 +3548,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.onFailure { Log.w("MainViewModel", "File export failed", it) }.isSuccess
             }
             val app = getApplication<Application>()
+            val msg = if (ok) app.getString(R.string.msg_file_saved, relativePath.substringAfterLast('/')) else app.getString(R.string.msg_file_failed)
             _state.update {
                 it.copy(
-                    fileSavedBanner = if (ok) app.getString(R.string.msg_file_saved, relativePath.substringAfterLast('/')) else app.getString(R.string.msg_file_failed),
+                    fileSavedBanner = msg,
+                    bannerMessage = UiText.Raw(msg),
                 )
             }
         }
@@ -3558,17 +3572,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.getOrDefault(false)
             }
             if (deleted) {
+                val msg = str(R.string.msg_file_deleted, cleanPath)
                 if (_state.value.selectedFilePath == cleanPath || _state.value.selectedFilePath?.startsWith("$cleanPath/") == true) {
                     _state.update {
                         it.copy(
                             selectedFilePath = null,
                             selectedFileContent = "",
                             selectedFileDirty = false,
-                            fileSavedBanner = str(R.string.msg_file_deleted, cleanPath),
+                            fileSavedBanner = msg,
+                            bannerMessage = UiText.Raw(msg),
                         )
                     }
                 } else {
-                    _state.update { it.copy(fileSavedBanner = str(R.string.msg_file_deleted, cleanPath)) }
+                    _state.update { it.copy(fileSavedBanner = msg, bannerMessage = UiText.Raw(msg)) }
                 }
                 refreshWorkspaceFilesAndChanges(project.id)
             }
@@ -3627,7 +3643,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     parseUiInspectorXml(xml)
                 }.getOrDefault(emptyList())
             }
-            _state.update { it.copy(uiInspectorNodes = nodes, uiInspectorBusy = false) }
+            _state.update {
+                it.copy(
+                    uiInspectorNodes = nodes,
+                    uiInspectorBusy = false,
+                    bannerMessage = if (nodes.isEmpty()) UiText.res(R.string.mt_root_required) else it.bannerMessage,
+                )
+            }
         }
     }
 
@@ -4842,33 +4864,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun syncProjectWithGitHub(
         projectId: String = _state.value.activeProjectId,
         commitMessage: String = "Sync project changes from NextCraft Forge",
+        reportStatus: Boolean = false,
     ) {
         val token = vault.get("GITHUB_TOKEN").orEmpty()
-        if (token.isBlank()) return
+        if (token.isBlank()) {
+            if (reportStatus) githubAuth.report(UiText.res(R.string.msg_gh_connect_first_pull))
+            return
+        }
         val project = _state.value.projects.firstOrNull { it.id == projectId } ?: _state.value.activeProject ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                val gitDir = File(ws, ".git")
-                if (!gitDir.isDirectory) return@runCatching
-                val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
-                val syncCmd = buildString {
-                    append("if git remote get-url origin >/dev/null 2>&1; then ")
-                    append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
-                    append("git config user.name ${shellSingleQuote(login)} && ")
-                    append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
-                    append("git add -A && ")
-                    append("(git diff --cached --quiet || git commit -m ${shellSingleQuote(commitMessage)}) && ")
-                    append("git pull --rebase --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1; ")
-                    append("git push -u origin \"HEAD:\$branch\"; ")
-                    append("fi")
-                }
-                withGitHubCredentials(token, login) {
-                    runCommandInChrootOrHost(project.slug, ws, syncCmd)
-                }
-            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+        viewModelScope.launch {
+            if (reportStatus) githubAuth.report(UiText.Raw("${project.name} · GitHub sync…"))
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val gitDir = File(ws, ".git")
+                    if (!gitDir.isDirectory) {
+                        if (reportStatus) error(str(R.string.repo_not_repo)) else return@runCatching ""
+                    }
+                    val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
+                    val syncCmd = buildString {
+                        append("if git remote get-url origin >/dev/null 2>&1; then ")
+                        append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
+                        append("git config user.name ${shellSingleQuote(login)} && ")
+                        append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
+                        append("git add -A && ")
+                        append("(git diff --cached --quiet || git commit -m ${shellSingleQuote(commitMessage)}) && ")
+                        append("(git pull --rebase --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1 || true) && ")
+                        append("git push -u origin \"HEAD:\$branch\"; ")
+                        append("else echo 'No origin remote configured in workspace' >&2; false; fi")
+                    }
+                    withGitHubCredentials(token, login) {
+                        if (reportStatus) {
+                            runCheckedCommand(project.slug, ws, syncCmd)
+                        } else {
+                            runCommandInChrootOrHost(project.slug, ws, syncCmd)
+                        }
+                    }
+                }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+            }
             if (_state.value.activeProjectId == project.id) {
                 refreshProjectRepo()
+            }
+            if (reportStatus) {
+                githubAuth.report(
+                    result.fold(
+                        onSuccess = { out ->
+                            val lastLine = out.lines().lastOrNull { l -> l.isNotBlank() } ?: str(R.string.msg_gh_up_to_date)
+                            UiText.Raw("✓ ${project.name}: $lastLine")
+                        },
+                        onFailure = { err ->
+                            UiText.res(R.string.msg_gh_error, errText(err))
+                        },
+                    ),
+                )
             }
         }
     }

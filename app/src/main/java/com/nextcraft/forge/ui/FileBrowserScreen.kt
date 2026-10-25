@@ -1,5 +1,6 @@
 package com.nextcraft.forge.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -89,6 +90,10 @@ fun FileBrowserScreen(viewModel: MainViewModel) {
     fun goUp() {
         if (atRoot) viewModel.selectTab(ForgeTab.TOOLS) else currentPath = current.parentFile?.path
         shown = PAGE_SIZE
+    }
+
+    BackHandler(enabled = openFilePath != null || !atRoot) {
+        if (openFilePath != null) openFilePath = null else goUp()
     }
 
     ToolScaffold(
