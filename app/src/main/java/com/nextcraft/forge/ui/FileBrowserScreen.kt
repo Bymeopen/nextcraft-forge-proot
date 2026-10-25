@@ -155,7 +155,7 @@ fun FileBrowserScreen(viewModel: MainViewModel) {
                     BrowserRow(name = "..", isDirectory = true, isLink = false, sizeBytes = 0L, contentDescription = stringResource(R.string.fb_up)) { goUp() }
                 }
                 if (result.items.isEmpty()) {
-                    Text(stringResource(R.string.fb_empty), color = scheme.onSurfaceVariant, fontSize = ForgeType.control)
+                    ForgeEmptyState(glyph = ForgeGlyph.FOLDER, title = stringResource(R.string.fb_empty))
                 } else {
                     Text(stringResource(R.string.fb_items, result.items.size), color = scheme.onSurfaceVariant, fontSize = ForgeType.caption)
                 }

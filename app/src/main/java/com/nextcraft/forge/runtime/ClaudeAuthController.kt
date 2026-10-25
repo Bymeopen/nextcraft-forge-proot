@@ -59,6 +59,10 @@ class ClaudeAuthController(
     @Volatile private var process: Process? = null
     private val loginMutex = Mutex()
     @Volatile private var stateBeforeLogin: ClaudeAuthState? = null
+    // Backgrounding the app to open the OAuth browser leaves nothing holding it awake; some OEMs (seen on Motorola)
+    // freeze a backgrounded app's network within seconds, so the CLI's own localhost callback server stops accepting
+    // the browser's connection and the whole sign-in times out. A foreground service for the wait keeps it alive.
+    private val foreground = ForegroundSession(context, "ClaudeAuthController")
 
     init {
         authOutput.delete()
@@ -93,6 +97,34 @@ class ClaudeAuthController(
     )
 
     private val accountPrefs by lazy { com.nextcraft.forge.data.AppPreferences(context) }
+
+    /** Taps back into the app from the Custom Tab, which never returns there on its own after sign-in. */
+    private fun notifySignedIn(account: String?) = runCatching {
+        val manager = context.getSystemService(android.app.NotificationManager::class.java) ?: return@runCatching
+        manager.createNotificationChannel(
+            android.app.NotificationChannel(
+                SIGN_IN_CHANNEL_ID,
+                context.getString(R.string.notif_channel_results),
+                android.app.NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?.apply { flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP }
+            ?: return@runCatching
+        val contentIntent = android.app.PendingIntent.getActivity(
+            context, 3, launchIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = androidx.core.app.NotificationCompat.Builder(context, SIGN_IN_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.notif_task_completed))
+            .setContentText(account?.let { context.getString(R.string.rt_auth_connected_as, it) } ?: context.getString(R.string.rt_auth_claude_connected))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        manager.notify(SIGN_IN_NOTIFICATION_ID, notification)
+    }
 
     /** Upstream entry point; the card refreshes through [refreshFromDisk], which also fills in the email. */
     suspend fun loadAccountEmail() = refreshFromDisk()
@@ -161,7 +193,7 @@ class ClaudeAuthController(
                 runtime.rootfs,
                 workspace,
                 mapOf(
-                    "BROWSER" to "/opt/pocket/open-url.sh",
+                    "BROWSER" to "/opt/nextcraft/open-url.sh",
                     "TERM" to "xterm-256color",
                     "NO_COLOR" to "1",
                     "DISABLE_AUTOUPDATER" to "1",
@@ -175,7 +207,7 @@ class ClaudeAuthController(
                 ptyColumns = 160,
             )
             if (spawned !is NativeSpawnProcess) {
-                runCatching { spawned.destroyForcibly() }
+                runCatching { spawned.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
                 throw UiTextException(UiText.res(R.string.rt_auth_unsupported_process))
             }
             spawned
@@ -187,6 +219,8 @@ class ClaudeAuthController(
             return
         }
         process = running
+        foreground.begin()
+        foreground.start("Claude Code")
         // cancel()/logout() bump this so a loop that is still winding down cannot overwrite their state.
         val generation = loginGeneration.get()
         var offset = 0L
@@ -245,6 +279,10 @@ class ClaudeAuthController(
                             accountPrefs.claudeAccountEmail = account.orEmpty()
                             mutableState.value = signedInState(account)
                             onSignedInChanged(true)
+                            // The sign-in page shows "you can close this window" but a Custom Tab never closes itself
+                            // or returns to the app on its own; a notification is the only way back for someone who
+                            // does not remember to switch apps manually.
+                            notifySignedIn(account)
                             break
                         }
                     }
@@ -267,15 +305,16 @@ class ClaudeAuthController(
                 )
             }
         } finally {
-            runCatching { running.outputStream.close() }
+            runCatching { running.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             if (running.isAlive) {
-                runCatching { running.destroy() }
-                runCatching { if (running.isAlive) running.destroyForcibly() }
+                runCatching { running.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
+                runCatching { if (running.isAlive) running.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             }
-            runCatching { running.waitFor() }
+            runCatching { running.waitFor() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             running.outputFile.delete() // OAuth terminal output is intentionally ephemeral.
             urlFile.delete()
             process = null
+            foreground.cancel()
         }
     }
 
@@ -335,8 +374,8 @@ class ClaudeAuthController(
     suspend fun logout() = withContext(Dispatchers.IO) {
         loginGeneration.incrementAndGet()
         process?.let { running ->
-            runCatching { running.destroy() }
-            runCatching { if (running.isAlive) running.destroyForcibly() }
+            runCatching { running.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
+            runCatching { if (running.isAlive) running.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
         }
         val previous = mutableState.value
         mutableState.value = previous.copy(status = ClaudeAuthStatus.STARTING, message = UiText.res(R.string.rt_auth_signing_out))
@@ -354,7 +393,7 @@ class ClaudeAuthController(
                 emulateHardLinks = false,
                 outputFile = output,
             )
-            runCatching { logout.outputStream.close() }
+            runCatching { logout.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             if (!logout.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) logout.destroyForcibly()
             output.delete()
             if (hasCredential()) throw UiTextException(UiText.res(R.string.rt_auth_claude_signout_incomplete))
@@ -378,7 +417,7 @@ class ClaudeAuthController(
                     Thread.sleep(200)
                     if (running.isAlive) running.destroyForcibly()
                     running.waitFor()
-                }
+                }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             }.apply { isDaemon = true }.start()
         }
         mutableState.value = stateBeforeLogin ?: ClaudeAuthState()
@@ -399,7 +438,7 @@ class ClaudeAuthController(
             emulateHardLinks = false,
             outputFile = output,
         )
-        runCatching { status.outputStream.close() }
+        runCatching { status.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
         if (!status.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) status.destroyForcibly()
         val text = output.readText()
         output.delete()
@@ -414,6 +453,8 @@ class ClaudeAuthController(
         const val LOGIN_TIMEOUT_MS = 15 * 60 * 1_000L
         const val RESTART_WAIT_MS = 5_000L
         const val CREDENTIAL_POLL_MS = 2_000L
+        const val SIGN_IN_CHANNEL_ID = "auth-results"
+        const val SIGN_IN_NOTIFICATION_ID = 43
         const val MAX_OUTPUT_CHARS = 100_000
         val EMAIL_PATTERN = Regex("[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     }

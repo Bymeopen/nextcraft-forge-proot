@@ -61,7 +61,7 @@ fun NavGlyph(
             ForgeTab.TERMINAL -> drawPrompt(tint, stroke, progress, blink = animate && t < 0.5f)
             ForgeTab.AGENT -> drawSpark(tint, stroke, progress, orbit = if (animate) t else null)
             ForgeTab.TOOLS, ForgeTab.ANDROID, ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX,
-            ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA -> drawWrench(tint, stroke, progress)
+            ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA, ForgeTab.BACKUP -> drawWrench(tint, stroke, progress)
             ForgeTab.FILES -> drawFile(tint, stroke, progress)
             ForgeTab.PREVIEW -> drawPreview(tint, stroke, progress)
             ForgeTab.SETTINGS -> drawSliders(tint, stroke, progress)

@@ -46,10 +46,9 @@ internal fun ConnectorsSheet(state: ForgeUiState, viewModel: MainViewModel, onDi
     var tab by rememberSaveable { mutableStateOf(0) }
     LaunchedEffect(Unit) { viewModel.loadConnectors() }
 
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = tokens.cardContainerColor,
     ) {
         LazyColumn(
             modifier = Modifier.padding(horizontal = ForgeSpace.card),
@@ -79,7 +78,7 @@ internal fun ConnectorsSheet(state: ForgeUiState, viewModel: MainViewModel, onDi
 
 private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state: ForgeUiState, viewModel: MainViewModel) {
     if (state.connectors.isEmpty()) {
-        item { Text(stringResource(R.string.connectors_empty), fontSize = ForgeType.secondary) }
+        item { ForgeEmptyState(glyph = ForgeGlyph.LINK, title = stringResource(R.string.connectors_empty)) }
     }
     items(state.connectors, key = { "connector-${it.id}" }) { connector ->
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -172,7 +171,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
 
 private fun androidx.compose.foundation.lazy.LazyListScope.skillItems(state: ForgeUiState, viewModel: MainViewModel) {
     if (state.skills.isEmpty()) {
-        item { Text(stringResource(R.string.skills_empty), fontSize = ForgeType.secondary) }
+        item { ForgeEmptyState(glyph = ForgeGlyph.SPARK, title = stringResource(R.string.skills_empty)) }
     }
     item {
         var name by rememberSaveable { mutableStateOf("") }

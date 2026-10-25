@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -38,7 +37,7 @@ internal fun ImageGenerationDialog(state: ForgeUiState, viewModel: MainViewModel
     var resolutionIndex by rememberSaveable { mutableStateOf(0) }
     val editing = state.pendingAttachments.firstOrNull { it.mimeType.startsWith("image/") }
 
-    AlertDialog(
+    ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.image_dialog_title)) },
         text = {

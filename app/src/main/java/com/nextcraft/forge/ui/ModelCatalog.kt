@@ -5,15 +5,18 @@ import com.nextcraft.forge.network.DiscoveredModel
 
 /** Antigravity ids offered before `agy models` has been run (the live list from the signed-in account replaces them). */
 private val ANTIGRAVITY_PRESETS = listOf(
-    "gemini-3.8-flash-high",
+    "claude-sonnet-5-5-low",
+    "claude-sonnet-5-5-medium",
+    "claude-sonnet-5-5-high",
+    "claude-opus-5-5-low",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5-high",
+    "gemini-3.8-flash-low",
     "gemini-3.8-flash-medium",
-    "gemini-3.6-flash-high",
-    "gemini-3.6-flash-medium",
-    "gemini-3.6-flash-low",
-    "gemini-3.1-pro-high",
-    "gemini-3.1-pro-low",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6-thinking",
+    "gemini-3.8-flash-high",
+    "gemini-4-argon-low",
+    "gemini-4-argon-medium",
+    "gemini-4-argon-high",
     "gpt-oss-120b-medium",
 )
 

@@ -6,8 +6,8 @@ set -euo pipefail
 # The binary is downloaded from Anthropic's release bucket and checked twice: against the checksum published in
 # that release's manifest.json, and against the SHA-256 pinned below (so a changed upstream manifest cannot slip a
 # different binary in). The binary does not depend on the Ubuntu release of the rootfs.
-VERSION="${NEXTCRAFT_CLAUDE_VERSION:-2.1.263}"
-SOURCE_SHA256="${NEXTCRAFT_CLAUDE_SHA256:-7d25d7c8ae6c6e009cc7dae4e817f674179fd31fb7761bcd56fee4c2902b4c03}"
+VERSION="${NEXTCRAFT_CLAUDE_VERSION:-2.1.308}"
+SOURCE_SHA256="${NEXTCRAFT_CLAUDE_SHA256:-fdd22e6cbb734d580f5664c48df4294eeec850218ff07f186f9af30426396ee1}"
 BUNDLE_VERSION="${NEXTCRAFT_CLAUDE_BUNDLE_VERSION:-2026.10.1}"
 RELEASE_BASE_URL="${NEXTCRAFT_CLAUDE_RELEASE_BASE_URL:-https://downloads.claude.ai/claude-code-releases}"
 ARCHIVE="nextcraft-claude-arm64-${BUNDLE_VERSION}.tar.zst"
@@ -43,7 +43,7 @@ curl -fL --retry 3 -o "$temp_dir/claude" "$RELEASE_BASE_URL/$VERSION/linux-arm64
 
 install -m 0755 "$temp_dir/claude" "$temp_dir/payload/usr/local/bin/claude"
 printf '%s\n' "$VERSION" > "$temp_dir/payload/.nextcraft-claude-version"
-printf '%s\n' "$VERSION" > "$temp_dir/payload/.pocket-claude-version"
+printf '%s\n' "$VERSION" > "$temp_dir/payload/.nextcraft-claude-version"
 
 python3 "$SCRIPT_DIR/create_deterministic_tar.py" "$temp_dir/payload" "$temp_dir/payload.tar"
 zstd -19 -T0 -f "$temp_dir/payload.tar" -o "$OUT_DIR/$ARCHIVE"

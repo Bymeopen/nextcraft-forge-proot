@@ -69,7 +69,7 @@ class GeminiVideoClient {
             download(apiKey, uri, output)?.let { return@withContext GeminiVideoResult.Failure(it) }
             GeminiVideoResult.Success
         } catch (e: Exception) {
-            runCatching { output.delete() }
+            runCatching { output.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("GeminiVideoClient", it) }
             GeminiVideoResult.Failure(redact(e.message ?: e.javaClass.simpleName))
         }
     }

@@ -51,6 +51,6 @@ class LanguageCatalogueTest {
             val count = keys(resDir(lang)).size
             assertTrue("${lang.code} has $count/$base keys; set translated = true once complete", count < base)
         }
-        assertEquals(setOf("system", "id", "en"), AppLanguage.selectable.map { it.code }.toSet())
+        assertEquals(setOf("system", "id", "en", "es", "zh", "ar", "hi", "ru"), AppLanguage.selectable.map { it.code }.toSet())
     }
 }
