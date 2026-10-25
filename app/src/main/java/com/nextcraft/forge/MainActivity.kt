@@ -1,5 +1,9 @@
 package com.nextcraft.forge
 
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.blur
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.animateDpAsState
 import android.Manifest
 import android.content.ComponentCallbacks2
 import android.content.Context
@@ -11,6 +15,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -72,6 +80,8 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         applyWindowTheme(AppPreferences(this).themeMode)
         super.onCreate(savedInstanceState)
+        com.nextcraft.forge.ui.glassUserSolid = AppPreferences(this).glassSolid
+        com.nextcraft.forge.ui.glassReducedEffects = com.nextcraft.forge.ui.detectReducedEffects(this)
         // First-time users are asked when they start the runtime setup; existing installs keep the old behaviour.
         if (AppPreferences(this).runtimeSetupComplete) requestNotificationPermissionIfNeeded()
         lifecycleScope.launch {
@@ -108,11 +118,20 @@ class MainActivity : ComponentActivity() {
                             override fun open(src: String) = viewModel.openChatVideo(appContext, src)
                         }
                     }
+                    val sheetDepth = remember { mutableIntStateOf(0) }
+                    // Glass: while a sheet floats above, the page behind it is blurred so nothing reads through the sheet.
+                    val blurRadius by animateDpAsState(
+                        targetValue = if (tokens.isGlass && com.nextcraft.forge.ui.glassBlurSupported && sheetDepth.intValue > 0) com.nextcraft.forge.ui.GlassSheetBlur else 0.dp,
+                        label = "sheetBlur",
+                    )
                     CompositionLocalProvider(
                         LocalChatImageLoader provides imageLoader,
                         com.nextcraft.forge.ui.LocalChatVideoHandler provides videoHandler,
+                        com.nextcraft.forge.ui.LocalForgeSheetDepth provides sheetDepth,
                     ) {
-                        NextCraftForgeApp(viewModel = viewModel)
+                        Box(modifier = Modifier.fillMaxSize().then(if (blurRadius > 0.dp) Modifier.blur(blurRadius) else Modifier)) {
+                            NextCraftForgeApp(viewModel = viewModel)
+                        }
                     }
                 }
             }
@@ -139,6 +158,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshRuntimeStatusOnResume()
+        com.nextcraft.forge.ui.ReturnToApp.dismiss(this)
     }
 
     override fun onTrimMemory(level: Int) {
@@ -147,6 +167,7 @@ class MainActivity : ComponentActivity() {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             viewModel.releaseMemoryCaches()
         }
+        com.nextcraft.forge.runtime.GradleDaemonReaper.onTrimMemory(this, level)
     }
 
     private fun needsNotificationPermission(): Boolean =
@@ -155,7 +176,7 @@ class MainActivity : ComponentActivity() {
 
     private fun requestNotificationPermissionIfNeeded() {
         if (needsNotificationPermission()) {
-            runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+            runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainActivity", it) }
         }
     }
 

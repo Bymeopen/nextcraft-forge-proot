@@ -27,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -74,6 +73,7 @@ internal fun ChatTopBar(
     onOpenChanges: () -> Unit,
     onRename: () -> Unit,
     onUsage: () -> Unit,
+    onSchedule: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
     onBranch: () -> Unit,
@@ -137,16 +137,15 @@ internal fun ChatTopBar(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rename)) }, onClick = { menuOpen = false; onRename() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_usage)) }, onClick = { menuOpen = false; onUsage() })
-                if (state.agentKind == AgentKind.CLAUDE_CODE) {
-                    if (activeChat?.isolated == true) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
-                    } else {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.branch_menu_enable)) },
-                            enabled = !state.activeChatRunning,
-                            onClick = { menuOpen = false; onEnableBranch() },
-                        )
-                    }
+                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_schedule)) }, onClick = { menuOpen = false; onSchedule() })
+                if (activeChat?.isolated == true) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
+                } else {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.branch_menu_enable)) },
+                        enabled = !state.activeChatRunning,
+                        onClick = { menuOpen = false; onEnableBranch() },
+                    )
                 }
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rea)) }, onClick = { menuOpen = false; onOpenRea() })
                 DropdownMenuItem(
@@ -257,7 +256,7 @@ internal fun ChatDrawerRow(
 @Composable
 internal fun RenameChatDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var text by rememberSaveable { mutableStateOf(initial) }
-    AlertDialog(
+    ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.chat_rename_title), fontWeight = FontWeight.SemiBold) },
         text = {
@@ -283,10 +282,9 @@ internal fun ChatUsageSheet(state: ForgeUiState, onDismiss: () -> Unit) {
     val used = estimateContextTokens(state.messages)
     val limit = contextWindowTokens(state.providerProfile.model)
     val fraction = (used.toFloat() / limit).coerceIn(0f, 1f)
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = tokens.cardContainerColor,
     ) {
         Column(modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(stringResource(R.string.chat_usage_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
@@ -344,10 +342,9 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
     val agent = if (multi) sheetAgent else state.agentKind
     val profile = if (agent == state.agentKind) state.providerProfile else state.agentProfiles[agent] ?: state.providerProfile
     val discovered = if (agent == state.agentKind) state.discoveredModels else emptyList()
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = tokens.cardContainerColor,
     ) {
         Column(modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.chat_model_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
@@ -355,9 +352,10 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
                 // One tab per provider: its own models and, for Claude and Antigravity, its own reasoning effort.
                 val agents = AgentKind.entries
                 ForgePillTabs(
-                    items = agents.map { it.displayTitle() },
+                    items = agents.map { it.shortTitle() },
                     selectedIndex = agents.indexOf(agent).coerceAtLeast(0),
                     onSelect = { sheetAgent = agents[it] },
+                    equalWidth = true, // 3 providers fit side by side; scrolling cut "Antigravity" at the edge
                 )
             }
             when (agent) {
@@ -468,10 +466,9 @@ internal fun BranchSheet(state: ForgeUiState, viewModel: MainViewModel, chatId: 
     val running = chatId in state.runningChatIds
     val diff = state.branchDiff[chatId]
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = tokens.cardContainerColor,
     ) {
         androidx.compose.foundation.lazy.LazyColumn(
             modifier = Modifier.padding(horizontal = ForgeSpace.card),
@@ -601,7 +598,7 @@ internal fun BranchSheet(state: ForgeUiState, viewModel: MainViewModel, chatId: 
         }
     }
     if (confirmDiscard) {
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { confirmDiscard = false },
             title = { Text(stringResource(R.string.branch_discard), fontWeight = FontWeight.SemiBold) },
             text = { Text(stringResource(R.string.branch_discard_confirm)) },

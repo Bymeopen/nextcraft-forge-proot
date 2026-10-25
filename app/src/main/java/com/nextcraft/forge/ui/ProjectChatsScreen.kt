@@ -85,7 +85,7 @@ fun ProjectChatsScreen(
         ForgePrimaryButton(
             text = "+ " + stringResource(R.string.chats_new_chat),
             onClick = { viewModel.createChat() },
-            enabled = state.agentKind == AgentKind.CLAUDE_CODE || !state.sessionRunning,
+            enabled = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 6.dp),
@@ -150,7 +150,7 @@ fun ProjectChatsScreen(
                         )
                     }
                     if (chats.size > 1) {
-                        IconButton(onClick = { viewModel.deleteChat(chat.id) }, enabled = chat.id !in state.runningChatIds && (state.agentKind == AgentKind.CLAUDE_CODE || !state.sessionRunning)) {
+                        IconButton(onClick = { viewModel.deleteChat(chat.id) }, enabled = chat.id !in state.runningChatIds) {
                             Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                         }
                     }

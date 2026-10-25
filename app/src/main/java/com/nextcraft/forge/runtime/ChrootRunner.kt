@@ -36,12 +36,14 @@ class ChrootRunner(context: Context) {
             environment = environment,
             guestCommand = listOf("/bin/bash", "-lc", command),
         )
-        return try {
+        val process = try {
             ProcessBuilder(installer.launchArgv(suCommand)).redirectErrorStream(true).start()
         } catch (error: Throwable) {
             envFile.delete()
             throw error
         }
+        guestPidFiles[process] = GuestProcess.pidFileFor(envFile)
+        return process
     }
 
     /**
@@ -60,14 +62,14 @@ class ChrootRunner(context: Context) {
         val process = start(workspaceDir, slug, command, environment)
         val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
         val completion = coroutineContext[Job]?.invokeOnCompletion { cause ->
-            if (cause != null) process.destroyForcibly()
+            if (cause != null) stop(process)
         }
         // The read below blocks until the command closes its output, so the timeout needs its own watchdog.
         val watchdog = Thread({
             try {
                 if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
                     timedOut.set(true)
-                    process.destroyForcibly()
+                    stop(process)
                 }
             } catch (_: InterruptedException) {
             }
@@ -89,9 +91,18 @@ class ChrootRunner(context: Context) {
         } finally {
             watchdog.interrupt()
             completion?.dispose()
-            if (process.isAlive) process.destroyForcibly()
+            if (process.isAlive) stop(process)
+            guestPidFiles.remove(process)?.delete()
         }
     }
+
+    /** Ends the su client and, through its pid file, chroot-exec and the command's process group on the root side. */
+    fun stop(process: Process) {
+        GuestProcess.signal(guestPidFiles[process], 15, forceAfterSeconds = 3)
+        process.destroyForcibly()
+    }
+
+    private val guestPidFiles: MutableMap<Process, java.io.File> = java.util.Collections.synchronizedMap(java.util.WeakHashMap())
 
     companion object {
         const val MAX_OUTPUT_CHARS = 200_000

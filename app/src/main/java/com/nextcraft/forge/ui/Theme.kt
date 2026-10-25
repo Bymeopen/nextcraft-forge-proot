@@ -176,13 +176,13 @@ internal val AirbnbWhiteColorScheme: ColorScheme = lightColorScheme(
     tertiary = Color(0xFF6D28D9),
     onTertiary = Color(0xFFFFFFFF),
     background = Color(0xFFFBFCFE),
-    onBackground = Color(0xFF14161B),
+    onBackground = Color(0xFF1C2030),
     surface = Color(0xFFFBFCFE),
-    onSurface = Color(0xFF14161B),
+    onSurface = Color(0xFF1C2030),
     surfaceVariant = Color(0xFFF1F3F8),
-    onSurfaceVariant = Color(0xFF606369),
-    outline = Color(0xFF7D8086),
-    outlineVariant = Color(0xFFD4D7DE),
+    onSurfaceVariant = Color(0xFF4B5163),
+    outline = Color(0xFF6F7587),
+    outlineVariant = Color(0xFFD3D8E3),
     error = Color(0xFFB71824),
     onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFFFFE9E6),
@@ -276,6 +276,9 @@ internal val GlassCanvasColors = listOf(Color(0xFF001411), Color(0xFF00202E), Co
 
 private val GlassCosmicCanvasBrush = Brush.linearGradient(colors = GlassCanvasColors)
 
+/** Opaque, darker than every stop of the Glass wash: the colour of sheets, dialogs and menus in Glass. */
+internal val GlassFloatingSurface = Color(0xFF000D0B)
+
 private val DarkThemeTokens = ForgeThemeTokens(
     mode = ForgeThemeMode.DARK,
     isDark = true,
@@ -349,8 +352,8 @@ internal val WhiteThemeTokens = ForgeThemeTokens(
     windowBackgroundArgb = Color(0xFFFBFCFE).toArgb(),
     cardContainerColor = Color(0xFFF1F3F8),
     cardElevatedColor = Color(0xFFEAEDF2),
-    cardBorderStroke = BorderStroke(0.5.dp, Color(0xFFE4E4E4)),
-    elevatedBorderStroke = BorderStroke(0.5.dp, Color(0xFFE4E4E4)),
+    cardBorderStroke = BorderStroke(0.75.dp, Color(0xFFDDE1EA)),
+    elevatedBorderStroke = BorderStroke(0.75.dp, Color(0xFFDDE1EA)),
     cardCornerRadius = 18.dp,
     topBarContainerColor = Color(0xFFFBFCFE),
     bottomBarContainerColor = Color(0xFFF1F3F8),
@@ -360,7 +363,7 @@ internal val WhiteThemeTokens = ForgeThemeTokens(
     dangerText = Color(0xFFB71824),
     terminalBackground = Color(0xFFF1F3F8),
     terminalHeaderBackground = Color(0xFFE5E8ED),
-    terminalText = Color(0xFF14161B),
+    terminalText = Color(0xFF1C2030),
     inlineCodeBackground = Color(0xFFE2EBFF),
     diffAddedBackground = Color(0xFFE0FAE4),
     diffAddedText = Color(0xFF1E6935),
@@ -517,10 +520,18 @@ fun NextCraftForgeTheme(
         LocalTextSelectionColors provides tokens.selectionColors,
     ) {
         // Dialogs, sheets and menus read the surfaceContainer roles; map them to the card surfaces so every
-        // AlertDialog, bottom sheet and dropdown matches the cards. Glass keeps the default: its card colour is
-        // translucent and a see-through dialog is unreadable over the scrim.
+        // AlertDialog, bottom sheet and dropdown matches the cards. Glass uses its own opaque, darker floating colour:
+        // its card colour is translucent and a see-through dialog is unreadable over the scrim.
         val themedScheme = if (tokens.isGlass) {
-            colorScheme
+            // Floating layers (sheets, dialogs, menus) are the darkest thing on screen and fully opaque, so they
+            // read as lifted off the page instead of as another see-through card.
+            colorScheme.copy(
+                surfaceContainerLowest = GlassFloatingSurface,
+                surfaceContainerLow = GlassFloatingSurface,
+                surfaceContainer = GlassFloatingSurface,
+                surfaceContainerHigh = GlassFloatingSurface,
+                surfaceContainerHighest = GlassFloatingSurface,
+            )
         } else {
             colorScheme.copy(
                 surfaceContainerHigh = tokens.cardContainerColor,

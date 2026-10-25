@@ -62,11 +62,11 @@ internal class OpenRouterRoutingGateway(
             runCatching {
                 socket.soTimeout = SOCKET_TIMEOUT_MS
                 socket.tcpNoDelay = true
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
             try {
                 workers.execute { runCatching { socket.use(::handle) } } // client disconnects must not escape as uncaught exceptions (crashes the app)
             } catch (_: java.util.concurrent.RejectedExecutionException) {
-                runCatching { socket.close() }
+                runCatching { socket.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
             }
         }
     }
@@ -245,7 +245,7 @@ internal class OpenRouterRoutingGateway(
                 }
                 else -> Unit
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
     }
 
     /** Reads an HTTP/1.1 chunked body, or returns null when it is malformed or larger than [MAX_REQUEST_BYTES]. */
@@ -302,7 +302,7 @@ internal class OpenRouterRoutingGateway(
 
     override fun close() {
         running.set(false)
-        runCatching { server.close() }
+        runCatching { server.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
         workers.shutdown()
         upstreamConnections.toList().forEach { runCatching { it.disconnect() } }
     }
