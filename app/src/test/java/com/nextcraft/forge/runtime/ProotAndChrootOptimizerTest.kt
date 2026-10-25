@@ -31,14 +31,32 @@ class ProotAndChrootOptimizerTest {
     )
 
     @Test
-    fun parsesKernelVersionAndSelectsOptimalSpoofedRelease() {
-        assertEquals(Triple(5, 15, 148), ProotAndChrootOptimizer.parseKernelVersion("5.15.148-android13-8"))
-        assertEquals(Triple(4, 14, 186), ProotAndChrootOptimizer.parseKernelVersion("4.14.186-perf+"))
-        assertEquals(Triple(6, 1, 75), ProotAndChrootOptimizer.parseKernelVersion("6.1.75-android14-11"))
+    fun classifiesAllAndroidKernelFamiliesAndPageSizes() {
+        val kLegacy = ProotAndChrootOptimizer.inspectKernel("4.14.186-perf+", pageSizeBytes = 4_096)
+        assertEquals(ProotAndChrootOptimizer.KernelFamily.LEGACY_3_18_TO_4_14, kLegacy.family)
+        assertFalse(kLegacy.supportsSeccompBpf)
+        assertTrue(kLegacy.needsKernelReleaseSpoof)
+        assertEquals("5.15.0-nextcraft-arm64", kLegacy.spoofedRelease)
+        assertFalse(kLegacy.is16KbPageKernel)
 
-        assertEquals("5.15.0-nextcraft-arm64", ProotAndChrootOptimizer.selectOptimalKernelRelease("4.14.186-perf+"))
-        assertEquals("5.15.0-nextcraft-arm64", ProotAndChrootOptimizer.selectOptimalKernelRelease("5.4.210-qgki"))
-        assertEquals("6.1.75-android14", ProotAndChrootOptimizer.selectOptimalKernelRelease("6.1.75-android14"))
+        val kCommon = ProotAndChrootOptimizer.inspectKernel("4.19.157-qgki", pageSizeBytes = 4_096)
+        assertEquals(ProotAndChrootOptimizer.KernelFamily.ANDROID_COMMON_4_19_TO_5_4, kCommon.family)
+        assertTrue(kCommon.supportsSeccompBpf)
+        assertTrue(kCommon.needsKernelReleaseSpoof)
+        assertEquals("5.15.0-nextcraft-arm64", kCommon.spoofedRelease)
+
+        val kGki1 = ProotAndChrootOptimizer.inspectKernel("5.15.148-android13-8", pageSizeBytes = 4_096)
+        assertEquals(ProotAndChrootOptimizer.KernelFamily.GKI_1_0_5_10_TO_5_15, kGki1.family)
+        assertTrue(kGki1.isGkiKernel)
+        assertTrue(kGki1.supportsSeccompBpf)
+        assertFalse(kGki1.needsKernelReleaseSpoof)
+        assertEquals("5.15.148-android13-8", kGki1.spoofedRelease)
+
+        val kGki2_16k = ProotAndChrootOptimizer.inspectKernel("6.6.30-android15-8-gki", pageSizeBytes = 16_384)
+        assertEquals(ProotAndChrootOptimizer.KernelFamily.GKI_2_0_6_1_PLUS, kGki2_16k.family)
+        assertTrue(kGki2_16k.isGkiKernel)
+        assertTrue(kGki2_16k.is16KbPageKernel)
+        assertEquals("6.6.30-android15-8-gki", kGki2_16k.spoofedRelease)
     }
 
     @Test
@@ -52,6 +70,7 @@ class ProotAndChrootOptimizerTest {
             hwProfile = eightGbSwap,
             kernelRelease = "5.15.120-android13",
             hasRootAccess = false,
+            pageSizeBytes = 4_096,
         )
         assertEquals(ProotAndChrootOptimizer.ExecutionBackend.PROOT_SECCOMP_ACCELERATED, prootSeccomp.backend)
         assertTrue(prootSeccomp.enableSeccompBpf)
@@ -77,6 +96,7 @@ class ProotAndChrootOptimizerTest {
             ),
             kernelRelease = "4.14.190-sprd",
             hasRootAccess = false,
+            pageSizeBytes = 4_096,
         )
         assertEquals(ProotAndChrootOptimizer.ExecutionBackend.PROOT_COMPAT_FALLBACK, prootCompat.backend)
         assertFalse(prootCompat.enableSeccompBpf)
@@ -94,10 +114,16 @@ class ProotAndChrootOptimizerTest {
             swapTotalMb = 8_192L,
             socTier = DeviceHardwareOptimizer.SocTier.FLAGSHIP_PERFORMANCE,
         )
-        val cfg = ProotAndChrootOptimizer.buildConfig(hw, kernelRelease = "6.1.50-android14", hasRootAccess = false)
+        val cfg = ProotAndChrootOptimizer.buildConfig(
+            hw,
+            kernelRelease = "6.1.50-android14",
+            hasRootAccess = false,
+            pageSizeBytes = 16_384,
+        )
         assertEquals(1024, cfg.shmSizeMb)
         assertEquals(2048, cfg.tmpSizeMb)
         assertEquals(8, cfg.uvThreadpoolSize)
+        assertEquals("16384", cfg.environmentVars["NEXTCRAFT_PAGE_SIZE"])
 
         val cmd = ProotAndChrootOptimizer.buildProotCommandLine(
             prootBinaryPath = "/usr/bin/proot",

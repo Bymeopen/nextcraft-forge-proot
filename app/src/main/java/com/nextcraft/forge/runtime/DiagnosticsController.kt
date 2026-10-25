@@ -116,6 +116,12 @@ class DiagnosticsController(private val context: Context) {
                 }
                 add(UiText.Raw("RAM tier & SwapRAM / ZRAM") to UiText.Raw("${hwProfile.ramTier.label} class · Swap: $swapLabel"))
                 val prootCfg = ProotAndChrootOptimizer.buildConfig(hwProfile, hasRootAccess = false)
+                val pageKb = prootCfg.kernelProfile.pageSizeBytes / 1024
+                add(
+                    UiText.Raw("Android Kernel profile") to UiText.Raw(
+                        "${prootCfg.kernelProfile.rawRelease} · ${prootCfg.kernelProfile.family.shortBadge} · ${pageKb}KB pages",
+                    ),
+                )
                 add(
                     UiText.Raw("Container / PRoot optimization") to UiText.Raw(
                         "${prootCfg.backend.displayName} · /dev/shm ${prootCfg.shmSizeMb}M · /tmp ${prootCfg.tmpSizeMb}M · UV_THREADS=${prootCfg.uvThreadpoolSize}",
