@@ -547,6 +547,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (lastResumeRefreshAt != 0L && now - lastResumeRefreshAt < RESUME_REFRESH_MIN_INTERVAL_MS) return
         lastResumeRefreshAt = now
         refreshRuntimeStatus()
+        silentUpdateCheck()
     }
 
     fun refreshRuntimeStatus() {

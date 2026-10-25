@@ -218,7 +218,7 @@ data class ForgeUiState(
     val languageCode: String = "system",
     val interactiveHighRiskApprovals: Boolean = true,
     val autoApproveAllTools: Boolean = false,
-    val autoSyncGitHub: Boolean = false,
+    val autoSyncGitHub: Boolean = true,
     val gameTemplatesEnabled: Boolean = false,
     val androidHostTools: Boolean = false,
     val autoKeepChanges: Boolean = true,

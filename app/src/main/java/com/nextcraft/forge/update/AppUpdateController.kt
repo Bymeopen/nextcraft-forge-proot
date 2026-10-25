@@ -79,6 +79,9 @@ class AppUpdateController(
         mutable.update { it.copy(autoInstall = enabled) }
         if (enabled) {
             scheduleBackgroundCheck()
+            if (mutable.value.info != null) {
+                downloadAndInstall()
+            }
         } else if (!prefs.notifications) {
             cancelBackgroundCheck()
         }
@@ -100,6 +103,9 @@ class AppUpdateController(
                 mutable.update { it.copy(info = info, statusMessage = str(R.string.upd_available, info.versionName, info.versionCode)) }
             }
             withContext(io) { announce(info) }
+            if (prefs.autoInstall && mutable.value.progress == null) {
+                downloadAndInstall()
+            }
         }
     }
 
