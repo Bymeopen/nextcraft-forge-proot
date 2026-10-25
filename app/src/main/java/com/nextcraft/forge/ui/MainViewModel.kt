@@ -2623,13 +2623,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         startRun(project, retry.chatId, retry.prompt.copy(projectId = project.id, chatId = retry.chatId), resend = true)
     }
 
-    /** Stops the Android build of the active project only; a running agent session keeps going. */
-    fun stopAndroidBuild() {
-        val projectId = _state.value.activeProjectId
+    /** Stops the Android build of [projectId] (defaults to the active project); a running agent session keeps going. */
+    fun stopAndroidBuild(projectId: String = _state.value.activeProjectId) {
         val handle = projectBuildHandles[projectId]
         if (handle != null) {
             handle.stopHook()
-        } else {
+        } else if (projectId == _state.value.activeProjectId) {
             RuntimeTaskController.stop(RuntimeTaskController.BUILD)
         }
     }
@@ -3449,7 +3448,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     delay(CAPTURE_SETTLE_MS + step.extraSettleMs)
                     val bitmap = captureWindow(window) ?: return@forEachIndexed
                     val name = "%02d-%s.png".format(index + 1, step.name)
-                    withContext(Dispatchers.IO) { savePng(project.id, "$folder/$name", name, bitmap) }?.let { added += it }
+                    try {
+                        withContext(Dispatchers.IO) { savePng(project.id, "$folder/$name", name, bitmap) }?.let { added += it }
+                    } finally {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                    }
                 }
             } finally {
                 _state.update {
@@ -4364,34 +4367,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     projectBuilds = current.projectBuilds + (project.id to finishedRecord),
                 )
             }
-            if (projectBuildHandles.isEmpty()) {
-                runCatching {
-                    getApplication<Application>().startService(
-                        Intent(getApplication(), RuntimeExecutionService::class.java)
-                            .setAction(
-                                when {
-                                    cancelled -> RuntimeExecutionService.ACTION_CANCELLED
-                                    succeeded -> RuntimeExecutionService.ACTION_COMPLETE
-                                    else -> RuntimeExecutionService.ACTION_FAILED
-                                },
-                            )
-                            .putExtra(RuntimeExecutionService.EXTRA_PROJECT_NAME, project.name)
-                            .putExtra(
-                                RuntimeExecutionService.EXTRA_DETAIL_RES,
-                                when {
-                                    cancelled -> R.string.notif_build_cancelled
-                                    succeeded -> R.string.notif_build_succeeded
-                                    else -> R.string.notif_build_failed
-                                },
-                            ),
-                    )
-                }.onFailure { error ->
-                    Log.w("MainViewModel", "Could not post the build result notification", error)
-                    runCatching {
-                        getApplication<Application>().stopService(Intent(getApplication(), RuntimeExecutionService::class.java))
-                    }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+                val finalAction = when {
+                    cancelled -> RuntimeExecutionService.ACTION_CANCELLED
+                    succeeded -> RuntimeExecutionService.ACTION_COMPLETE
+                    else -> RuntimeExecutionService.ACTION_FAILED
                 }
-            }
+                val finalDetailRes = when {
+                    cancelled -> R.string.notif_build_cancelled
+                    succeeded -> R.string.notif_build_succeeded
+                    else -> R.string.notif_build_failed
+                }
+                if (projectBuildHandles.isEmpty()) {
+                    runCatching {
+                        getApplication<Application>().startService(
+                            Intent(getApplication(), RuntimeExecutionService::class.java)
+                                .setAction(finalAction)
+                                .putExtra(RuntimeExecutionService.EXTRA_PROJECT_NAME, project.name)
+                                .putExtra(RuntimeExecutionService.EXTRA_DETAIL_RES, finalDetailRes),
+                        )
+                    }.onFailure { error ->
+                        Log.w("MainViewModel", "Could not post the build result notification", error)
+                        runCatching {
+                            getApplication<Application>().stopService(Intent(getApplication(), RuntimeExecutionService::class.java))
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+                    }
+                } else {
+                    startServiceSafely(
+                        getApplication(),
+                        Intent(getApplication(), RuntimeExecutionService::class.java)
+                            .setAction(finalAction)
+                            .putExtra(RuntimeExecutionService.EXTRA_PROJECT_NAME, project.name)
+                            .putExtra(RuntimeExecutionService.EXTRA_DETAIL_RES, finalDetailRes),
+                    )
+                }
             if (succeeded && !cancelled && installAfterBuild && finalApk != null) {
                 installBuiltApk(finalApk.absolutePath, project.id)
             }
@@ -5225,9 +5233,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Deletes every download cache; refused while an agent runs, since a build may be using them. */
+    /** Deletes every download cache; refused while an agent or Android build runs, since a build may be using them. */
     fun clearRuntimeCaches() {
-        if (_state.value.sessionRunning) {
+        if (_state.value.sessionRunning || _state.value.buildingProjectIds.isNotEmpty()) {
             _state.update { it.copy(bannerMessage = UiText.res(R.string.msg_clear_caches_busy)) }
             return
         }

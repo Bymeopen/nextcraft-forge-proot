@@ -58,14 +58,20 @@ internal suspend fun captureWindow(window: Window, maxWidth: Int = 720): Bitmap?
         window,
         full,
         { result ->
-            if (!continuation.isActive) return@request
+            if (!continuation.isActive) {
+                full.recycle()
+                return@request
+            }
             if (result != PixelCopy.SUCCESS) {
+                full.recycle()
                 continuation.resume(null)
             } else if (full.width <= maxWidth) {
                 continuation.resume(full)
             } else {
                 val height = (full.height.toLong() * maxWidth / full.width).toInt().coerceAtLeast(1)
-                continuation.resume(Bitmap.createScaledBitmap(full, maxWidth, height, true))
+                val scaled = Bitmap.createScaledBitmap(full, maxWidth, height, true)
+                if (scaled !== full) full.recycle()
+                continuation.resume(scaled)
             }
         },
         Handler(Looper.getMainLooper()),

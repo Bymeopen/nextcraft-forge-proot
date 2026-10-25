@@ -972,6 +972,7 @@ internal fun LiveActivityHud(
     onSelectRun: (projectId: String, chatId: String) -> Unit,
     onSelectBuild: (projectId: String) -> Unit,
     onStopRun: (projectId: String, chatId: String) -> Unit,
+    onStopBuild: (projectId: String) -> Unit = {},
 ) {
     val inActiveChatScreen = state.activeTab == ForgeTab.PROJECTS &&
         state.projectView == ProjectView.CONVERSATION &&
@@ -1178,6 +1179,11 @@ internal fun LiveActivityHud(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                            }
+                            TextButton(
+                                onClick = { onStopBuild(projectId) },
+                            ) {
+                                Text(stringResource(R.string.agent_stop), color = scheme.error, fontSize = ForgeType.caption)
                             }
                         }
                     }

@@ -422,6 +422,8 @@ class AntigravityRuntimeBridge(
         if (!installer.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
             emitFailure(sessionId, "Antigravity CLI is not installed. Open Settings → Coding agent to install it.")
             activeSessionId = null
+            activeProjectSlug = ""
+            foreground.clearStart()
             return@withContext sessionId
         }
 

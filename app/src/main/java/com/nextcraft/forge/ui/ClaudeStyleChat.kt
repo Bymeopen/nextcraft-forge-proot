@@ -354,6 +354,9 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
     val agent = if (multi) sheetAgent else state.agentKind
     val profile = if (agent == state.agentKind) state.providerProfile else state.agentProfiles[agent] ?: state.providerProfile
     val discovered = if (agent == state.agentKind) state.discoveredModels else emptyList()
+    val activeAgentLabel = primaryAgent(state).displayTitle()
+    val discoveryAgent = if (multi) sheetAgent else state.agentKind
+    val discoveryProfile = if (discoveryAgent == state.agentKind) state.providerProfile else state.agentProfiles[discoveryAgent] ?: state.providerProfile
     androidx.compose.runtime.LaunchedEffect(agent) {
         if (agent == AgentKind.ANTIGRAVITY && state.antigravityModels.isEmpty() && !state.antigravityModelsLoading) {
             viewModel.refreshAntigravityModels()
@@ -364,7 +367,22 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.chat_model_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.chat_model_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                when {
+                    discoveryAgent == AgentKind.ANTIGRAVITY -> ForgeTextButton(
+                        onClick = viewModel::refreshAntigravityModels,
+                        enabled = !state.antigravityModelsLoading,
+                    ) { Text(stringResource(R.string.agent_sync)) }
+                    discoveryAgent == state.agentKind && discoveryProfile.kind != com.nextcraft.forge.model.ProviderKind.CLAUDE -> ForgeTextButton(
+                        onClick = viewModel::discoverProviderModels,
+                        enabled = !state.apiBusy,
+                    ) { Text(stringResource(R.string.settings_discover_models)) }
+                }
+            }
+            if (state.antigravityModelsLoading || (discoveryAgent == state.agentKind && state.apiBusy)) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
             if (multi) {
                 // One tab per provider: its own models and, for Claude and Antigravity, its own reasoning effort.
                 val agents = AgentKind.entries

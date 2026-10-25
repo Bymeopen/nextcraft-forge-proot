@@ -829,7 +829,12 @@ class ClaudeRuntimeBridge(
     private suspend fun emitCompletedOnce(sessionId: String) {
         if (finishedSessions.add(sessionId)) {
             eventBus.emit(RuntimeEvent.SessionCompleted(sessionId))
-            finishForegroundRuntimeRes(true, activeProjectSlug ?: "Project", com.nextcraft.forge.R.string.notif_agent_finished, "Claude Code")
+            val slug = activeProjectSlug?.takeIf { it.isNotBlank() }
+            if (slug != null) {
+                finishForegroundRuntimeRes(true, slug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Claude Code", slug)
+            } else {
+                finishForegroundRuntimeRes(true, "Project", com.nextcraft.forge.R.string.notif_agent_finished, "Claude Code")
+            }
         }
     }
 

@@ -72,9 +72,9 @@ fun AgentConfigScreen(
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
 
-    var baseUrlInput by rememberSaveable(state.providerProfile.kind) { mutableStateOf(state.providerProfile.baseUrl) }
-    var modelInput by rememberSaveable(state.providerProfile.kind, state.providerProfile.model) { mutableStateOf(state.providerProfile.model) }
-    var openRouterOrderInput by rememberSaveable(state.providerProfile.kind) { mutableStateOf(state.providerProfile.openRouterProviderOrder) }
+    var baseUrlInput by rememberSaveable(state.agentKind, state.providerProfile.kind, state.providerProfile.baseUrl) { mutableStateOf(state.providerProfile.baseUrl) }
+    var modelInput by rememberSaveable(state.agentKind, state.providerProfile.kind, state.providerProfile.model) { mutableStateOf(state.providerProfile.model) }
+    var openRouterOrderInput by rememberSaveable(state.agentKind, state.providerProfile.kind, state.providerProfile.openRouterProviderOrder) { mutableStateOf(state.providerProfile.openRouterProviderOrder) }
     var keyLabelInput by rememberSaveable { mutableStateOf("") }
     // Secrets use plain remember: rememberSaveable would write them into the saved-instance Bundle.
     var keySecretInput by remember { mutableStateOf("") }

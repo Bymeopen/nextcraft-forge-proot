@@ -341,6 +341,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                 onSelectRun = viewModel::openProjectChat,
                 onSelectBuild = viewModel::openProjectBuild,
                 onStopRun = viewModel::stopProjectChatRun,
+                onStopBuild = viewModel::stopAndroidBuild,
             )
 
             // Screen host: inside Projects, going deeper (list → chats → conversation) pushes from the right and

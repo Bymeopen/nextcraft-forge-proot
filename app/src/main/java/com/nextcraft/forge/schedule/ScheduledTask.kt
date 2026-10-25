@@ -119,13 +119,13 @@ object ScheduleLogic {
         var result = tasks
         for (d in directives) {
             result = when (d) {
-                ScheduleDirective.Unschedule -> result.filterNot { it.chatId == chatId && it.byAgent }
+                ScheduleDirective.Unschedule -> result.filterNot { it.projectId == projectId && it.chatId == chatId && it.byAgent }
                 is ScheduleDirective.Schedule -> {
-                    val mine = result.filter { it.chatId == chatId && it.byAgent }
+                    val mine = result.filter { it.projectId == projectId && it.chatId == chatId && it.byAgent }
                     when {
                         // The same prompt again replaces its timer instead of stacking a second one.
                         mine.any { it.prompt == d.prompt } -> result.map {
-                            if (it.chatId == chatId && it.byAgent && it.prompt == d.prompt)
+                            if (it.projectId == projectId && it.chatId == chatId && it.byAgent && it.prompt == d.prompt)
                                 it.copy(intervalMinutes = d.intervalMinutes, nextRunAtMillis = now + d.intervalMinutes * 60_000L, enabled = true)
                             else it
                         }
