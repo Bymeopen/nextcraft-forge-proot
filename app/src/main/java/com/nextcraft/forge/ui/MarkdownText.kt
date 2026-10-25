@@ -205,7 +205,7 @@ private fun BlockQuoteView(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(tokens.cardElevatedColor.copy(alpha = 0.65f))
+            .background(tokens.cardElevatedColor.withAlphaScaled(0.65f))
             .padding(8.dp),
     ) {
         Box(
@@ -340,11 +340,11 @@ private fun TableBlockView(
                     modifier = Modifier
                         .background(
                             if (isHeader) {
-                                tokens.cardElevatedColor.copy(alpha = 0.78f)
+                                tokens.cardElevatedColor.withAlphaScaled(0.78f)
                             } else if (rowIdx % 2 == 1) {
                                 Color.Transparent
                             } else {
-                                tokens.cardElevatedColor.copy(alpha = 0.25f)
+                                tokens.cardElevatedColor.withAlphaScaled(0.25f)
                             },
                         )
                         .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -599,3 +599,6 @@ private fun parseInlineMarkdown(
         }
     }
 }
+
+/** Scales the colour's own alpha; `copy(alpha = x)` would replace it and turn translucent Glass tokens bright. */
+internal fun Color.withAlphaScaled(factor: Float): Color = copy(alpha = alpha * factor)

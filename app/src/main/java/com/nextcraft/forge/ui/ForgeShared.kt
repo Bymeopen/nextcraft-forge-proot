@@ -1,5 +1,6 @@
 package com.nextcraft.forge.ui
 
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -53,6 +54,8 @@ fun ForgeProjectHeader(
     subtitle: String? = null,
     onBack: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
+    /** A project's name: draws its identity dot (same colour everywhere the project shows), so projects tell apart at a glance. */
+    accentSeed: String? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     val compact = rememberCompactHeight()
@@ -68,6 +71,14 @@ fun ForgeProjectHeader(
             IconButton(onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.a11y_back), tint = scheme.onSurface)
             }
+        }
+        if (accentSeed != null) {
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .padding(end = 10.dp)
+                    .size(10.dp)
+                    .background(projectAccent(accentSeed, dark = scheme.background.luminance() < 0.5f), androidx.compose.foundation.shape.CircleShape),
+            )
         }
         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
             Text(
@@ -201,4 +212,10 @@ fun ForgeEmptyState(
             ForgePrimaryButton(text = actionLabel, onClick = onAction)
         }
     }
+}
+
+/** Stable colour per project name: the hue comes from the name, lightness from the theme so it reads on both. */
+internal fun projectAccent(seed: String, dark: Boolean): Color {
+    val hue = ((seed.hashCode().toLong() and 0x7fffffff) % 360).toFloat()
+    return Color.hsv(hue, 0.55f, if (dark) 0.95f else 0.62f)
 }

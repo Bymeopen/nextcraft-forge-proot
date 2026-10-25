@@ -73,7 +73,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -111,11 +110,6 @@ fun ProjectsScreen(
     val quick = state.projects
         .filter { it.kind == ProjectKind.QUICK_PROJECT }
         .sortedByDescending { it.updatedAtMillis }
-    val busy = state.sessionRunning ||
-        state.androidBuild.phase == com.nextcraft.forge.runtime.AndroidBuildPhase.BUILDING ||
-        state.terminalRunning
-    // Mirrors MainViewModel.deleteProject, which refuses while a task runs (any project can be deleted, even the last).
-    val canDelete = !busy
     var pendingDeleteProject by remember { mutableStateOf<Project?>(null) }
     var pendingRenameProject by remember { mutableStateOf<Project?>(null) }
     var showCloneDialog by rememberSaveable { mutableStateOf(false) }
@@ -158,14 +152,14 @@ fun ProjectsScreen(
             if (regular.isNotEmpty()) {
                 if (quick.isNotEmpty()) item(key = "header-recent") { SectionLabel(stringResource(R.string.projects_recent)) }
                 items(regular, key = { it.id }) { project ->
+                    val projectBusy = (state.runningProjectChatCounts[project.id] ?: 0) > 0 || project.id in state.buildingProjectIds
                     ProjectRow(
                         project = project,
                         active = project.id == state.activeProjectId,
                         changedCount = if (project.id == state.activeProjectId) state.changedItems.count { it.accepted == null } else 0,
-                        running = state.sessionRunning && project.id == state.activeProjectId,
-                        // MainViewModel.selectProject ignores switches while active tasks run.
-                        locked = busy && project.id != state.activeProjectId,
-                        canDelete = canDelete,
+                        running = projectBusy,
+                        locked = false,
+                        canDelete = !projectBusy,
                         onOpen = { onOpenProject(project.id) },
                         onDelete = { pendingDeleteProject = project },
                         onRename = { pendingRenameProject = project },
@@ -175,13 +169,14 @@ fun ProjectsScreen(
             if (quick.isNotEmpty()) {
                 item(key = "header-quick") { SectionLabel(stringResource(R.string.projects_quick)) }
                 items(quick, key = { it.id }) { project ->
+                    val projectBusy = (state.runningProjectChatCounts[project.id] ?: 0) > 0 || project.id in state.buildingProjectIds
                     ProjectRow(
                         project = project,
                         active = project.id == state.activeProjectId,
                         changedCount = if (project.id == state.activeProjectId) state.changedItems.count { it.accepted == null } else 0,
-                        running = state.sessionRunning && project.id == state.activeProjectId,
-                        locked = busy && project.id != state.activeProjectId,
-                        canDelete = canDelete,
+                        running = projectBusy,
+                        locked = false,
+                        canDelete = !projectBusy,
                         onOpen = { onOpenProject(project.id) },
                         onDelete = { pendingDeleteProject = project },
                         onRename = { pendingRenameProject = project },
@@ -203,7 +198,7 @@ fun ProjectsScreen(
     }
     pendingRenameProject?.let { target ->
         var name by remember(target.id) { mutableStateOf(target.name) }
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { pendingRenameProject = null },
             title = { Text(stringResource(R.string.projects_rename_title)) },
             text = {
@@ -231,7 +226,7 @@ fun ProjectsScreen(
         )
     }
     pendingDeleteProject?.let { target ->
-        AlertDialog(
+        ForgeAlertDialog(
             modifier = Modifier.forgePopIn(),
             onDismissRequest = { pendingDeleteProject = null },
             title = { Text(stringResource(R.string.shell_delete_project_confirm_title)) },
@@ -471,7 +466,7 @@ private fun ImportTile(
 @Composable
 private fun CloneUrlDialog(onDismiss: () -> Unit, onClone: (String) -> Unit) {
     var url by rememberSaveable { mutableStateOf("") }
-    AlertDialog(
+    ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.projects_clone_title)) },
         text = {
@@ -555,14 +550,19 @@ internal fun ProjectRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = if (locked) stringResource(R.string.projects_agent_running) else project.localizedDescription().ifBlank { project.subtitle() },
-                    fontSize = ForgeType.body,
-                    color = muted,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // The stock descriptions ("General coding workspace", "Quick project") say nothing the card does not already
+                // show (the list is grouped by kind), so only a locked card or a description someone wrote takes a line.
+                val generic = project.description in GENERIC_PROJECT_DESCRIPTIONS
+                if (locked || !generic) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (locked) stringResource(R.string.projects_agent_running) else project.localizedDescription().ifBlank { project.subtitle() },
+                        fontSize = ForgeType.body,
+                        color = muted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 val guestPath = "/workspace/${project.slug}"
                 Text(
                     text = guestPath,
@@ -676,6 +676,12 @@ private fun ProjectsEmptyState() {
         )
     }
 }
+
+private val GENERIC_PROJECT_DESCRIPTIONS = setOf(
+    "Default workspace inside Ubuntu ARM64 Root Chroot",
+    "General coding workspace",
+    "Quick project",
+)
 
 @Composable
 private fun Project.subtitle(): String = when {

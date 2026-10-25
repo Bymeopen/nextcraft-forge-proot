@@ -33,7 +33,7 @@ check_optional() {
 }
 
 echo "== Sistem"
-check "rootfs"            'cat /.pocket-rootfs-version'
+check "rootfs"            'cat /.nextcraft-rootfs-version 2>/dev/null || cat /.pocket-rootfs-version'
 check "glibc"             'ldd --version | head -1'
 check "disk /"            'df -h / | awk "NR==2{print \$4\" free\"; exit (\$5+0>95)}"'
 check "/tmp writable"     'f=$(mktemp) && rm -f "$f" && echo ok'
@@ -100,7 +100,7 @@ check "aapt2"             "$BUILD_TOOLS/aapt2 version"
 # zipalign without arguments prints usage and exits non-zero; a missing linker gives "cannot execute" instead.
 check "zipalign"          "out=\$($BUILD_TOOLS/zipalign 2>&1); echo \"\$out\" | head -1; echo \"\$out\" | grep -qi usage"
 check "d8"                "$BUILD_TOOLS/d8 --version"
-check "gradle init"       'grep -q "android.aapt2FromMavenOverride" /root/.gradle/init.d/pocketdev-android.gradle && echo ok'
+check "gradle init"       'grep -q "android.aapt2FromMavenOverride" /root/.gradle/init.d/nextcraft-android.gradle && echo ok'
 
 echo "== C/C++"
 for c in gcc g++ make cmake gdb; do check "$c" "$c --version"; done

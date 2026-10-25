@@ -56,7 +56,8 @@ class ReaResultTest {
     fun theInstallScriptUsesTheStagedPackageAndTheVersionMarker() {
         val script = ReaController.installScript()
         assertTrue(script.contains("cp -a /workspace/rea/stage/rea /opt/rea/lib/rea"))
-        assertTrue(script.contains("echo \"${ReaController.REA_VERSION}\" > /root/.pocket-rea-version"))
+        assertTrue(script.contains("echo \"${ReaController.REA_VERSION}\" > /root/.nextcraft-rea-version"))
+        assertTrue(script.contains("cp /root/.nextcraft-rea-version /root/.pocket-rea-version"))
         // The wrapper must pass its arguments through unchanged.
         assertTrue(script.contains("python3 -m rea \"\$@\""))
     }

@@ -2,6 +2,9 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.MoreVert
 import android.graphics.Typeface
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
@@ -134,16 +137,6 @@ fun TerminalScreen(
             onBack = if (inProject) ({ viewModel.projectBack() }) else null,
             actions = {
                 ForgePillIcon(
-                    icon = Icons.Default.KeyboardArrowDown,
-                    description = stringResource(R.string.terminal_text_smaller),
-                    onClick = { viewClient.changeTextSize(-1) },
-                )
-                ForgePillIcon(
-                    icon = Icons.Default.Add,
-                    description = stringResource(R.string.terminal_text_larger),
-                    onClick = { viewClient.changeTextSize(1) },
-                )
-                ForgePillIcon(
                     icon = Icons.Default.Share,
                     description = stringResource(R.string.terminal_copy_terminal_output),
                     onClick = {
@@ -151,12 +144,29 @@ fun TerminalScreen(
                     },
                     enabled = session != null,
                 )
-                ForgePillIcon(
-                    icon = Icons.Default.Delete,
-                    description = stringResource(R.string.terminal_clear_terminal),
-                    onClick = { viewModel.clearTerminal(chatId) },
-                    enabled = session != null,
-                )
+                var menuOpen by remember { mutableStateOf(false) }
+                Box {
+                    ForgePillIcon(
+                        icon = Icons.Default.MoreVert,
+                        description = stringResource(R.string.files_more),
+                        onClick = { menuOpen = true },
+                    )
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.terminal_text_smaller)) },
+                            onClick = { menuOpen = false; viewClient.changeTextSize(-1) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.terminal_text_larger)) },
+                            onClick = { menuOpen = false; viewClient.changeTextSize(1) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.terminal_clear_terminal)) },
+                            enabled = session != null,
+                            onClick = { menuOpen = false; viewModel.clearTerminal(chatId) },
+                        )
+                    }
+                }
             },
         )
 

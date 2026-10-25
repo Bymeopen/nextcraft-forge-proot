@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -16,6 +18,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -63,23 +66,57 @@ internal object VoiceCommands {
     }
 }
 
-/** Speech-to-text for the composer: partial words while speaking, the final sentence when the speaker pauses. */
+/** BCP-47 tag the recogniser understands: the app language, with Android's legacy codes ("in", "iw") modernised. */
+internal fun speechLanguageTag(appLanguage: String, deviceTag: String): String {
+    val raw = appLanguage.takeUnless { it == "system" || it.isBlank() } ?: deviceTag
+    val tag = raw.replace('_', '-')
+    val lang = tag.substringBefore('-')
+    val modern = when (lang.lowercase(Locale.ROOT)) { "in" -> "id"; "iw" -> "he"; "ji" -> "yi"; else -> lang }
+    return modern + tag.removePrefix(lang)
+}
+
+/** What a recogniser error means for the person: [R.string] to show, or null when it is not worth a message. */
+internal fun voiceErrorMessage(error: Int): Int? = when (error) {
+    // Silence or nothing recognised is not worth a message; a cancelled client is our own stop.
+    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT, SpeechRecognizer.ERROR_CLIENT -> null
+    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> R.string.voice_permission_denied
+    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_SERVER -> R.string.voice_error_network
+    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> R.string.voice_error_busy
+    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> R.string.voice_error_language
+    else -> R.string.voice_error
+}
+
+/**
+ * Speech-to-text for the composer: partial words while speaking, the final sentence when the speaker pauses. It keeps
+ * listening after each sentence (until [stop], a command that ends dictation, silence, or an error), so a long prompt
+ * is one tap instead of one tap per sentence.
+ */
 @Stable
 internal class VoiceController(
     private val context: Context,
     private val languageTag: () -> String,
     private val onPartial: State<(String) -> Unit>,
-    private val onFinal: State<(String) -> Unit>,
+    /** Gets each finished sentence; return true to keep listening for the next one. */
+    private val onFinal: State<(String) -> Boolean>,
 ) {
     var listening by mutableStateOf(false)
         private set
+
+    /** Loudness of the voice, 0..1, smoothed; drives the mic's pulse. */
+    var level by mutableFloatStateOf(0f)
+        private set
+    private var wantListening = false
+    private val handler = Handler(Looper.getMainLooper())
     internal var requestPermission: () -> Unit = {}
     private var recognizer: SpeechRecognizer? = null
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) = Unit
         override fun onBeginningOfSpeech() = Unit
-        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onRmsChanged(rmsdB: Float) {
+            // Typical range is about -2 (quiet room) to 10 (loud speech).
+            level = level * 0.6f + ((rmsdB + 2f) / 12f).coerceIn(0f, 1f) * 0.4f
+        }
         override fun onBufferReceived(buffer: ByteArray?) = Unit
         override fun onEndOfSpeech() = Unit
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -90,17 +127,23 @@ internal class VoiceController(
 
         override fun onResults(results: Bundle?) {
             listening = false
-            firstResult(results)?.let { onFinal.value(it) }
+            level = 0f
+            val keepGoing = firstResult(results)?.let { onFinal.value(it) } ?: false
+            // A short pause lets the engine release the microphone before it is asked again.
+            if (keepGoing && wantListening) handler.postDelayed({ if (wantListening) start() }, RESTART_DELAY_MS)
+            else wantListening = false
         }
 
         override fun onError(error: Int) {
             listening = false
-            when (error) {
-                // Silence or nothing recognised is not worth a message; a cancelled client is our own stop.
-                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT, SpeechRecognizer.ERROR_CLIENT -> Unit
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> toast(R.string.voice_permission_denied)
-                else -> toast(R.string.voice_error)
+            wantListening = false
+            level = 0f
+            if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+                // A stuck engine stays busy until it is rebuilt; the next tap gets a fresh one.
+                runCatching { recognizer?.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("VoiceInput", it) }
+                recognizer = null
             }
+            voiceErrorMessage(error)?.let(::toast)
         }
     }
 
@@ -133,22 +176,37 @@ internal class VoiceController(
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag())
+            // Dictating a prompt means pausing to think: wait a little longer before deciding the sentence is over.
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
+        wantListening = true
         listening = true
         runCatching { engine.startListening(intent) }.onFailure {
             listening = false
+            wantListening = false
             toast(R.string.voice_error)
         }
     }
 
     /** Ends the recording; the recogniser still delivers what it heard so far. */
     fun stop() {
-        runCatching { recognizer?.stopListening() }
+        wantListening = false
+        handler.removeCallbacksAndMessages(null)
+        runCatching { recognizer?.stopListening() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("VoiceInput", it) }
     }
 
     fun release() {
-        runCatching { recognizer?.destroy() }
+        wantListening = false
+        handler.removeCallbacksAndMessages(null)
+        runCatching { recognizer?.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("VoiceInput", it) }
         recognizer = null
         listening = false
+        level = 0f
+    }
+
+    private companion object {
+        const val RESTART_DELAY_MS = 250L
+        const val SILENCE_MS = 1800L
     }
 }
 
@@ -160,7 +218,7 @@ internal class VoiceController(
 internal fun rememberVoiceController(
     languageCode: String,
     onPartial: (String) -> Unit,
-    onFinal: (String) -> Unit,
+    onFinal: (String) -> Boolean,
 ): VoiceController {
     val context = LocalContext.current
     val partial = rememberUpdatedState(onPartial)
@@ -169,7 +227,7 @@ internal fun rememberVoiceController(
     val controller = remember {
         VoiceController(
             context = context,
-            languageTag = { language.value.takeUnless { it == "system" || it.isBlank() } ?: Locale.getDefault().toLanguageTag() },
+            languageTag = { speechLanguageTag(language.value, Locale.getDefault().toLanguageTag()) },
             onPartial = partial,
             onFinal = finalState,
         )

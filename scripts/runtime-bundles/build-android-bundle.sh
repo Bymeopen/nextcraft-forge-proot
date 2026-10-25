@@ -16,7 +16,7 @@ set -euo pipefail
 #                                          Linux ARM64 Build-Tools. The binaries are static: no /system/bin/linker64.
 #   root/android-sdk/licenses/             android-sdk-license hash, as sdkmanager writes it
 #   root/maven/localMvnRepository/         offline Maven repository from build-android-maven-cache.sh
-#   root/.gradle/init.d/pocketdev-android.gradle, root/.gradle/gradle.properties, root/.pocket-android-tools-version
+#   root/.gradle/init.d/nextcraft-android.gradle, root/.gradle/gradle.properties, root/.nextcraft-android-tools-version
 #                                          byte-identical to what RuntimeInstaller writes
 #
 # No root or chroot is needed to assemble the bundle. Set NEXTCRAFT_CORE_ROOTFS to an extracted Core bundle to also
@@ -85,7 +85,7 @@ done
 [[ -z "$MAVEN_REPO" || -f "$MAVEN_REPO/MANIFEST.sha256" ]] || { echo "$MAVEN_REPO is not a build-android-maven-cache.sh output" >&2; exit 1; }
 if [[ -n "$CORE_ROOTFS" ]]; then
   [[ "$(id -u)" == "0" ]] || { echo "The chroot smoke test needs root" >&2; exit 1; }
-  grep -qx 'ubuntu-24.04.5-arm64' "$CORE_ROOTFS/.pocket-rootfs-version" 2>/dev/null || { echo "$CORE_ROOTFS is not an extracted Core 24.04.5 rootfs" >&2; exit 1; }
+  grep -qx 'ubuntu-24.04.5-arm64' "$CORE_ROOTFS/.nextcraft-rootfs-version" "$CORE_ROOTFS/.pocket-rootfs-version" 2>/dev/null || { echo "$CORE_ROOTFS is not an extracted Core 24.04.5 rootfs" >&2; exit 1; }
   if [[ "$(uname -m)" != "aarch64" ]]; then
     grep -qs '^flags: .*F' /proc/sys/fs/binfmt_misc/qemu-aarch64 || {
       echo "qemu-aarch64 binfmt handler with the F flag is not registered (binfmt_misc is lost on container restart)" >&2
@@ -222,11 +222,71 @@ rm "$payload/root/maven/localMvnRepository/MANIFEST.sha256"
 echo "Writing Gradle configuration and marker"
 mkdir -p "$payload/root/.gradle/init.d"
 # Same text as RuntimeInstaller.ANDROID_GRADLE_INIT_SCRIPT and the managed lines of writeAndroidGradleConfiguration.
-cat > "$payload/root/.gradle/init.d/pocketdev-android.gradle" <<EOF
-def pocketMaven = uri('/root/maven/localMvnRepository')
+cat > "$payload/root/.gradle/init.d/nextcraft-android.gradle" <<EOF
+def nextcraftMaven = uri('/root/maven/localMvnRepository')
+// The bundled cache holds some POMs without their jars, and Gradle does not try another repository once it
+// found the metadata. It goes first for offline builds and for NextCraft's own project templates (which it was
+// built from); any other project resolves from the real repositories and uses it only as a last resort.
+def nextcraftCacheFirst = { File root ->
+    gradle.startParameter.offline || new File(root, '.nextcraft/android-project.json').isFile()
+}
+// sqlite-jdbc (Room's KSP/kapt schema checks) sees Android's /system in the chroot and loads its Android build,
+// which cannot run on Ubuntu ("invalid ELF header"). Point it at the Linux aarch64 library from the same jar. On a
+// project's first build the jar is not cached yet, so a Room project gets a pinned release from Maven Central instead.
+def nextcraftSqliteJdbc = { File projectDir ->
+    if (System.getProperty('org.sqlite.lib.path')) return
+    def sqliteCache = new File(gradle.gradleUserHomeDir, 'caches/modules-2/files-2.1/org.xerial/sqlite-jdbc')
+    def sqliteJars = []
+    (sqliteCache.listFiles() ?: []).each { v -> (v.listFiles() ?: []).each { h ->
+        (h.listFiles() ?: []).each { f -> if (f.name.startsWith('sqlite-jdbc-') && f.name.endsWith('.jar')) sqliteJars << f }
+    } }
+    def sqliteJar = sqliteJars.max { it.lastModified() }
+    if (sqliteJar == null && !gradle.startParameter.offline) {
+        def buildFiles = ['gradle/libs.versions.toml', 'build.gradle', 'build.gradle.kts', 'app/build.gradle', 'app/build.gradle.kts']
+        def usesRoom = buildFiles.any { name ->
+            def f = new File(projectDir, name)
+            f.isFile() && f.text.contains('androidx.room')
+        }
+        def pinned = new File(gradle.gradleUserHomeDir, 'nextcraft/sqlite-jdbc-3.50.3.0.jar')
+        if (usesRoom && !pinned.isFile()) {
+            try {
+                def connection = new URL('https://repo.maven.apache.org/maven2/org/xerial/sqlite-jdbc/3.50.3.0/sqlite-jdbc-3.50.3.0.jar').openConnection()
+                connection.connectTimeout = 15000
+                connection.readTimeout = 60000
+                pinned.parentFile.mkdirs()
+                def partial = new File(pinned.path + '.part')
+                connection.inputStream.withStream { input -> partial.withOutputStream { it << input } }
+                partial.renameTo(pinned)
+            } catch (Exception ignored) {
+                // Offline or blocked: the build still runs and the next one uses the jar Gradle downloaded.
+            }
+        }
+        if (pinned.isFile()) sqliteJar = pinned
+    }
+    if (sqliteJar == null) return
+    def sqliteDir = new File(gradle.gradleUserHomeDir, 'nextcraft/' + sqliteJar.name.replace('.jar', ''))
+    def sqliteLib = new File(sqliteDir, 'libsqlitejdbc.so')
+    if (!sqliteLib.isFile()) {
+        def zip = new java.util.zip.ZipFile(sqliteJar)
+        try {
+            def entry = zip.getEntry('org/sqlite/native/Linux/aarch64/libsqlitejdbc.so')
+            if (entry != null) {
+                sqliteDir.mkdirs()
+                zip.getInputStream(entry).withStream { input -> sqliteLib.withOutputStream { it << input } }
+            }
+        } finally {
+            zip.close()
+        }
+    }
+    if (sqliteLib.isFile()) {
+        System.setProperty('org.sqlite.lib.path', sqliteDir.path)
+        System.setProperty('org.sqlite.lib.name', 'libsqlitejdbc.so')
+    }
+}
 beforeSettings { settings ->
+    nextcraftSqliteJdbc(settings.settingsDir)
     settings.pluginManagement.repositories {
-        maven { url = pocketMaven }
+        if (nextcraftCacheFirst(settings.settingsDir)) maven { url = nextcraftMaven }
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -234,7 +294,7 @@ beforeSettings { settings ->
 }
 settingsEvaluated { settings ->
     settings.dependencyResolutionManagement.repositories {
-        maven { url = pocketMaven }
+        maven { url = nextcraftMaven }
     }
 }
 gradle.beforeProject { project ->
@@ -242,8 +302,10 @@ gradle.beforeProject { project ->
         'android.aapt2FromMavenOverride',
         '/root/android-sdk/build-tools/$BUILD_TOOLS_VERSION/aapt2'
     )
-    project.buildscript.repositories {
-        maven { url = pocketMaven }
+    if (nextcraftCacheFirst(project.rootDir)) {
+        project.buildscript.repositories {
+            maven { url = nextcraftMaven }
+        }
     }
 }
 EOF
@@ -254,7 +316,7 @@ org.gradle.workers.max=2
 org.gradle.parallel=false
 kotlin.compiler.execution.strategy=in-process
 EOF
-printf '%s' "$TOOLS_VERSION" > "$payload/root/.pocket-android-tools-version"
+printf '%s' "$TOOLS_VERSION" > "$payload/root/.nextcraft-android-tools-version"
 
 echo "Checking the payload"
 for tool in "${NATIVE_TOOLS[@]}"; do
