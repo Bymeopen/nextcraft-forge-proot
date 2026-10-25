@@ -49,6 +49,10 @@ object ForgeMotion {
     fun <T> springSnappy(): androidx.compose.animation.core.SpringSpec<T> =
         spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMedium)
 
+    /** Sheets and morphing shapes (Expressive): a little more overshoot than [springSnappy], still settles quickly. */
+    fun <T> springExpressive(): androidx.compose.animation.core.SpringSpec<T> =
+        spring(dampingRatio = 0.62f, stiffness = 380f)
+
     /** Screen push: slide 24% + fade in, the leaving screen fades and drifts 12% the other way. */
     fun screenTransition(forward: Boolean, reduceMotion: Boolean): ContentTransform {
         if (reduceMotion) return fadeIn(snap()) with fadeOut(snap())
@@ -88,8 +92,18 @@ fun <K> ForgeScreenHost(
 }
 
 /** Scales the element to 96% while pressed; pair it with the clickable that owns [interactionSource]. */
-fun Modifier.forgePressScale(interactionSource: MutableInteractionSource, pressedScale: Float = 0.96f): Modifier = composed {
+fun Modifier.forgePressScale(
+    interactionSource: MutableInteractionSource,
+    pressedScale: Float = 0.96f,
+    haptic: Boolean = false,
+): Modifier = composed {
     val pressed by interactionSource.collectIsPressedAsState()
+    if (haptic) {
+        // One light tick on touch-down, so every pill and button answers the finger the same way (the system's
+        // touch-feedback setting still applies).
+        val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+        LaunchedEffect(pressed) { if (pressed) haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
+    }
     val reduceMotion = rememberReduceMotion()
     val scale by animateFloatAsState(
         targetValue = if (pressed) pressedScale else 1f,
@@ -121,13 +135,15 @@ fun Modifier.forgePopIn(): Modifier = composed {
 fun rememberBlink(): Float {
     val reduceMotion = rememberReduceMotion()
     if (reduceMotion) return 1f
-    val transition = rememberInfiniteTransition()
-    val t by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart),
-    )
-    return if (t < 0.5f) 1f else 0.15f
+    // Two states only, so toggle them on a timer: an infinite transition would recompose on every frame.
+    var on by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(true) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(450)
+            on = !on
+        }
+    }
+    return if (on) 1f else 0.15f
 }
 
 /* ───────────────────────── Type and spacing scale ───────────────────────── */

@@ -60,6 +60,8 @@ internal object MessageText {
         "Binary file changed" to R.string.mt_diff_binary,
         "File is too large to preview safely. Undo and Keep still work." to R.string.mt_diff_too_large_file,
         "Give the host a name." to R.string.mt_ssh_name,
+        "Checking the SSH client…" to R.string.mt_ssh_checking,
+        "OpenSSH client is not installed." to R.string.mt_ssh_missing,
         "User may only contain letters, digits, . _ -" to R.string.mt_ssh_user,
         "Host may only contain letters, digits, . _ -" to R.string.mt_ssh_host,
         "Port must be 1-65535." to R.string.mt_ssh_port,
@@ -126,4 +128,12 @@ internal fun messageText(raw: String): String {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current // re-read when the language changes
     return remember(raw, configuration) { MessageText.localize(context, raw) }
+}
+
+/** A multi-line log in the app language: known sentences are translated line by line, tool output stays as it is. */
+@Composable
+internal fun messageLines(raw: String): String {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    return remember(raw, configuration) { raw.lines().joinToString("\n") { MessageText.localize(context, it) } }
 }

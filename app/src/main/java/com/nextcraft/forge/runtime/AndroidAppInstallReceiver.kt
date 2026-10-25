@@ -26,7 +26,7 @@ class AndroidAppInstallReceiver : BroadcastReceiver() {
                     return
                 }
                 userAction.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                runCatching { context.startActivity(userAction) }
+                runCatching { context.startActivity(userAction) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAppInstallReceiver", it) }
             }
             return
         }
