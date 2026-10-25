@@ -19,7 +19,7 @@ object SilentSelfUpdate {
     /** The shell script that runs detached as root; [component] is `package/Activity` (validated, never free text). */
     internal fun detachedScript(component: String): String? {
         if (!SAFE_COMPONENT.matches(component)) return null
-        val inner = "pm install -r $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
+        val inner = "pm install -r -d $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
             "echo rc=\$rc >> $LOG_FILE; " +
             "if [ \$rc -eq 0 ]; then am start --user 0 -n $component >/dev/null 2>&1; fi"
         return "rm -f $LOG_FILE; nohup setsid sh -c '$inner' >/dev/null 2>&1 &"

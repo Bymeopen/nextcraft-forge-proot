@@ -519,7 +519,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (preferences.routing.mode != RouteMode.SINGLE) refreshReadyAgents()
             val savedGitHubToken = vault.get("GITHUB_TOKEN").orEmpty()
-            if (savedGitHubToken.isNotBlank()) githubAuth.restoreRepos(savedGitHubToken)
+            if (savedGitHubToken.isNotBlank()) {
+                githubAuth.restoreRepos(savedGitHubToken)
+                if (preferences.autoSyncGitHub && firstProject != null) {
+                    syncProjectWithGitHub(firstProject.id, "Sync project changes from NextCraft Forge")
+                }
+            }
             firstProject?.let { refreshWorkspaceFilesAndChanges(it.id) }
             silentUpdateCheck()
         }

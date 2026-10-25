@@ -39,8 +39,9 @@ jobs:
           gradle-version: "9.8.2"
       - name: Compute version
         run: |
-          echo "VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=1.0.${GITHUB_RUN_NUMBER}-forge" >> "$GITHUB_ENV"
+          COMMITS=$(git rev-list --count HEAD 2>/dev/null || echo 100)
+          echo "VERSION_CODE=$((1100 + COMMITS + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.0.$((1100 + COMMITS + GITHUB_RUN_NUMBER))-forge" >> "$GITHUB_ENV"
           echo "TAG=dev-latest" >> "$GITHUB_ENV"
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug -PversionCode="$VERSION_CODE" -PversionName="$VERSION_NAME"
