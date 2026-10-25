@@ -16,7 +16,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -355,10 +354,9 @@ private fun ReaLessonSheet(rea: ReaState, controller: ReaController, onDismiss: 
     var confirmReveal by remember(lesson.n) { mutableStateOf(false) }
     // One 1-based pick per question (0 = not answered yet); reset whenever a new quiz is loaded.
     val picks = remember(lesson.n, rea.quiz) { mutableStateListOf<Int>().apply { repeat(rea.quiz?.size ?: 0) { add(0) } } }
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = tokens.cardContainerColor,
     ) {
         Column(
             modifier = Modifier
@@ -464,7 +462,7 @@ private fun ReaLessonSheet(rea: ReaState, controller: ReaController, onDismiss: 
         }
     }
     if (confirmReveal) {
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { confirmReveal = false },
             title = { Text(stringResource(R.string.rea_lesson_reveal_title)) },
             text = { Text(stringResource(R.string.rea_lesson_reveal_message)) },
@@ -481,10 +479,9 @@ private fun ReaFilePicker(files: List<com.nextcraft.forge.model.WorkspaceEntry>,
     val tokens = LocalForgeThemeTokens.current
     var query by rememberSaveable { mutableStateOf("") }
     val shown = files.filter { query.isBlank() || it.path.contains(query, ignoreCase = true) }
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = tokens.cardContainerColor,
     ) {
         Column(modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.rea_pick_file), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)

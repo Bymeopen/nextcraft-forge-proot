@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -174,6 +173,10 @@ fun DiagnosticsScreen(viewModel: MainViewModel) {
         diag.healthSummary?.let { Text(it, fontSize = ForgeType.control, fontWeight = FontWeight.Medium, color = LocalForgeThemeTokens.current.accentText) }
         LogBox(text = diag.healthOutput, placeholder = stringResource(R.string.tool_health_placeholder))
 
+        // Errors the app caught and carried on from: the trail a field problem used to leave nowhere.
+        ToolSectionLabel(stringResource(R.string.diag_recent_errors))
+        LogBox(text = diag.swallowedErrors, placeholder = stringResource(R.string.diag_no_recent_errors))
+
         // The full stack trace of the last crash, readable and copyable without adb.
         val context = LocalContext.current
         val clipboard = LocalClipboardManager.current
@@ -280,7 +283,7 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
         }
     }
     pendingRestore?.let { target ->
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { pendingRestore = null },
             title = { Text(stringResource(R.string.tool_restore_title)) },
             text = { Text(stringResource(R.string.tool_restore_message, target.label)) },

@@ -14,11 +14,11 @@ enum class AppLanguage(
     SYSTEM("system", "System Default", "Default", translated = true),
     INDONESIAN("id", "Indonesian", "Bahasa Indonesia", translated = true),
     ENGLISH("en", "English", "English", translated = true),
-    SPANISH("es", "Spanish", "Español"),
-    CHINESE("zh", "Chinese (Simplified)", "简体中文"),
-    ARABIC("ar", "Arabic", "العربية"),
-    HINDI("hi", "Hindi", "हिन्दी"),
-    RUSSIAN("ru", "Russian", "Русский");
+    SPANISH("es", "Spanish", "Español", translated = true),
+    CHINESE("zh", "Chinese (Simplified)", "简体中文", translated = true),
+    ARABIC("ar", "Arabic", "العربية", translated = true),
+    HINDI("hi", "Hindi", "हिन्दी", translated = true),
+    RUSSIAN("ru", "Russian", "Русский", translated = true);
 
     companion object {
         /** Languages the user can pick: fully translated ones only. */

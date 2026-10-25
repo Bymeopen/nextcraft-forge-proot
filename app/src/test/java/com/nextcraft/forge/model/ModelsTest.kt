@@ -1,6 +1,5 @@
 package com.nextcraft.forge.model
 
-import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,15 +19,18 @@ class ModelsTest {
     }
 
     @Test
-    fun quickChatIdentityAvoidsUsedSlugs() {
-        val random = Random(42)
-        val used = mutableSetOf<String>()
-        repeat(200) {
-            val identity = generateQuickChatIdentity(used, random)
-            assertTrue(identity.slug !in used)
-            used += identity.slug
-        }
-        assertEquals(200, used.size)
+    fun quickProjectsAreNumberedInOrder() {
+        val used = mutableSetOf("my-app")
+        val first = generateQuickChatIdentity(used, "Proyek cepat")
+        assertEquals("Proyek cepat 1", first.displayName)
+        assertEquals("quick-project-1", first.slug)
+        used += first.slug
+        used += generateQuickChatIdentity(used, "Proyek cepat").slug
+        assertEquals("Proyek cepat 3", generateQuickChatIdentity(used, "Proyek cepat").displayName)
+        // Deleting #2 does not bring its number back.
+        used -= "quick-project-2"
+        used += "quick-project-3"
+        assertEquals("quick-project-4", generateQuickChatIdentity(used, "Proyek cepat").slug)
     }
 
     @Test

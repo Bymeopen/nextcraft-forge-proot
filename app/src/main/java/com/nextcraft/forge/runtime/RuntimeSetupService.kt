@@ -78,7 +78,7 @@ object RuntimeSetupController {
                 errorMessage = json.stringOrEmpty("errorMessage").takeIf(String::isNotBlank),
                 offline = json.optBoolean("offline"),
             )
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     @Synchronized
@@ -228,7 +228,7 @@ object RuntimeSetupController {
                     android.util.Log.e("SetupController", "Failed to persist setup state — data may be lost")
                 }
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     private fun appendLog(context: Context, line: String?) {
@@ -241,7 +241,7 @@ object RuntimeSetupController {
                 val tail = file.readTailText(MAX_LOG_BYTES.toInt())
                 file.writeText(tail.substringAfter('\n', tail))
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     private fun sanitize(line: String): String = line.filter { it == '\t' || it.code >= 32 }.take(500)
@@ -457,12 +457,12 @@ class RuntimeSetupService : Service() {
         if (now - lastWakeLockRenewAt < WAKE_LOCK_RENEW_INTERVAL_MS) return
         if (now - wakeLockAcquiredAt > MAX_SETUP_WAKE_MS) return
         lastWakeLockRenewAt = now
-        runCatching { lock.acquire(MAX_WAKE_LOCK_MS) }
+        runCatching { lock.acquire(MAX_WAKE_LOCK_MS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     private fun releaseWakeLock() {
         wakeLock?.takeIf { it.isHeld }?.let { lock ->
-            runCatching { lock.release() }
+            runCatching { lock.release() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
         }
         wakeLock = null
     }

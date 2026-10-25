@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
@@ -128,7 +127,7 @@ fun BuildMatrixScreen(state: ForgeUiState, viewModel: MainViewModel) {
     if (showAdd) {
         var name by remember { mutableStateOf("") }
         var command by remember { mutableStateOf("") }
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { showAdd = false },
             title = { Text(stringResource(R.string.tool_add_target)) },
             text = {
@@ -215,7 +214,7 @@ fun SshScreen(viewModel: MainViewModel) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             ForgeTextButton(onClick = viewModel.ssh::cancel) { Text(stringResource(R.string.tool_stop)) }
         }
-        LogBox(text = ssh.log, placeholder = stringResource(R.string.tool_log_placeholder))
+        LogBox(text = messageLines(ssh.log), placeholder = stringResource(R.string.tool_log_placeholder))
     }
     if (showAdd) {
         var alias by remember { mutableStateOf("") }
@@ -224,7 +223,7 @@ fun SshScreen(viewModel: MainViewModel) {
         var port by remember { mutableStateOf("22") }
         var forward by remember { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { showAdd = false },
             title = { Text(stringResource(R.string.tool_ssh_add_host)) },
             text = {
@@ -248,7 +247,7 @@ fun SshScreen(viewModel: MainViewModel) {
     }
     remoteFor?.let { target ->
         var command by remember { mutableStateOf("") }
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { remoteFor = null },
             title = { Text(stringResource(R.string.tool_ssh_run_on, target.alias)) },
             text = {

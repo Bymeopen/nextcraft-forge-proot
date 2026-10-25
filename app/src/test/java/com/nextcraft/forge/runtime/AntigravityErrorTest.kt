@@ -42,6 +42,9 @@ class AntigravityErrorTest {
     @Test
     fun taskTimeout_isStillReported() {
         assertTrue(antigravityFriendlyError("task timed out after 60m").contains("60-minute"))
+        // A timeout seconds into the turn is not the 60-minute limit; the raw error stays visible.
+        val quick = antigravityFriendlyError("request timed out", "", 30_000L)
+        assertTrue(!quick.contains("60-minute") && quick.contains("timed out"))
     }
 
     @Test

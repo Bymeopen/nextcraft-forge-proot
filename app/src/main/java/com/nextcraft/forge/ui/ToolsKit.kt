@@ -43,10 +43,12 @@ internal fun ToolScaffold(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ForgeProjectHeader(title = title, subtitle = subtitle, onBack = onBack)
+        val scroll = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .forgeFadingVertical(scroll, MaterialTheme.colorScheme.background)
+                .verticalScroll(scroll)
                 .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,

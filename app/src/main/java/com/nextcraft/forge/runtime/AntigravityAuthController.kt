@@ -103,7 +103,7 @@ class AntigravityAuthController(
                 ptyColumns = 120,
             )
             if (spawned !is NativeSpawnProcess) {
-                runCatching { spawned.destroyForcibly() }
+                runCatching { spawned.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
                 throw UiTextException(UiText.res(R.string.rt_auth_unsupported_process))
             }
             spawned
@@ -201,7 +201,7 @@ class AntigravityAuthController(
                         runCatching {
                             running.outputStream.write("/quit\r\n".toByteArray())
                             running.outputStream.flush()
-                        }
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
                         repeat(20) {
                             if (!running.isAlive) return@repeat
                             delay(50)
@@ -285,14 +285,14 @@ class AntigravityAuthController(
                 )
             }
         } finally {
-            runCatching { running.outputStream.close() }
+            runCatching { running.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
             if (running.isAlive) {
-                runCatching { running.destroy() }
+                runCatching { running.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
                 runCatching {
                     if (running.isAlive) running.destroyForcibly()
-                }
+                }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
             }
-            runCatching { running.waitFor() }
+            runCatching { running.waitFor() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
             native.outputFile.delete() // OAuth terminal output is intentionally ephemeral.
             process = null
             codeSubmitted = false
@@ -325,9 +325,9 @@ class AntigravityAuthController(
 
     suspend fun logout() = withContext(Dispatchers.IO) {
         process?.let { running ->
-            runCatching { running.destroy() }
-            runCatching { if (running.isAlive) running.destroyForcibly() }
-            runCatching { running.waitFor() }
+            runCatching { running.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
+            runCatching { if (running.isAlive) running.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
+            runCatching { running.waitFor() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
         }
         val previousEmail = mutableState.value.accountEmail
         mutableState.value = AntigravityAuthState(
@@ -368,7 +368,7 @@ class AntigravityAuthController(
                     Thread.sleep(200)
                     if (running.isAlive) running.destroyForcibly()
                     running.waitFor()
-                }
+                }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityAuthController", it) }
             }.apply { isDaemon = true }.start()
         }
         // Cancelling a re-login must not make an already connected account look signed out.

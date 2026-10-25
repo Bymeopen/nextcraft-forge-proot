@@ -72,6 +72,7 @@ class DshRuntimeBridge(
         if (secret.isBlank()) {
             eventBus.emit(RuntimeEvent.SessionFailed(sessionId, "No API key is saved for ${provider.kind.title}."))
             activeSessionId = null
+            foreground.clearStart()
             return@withContext sessionId
         }
         if (provider.kind == ProviderKind.CLAUDE) {
@@ -82,11 +83,13 @@ class DshRuntimeBridge(
                 ),
             )
             activeSessionId = null
+            foreground.clearStart()
             return@withContext sessionId
         }
 
         var openRouterGateway: OpenRouterRoutingGateway? = null
         var spawnedOutputFile: File? = null
+        var sessionHomeHostDir: File? = null
         var stopHandler: (() -> Unit)? = null
         runCatching {
             stopHandler = {
@@ -98,11 +101,11 @@ class DshRuntimeBridge(
                             running.destroy()
                             Thread.sleep(500)
                             if (running.isAlive) running.destroyForcibly()
-                        }
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
                     }, "forge-dsh-stop").apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register(RuntimeTaskController.AGENT, it) }
+            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
             startForegroundRuntime(projectSlug)
             val installed = installer.installedRuntime()
             check(installer.isAgentInstalled(AgentKind.DEEPSEEK_HARNESS)) {
@@ -121,9 +124,10 @@ class DshRuntimeBridge(
             } else {
                 baseRoute
             }
-            writeDshSettings(installed.rootfs, route, provider)
+            val sessionGuestHome = "$DSH_HOME_GUEST_PATH/sessions/$sessionId"
+            sessionHomeHostDir = writeDshSettings(installed.rootfs, route, provider, sessionGuestHome)
             val environment = linkedMapOf(
-                "DSH_HOME" to DSH_HOME_GUEST_PATH,
+                "DSH_HOME" to sessionGuestHome,
                 "DSH_PERMISSION_MODE" to "danger-full-access",
                 route.keyEnv to secret,
             )
@@ -187,8 +191,9 @@ class DshRuntimeBridge(
                 )
             }
         }
-        runCatching { openRouterGateway?.close() }
-        runCatching { spawnedOutputFile?.delete() }
+        runCatching { openRouterGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        runCatching { sessionHomeHostDir?.deleteRecursively() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
         activeProcess = null
         activeSessionId = null
         RuntimeTaskController.release(stopHandler)
@@ -231,7 +236,7 @@ class DshRuntimeBridge(
         fun closeInput() {
             if (inputClosed) return
             inputClosed = true
-            runCatching { writer.close() }
+            runCatching { writer.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
         }
 
         fun finishTurnAndShutdown() {
@@ -305,7 +310,12 @@ class DshRuntimeBridge(
                     sawActivity = true
                     eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, protocolEvent.text))
                 }
-                is DshSdkProtocolEvent.Failed -> failure = protocolEvent.message
+                is DshSdkProtocolEvent.Failed -> {
+                    failure = protocolEvent.message
+                    // An error answer to initialize or the prompt ends no turn on its own; without this the loop waits
+                    // for an exit that never comes and the foreground notification and wake lock stay held.
+                    finishTurnAndShutdown()
+                }
                 DshSdkProtocolEvent.TurnCompleted -> {
                     sawActivity = true
                     finishTurnAndShutdown()
@@ -412,8 +422,13 @@ class DshRuntimeBridge(
         checkpoints.acceptFile(projectId, workspace, path)
     }
 
-    private fun writeDshSettings(rootfs: File, route: DshRoute, provider: ProviderProfile) {
-        val home = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
+    private fun writeDshSettings(
+        rootfs: File,
+        route: DshRoute,
+        provider: ProviderProfile,
+        guestHomePath: String = DSH_HOME_GUEST_PATH,
+    ): File {
+        val home = File(rootfs, guestHomePath.removePrefix("/")).apply { mkdirs() }
         val body = buildString {
             appendLine("agent-default-model:")
             appendLine("  provider: ${route.name}")
@@ -430,6 +445,11 @@ class DshRuntimeBridge(
             }
         }
         File(home, "settings.yaml").writeText(body)
+        if (guestHomePath != DSH_HOME_GUEST_PATH) {
+            val defaultHome = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
+            runCatching { File(defaultHome, "settings.yaml").writeText(body) }
+        }
+        return home
     }
 
     private fun yamlQuote(value: String): String = "'${value.replace("'", "''")}'"
