@@ -217,7 +217,7 @@ class RuntimeExecutionService : Service() {
 
     private fun releaseWakeLock() {
         wakeLock?.takeIf { it.isHeld }?.let { lock ->
-            runCatching { lock.release() }
+            runCatching { lock.release() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeExecutionService", it) }
         }
         wakeLock = null
     }

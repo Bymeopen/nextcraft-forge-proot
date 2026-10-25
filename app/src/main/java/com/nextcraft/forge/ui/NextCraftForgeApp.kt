@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -126,7 +125,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
     CrashReportPrompt()
 
     state.unsavedChangesPrompt?.let { path ->
-        AlertDialog(
+        ForgeAlertDialog(
             modifier = Modifier.forgePopIn(),
             onDismissRequest = viewModel::cancelLeavingFile,
             title = { Text(stringResource(R.string.files_unsaved_title)) },
@@ -145,7 +144,9 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
 
     var bypassSetupGate by rememberSaveable { mutableStateOf(false) }
     var showNewProjectDialog by rememberSaveable { mutableStateOf(false) }
+    var paletteOpen by rememberSaveable { mutableStateOf(false) }
     var showGitHubDialog by rememberSaveable { mutableStateOf(false) }
+    if (paletteOpen) ForgeCommandPalette(onDismiss = { paletteOpen = false }, onOpen = viewModel::selectTab)
 
     if (!state.runtimeInstalled && !bypassSetupGate) {
         RuntimeOnboardingScreen(
@@ -195,7 +196,9 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
 
     // targetSdk 35+ is edge-to-edge: adjustResize no longer resizes the window, so the IME, status and
     // navigation bars are handled here. imePadding lifts the composer/terminal line above the keyboard.
-    val glassBackdrop = rememberForgeBackdrop(enabled = LocalForgeThemeTokens.current.isGlass)
+    // While an agent works the chat redraws often; recording and blurring the whole screen for the floating bar on
+    // every one of those frames cost main-thread time, so the bar uses its solid colour until the turn ends.
+    val glassBackdrop = rememberForgeBackdrop(enabled = LocalForgeThemeTokens.current.isGlass && !state.sessionRunning)
     CompositionLocalProvider(LocalForgeBackdrop provides glassBackdrop) {
     Scaffold(
         modifier = Modifier.fillMaxSize().imePadding(),
@@ -241,6 +244,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                         agentRunning = state.sessionRunning,
                         terminalBusy = state.terminalRunning,
                         onSelectTab = viewModel::selectTab,
+                        onLongPressTab = { paletteOpen = true },
                     )
                 }
             }
@@ -410,6 +414,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                     ForgeTab.CHECKPOINTS -> CheckpointsScreen(state = state, viewModel = viewModel)
                     ForgeTab.CODE_VIEWER -> CodeViewerScreen(state = state, viewModel = viewModel)
                     ForgeTab.FILE_BROWSER -> FileBrowserScreen(viewModel = viewModel)
+                    ForgeTab.BACKUP -> BackupScreen(state = state, viewModel = viewModel)
                     ForgeTab.REA -> ReaScreen(state = state, viewModel = viewModel)
                 }
             }
@@ -420,7 +425,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
     }
 
     if (showGitHubDialog) {
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { showGitHubDialog = false },
             title = { Text(stringResource(R.string.settings_github)) },
             text = { GitHubSection(state, viewModel) },

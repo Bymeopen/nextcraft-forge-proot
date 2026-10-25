@@ -135,6 +135,7 @@ enum class ForgeTab(val title: String) {
     CODE_VIEWER("Code viewer"),
     FILE_BROWSER("File browser"),
     REA("REA"),
+    BACKUP("Backup"),
 }
 
 enum class SetupScope { RUNTIME, AGENT }
@@ -166,6 +167,12 @@ data class ForgeUiState(
     val sessionRunning: Boolean = false,
     /** Chats of the active project whose agent turn is running right now. */
     val runningChatIds: Set<String> = emptySet(),
+    /** Active agent turn counts by project id across all projects. */
+    val runningProjectChatCounts: Map<String, Int> = emptyMap(),
+    /** Projects currently running an Android APK build. */
+    val buildingProjectIds: Set<String> = emptySet(),
+    /** Per-project Android build records so background project builds preserve their state. */
+    val projectBuilds: Map<String, AndroidBuildRecord> = emptyMap(),
     /** How chat messages pick an agent (single agent unless the user changed it in the chat). */
     val routing: RoutingConfig = RoutingConfig(),
     /** Agents that have credentials; refreshed when the routing sheet opens. */
@@ -211,11 +218,18 @@ data class ForgeUiState(
     val autoApproveAllTools: Boolean = false,
     val autoSyncGitHub: Boolean = false,
     val gameTemplatesEnabled: Boolean = false,
+    val autoKeepChanges: Boolean = true,
+    /** Download cache sizes in bytes by RuntimeCaches.Kind name; null while not measured. */
+    val runtimeCacheSizes: Map<String, Long>? = null,
     val reaChatHint: Boolean = false,
+    /** Scheduled prompts (timers that send a message to a chat again) and whether the agent may create them. */
+    val scheduledTasks: List<com.nextcraft.forge.schedule.ScheduledTask> = emptyList(),
+    val scheduleEnabled: Boolean = true,
     val updateNotifications: Boolean = true,
+    val autoInstallUpdates: Boolean = true,
     val autoBranchChats: Boolean = false,
-    val antigravityModel: String = "gemini-2.5-pro",
-    val antigravityEffort: String = "high",
+    val antigravityModel: String = "claude-sonnet-5-5-low",
+    val antigravityEffort: String = "low",
     val claudeEffort: String = "",
     /** Branch status of the chats that work in their own branch, by chat id. */
     val branchStatus: Map<String, BranchStatus> = emptyMap(),

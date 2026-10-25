@@ -104,10 +104,12 @@ fun SettingsScreenModern(
     val isProvisioning = state.setupSnapshot.status == RuntimeSetupStatus.RUNNING
     val runtimeBusy = !state.runtimeInstalled || isProvisioning
 
+    val scroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .forgeFadingVertical(scroll, MaterialTheme.colorScheme.background)
+            .verticalScroll(scroll)
             .padding(start = 14.dp, end = 14.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -130,7 +132,22 @@ fun SettingsScreenModern(
                 trailing = { Chevron(appearanceOpen) },
             )
             AnimatedVisibility(visible = appearanceOpen) {
-                ThemeModeGrid(active = activeThemeMode, onSelect = viewModel::setThemeMode)
+                Column {
+                    ThemeModeGrid(active = activeThemeMode, onSelect = viewModel::setThemeMode)
+                    if (activeThemeMode == ForgeThemeMode.GLASS) {
+                        val glassContext = androidx.compose.ui.platform.LocalContext.current
+                        SettingsRow(
+                            icon = ForgeGlyph.SLIDERS,
+                            title = stringResource(R.string.settings_glass_solid),
+                            subtitle = stringResource(R.string.settings_glass_solid_desc),
+                            onClick = {
+                                glassUserSolid = !glassUserSolid
+                                com.nextcraft.forge.data.AppPreferences(glassContext).glassSolid = glassUserSolid
+                            },
+                            trailing = { androidx.compose.material3.Switch(checked = glassUserSolid, onCheckedChange = null) },
+                        )
+                    }
+                }
             }
             ThinDivider()
 
@@ -159,12 +176,24 @@ fun SettingsScreenModern(
             ThinDivider()
 
             ForgeToggleRow(
+                title = stringResource(R.string.settings_auto_keep_changes),
+                subtitle = stringResource(R.string.settings_auto_keep_changes_subtitle),
+                checked = state.autoKeepChanges,
+                onCheckedChange = viewModel::setAutoKeepChanges,
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+            ForgeToggleRow(
                 title = stringResource(R.string.settings_game_templates),
                 subtitle = stringResource(R.string.settings_game_templates_subtitle),
                 checked = state.gameTemplatesEnabled,
                 onCheckedChange = viewModel::setGameTemplatesEnabled,
                 modifier = Modifier.padding(horizontal = 14.dp),
             )
+        }
+
+        // ───────────────────────── Agent ─────────────────────────
+        ForgeSectionLabel(stringResource(R.string.settings_section_agent), horizontalPadding = 6.dp, topPadding = 8.dp)
+        ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
             ForgeToggleRow(
                 title = stringResource(R.string.settings_rea_chat_hint),
                 subtitle = stringResource(R.string.settings_rea_chat_hint_subtitle),
@@ -172,14 +201,19 @@ fun SettingsScreenModern(
                 onCheckedChange = viewModel::setReaChatHint,
                 modifier = Modifier.padding(horizontal = 14.dp),
             )
-            // One choice instead of two switches that excluded each other: the app already keeps them mutually exclusive.
-            Text(
-                text = stringResource(R.string.settings_approval_title),
-                fontSize = ForgeType.secondary,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 2.dp),
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_schedule_agent),
+                subtitle = stringResource(R.string.settings_schedule_agent_subtitle),
+                checked = state.scheduleEnabled,
+                onCheckedChange = viewModel::setScheduleEnabled,
+                modifier = Modifier.padding(horizontal = 14.dp),
             )
+        }
+
+        // ───────────────────────── Tool approval ─────────────────────────
+        // One choice instead of two switches that excluded each other: the app already keeps them mutually exclusive.
+        ForgeSectionLabel(stringResource(R.string.settings_approval_title), horizontalPadding = 6.dp, topPadding = 8.dp)
+        ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
             RadioRow(
                 title = stringResource(R.string.settings_approval_ask),
                 subtitle = stringResource(R.string.settings_prompt_before_executing_destructive),
@@ -303,6 +337,45 @@ fun SettingsScreenModern(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(stringResource(R.string.settings_clear_terminal_history))
                 }
+                var cachesOpen by remember { mutableStateOf(false) }
+                OutlinedButton(
+                    shape = RoundedCornerShape(100),
+                    onClick = { cachesOpen = true; viewModel.loadRuntimeCacheSizes() },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                ) {
+                    ForgeIcon(glyph = ForgeGlyph.TRASH, tint = MaterialTheme.colorScheme.onSurface, size = 16.dp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(stringResource(R.string.settings_clear_caches))
+                }
+                if (cachesOpen) {
+                    val sizes = state.runtimeCacheSizes
+                    ForgeAlertDialog(
+                        modifier = Modifier.forgePopIn(),
+                        onDismissRequest = { cachesOpen = false },
+                        shape = RoundedCornerShape(24.dp),
+                        title = { Text(stringResource(R.string.settings_clear_caches), fontWeight = FontWeight.SemiBold) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(stringResource(R.string.settings_clear_caches_message))
+                                com.nextcraft.forge.runtime.RuntimeCaches.Kind.entries.forEach { kind ->
+                                    KeyValueRow(kind.label, sizes?.get(kind.name)?.let(::cacheSizeLabel) ?: "…")
+                                }
+                                if (sizes != null) {
+                                    KeyValueRow(stringResource(R.string.settings_clear_caches_total), cacheSizeLabel(sizes.values.sum()))
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { cachesOpen = false; viewModel.clearRuntimeCaches() },
+                                enabled = sizes != null && sizes.values.sum() > 0,
+                            ) { Text(stringResource(R.string.settings_clear_caches_confirm), color = tokens.dangerText) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { cachesOpen = false }) { Text(stringResource(R.string.agent_cancel)) }
+                        },
+                    )
+                }
             }
         }
 
@@ -353,6 +426,23 @@ fun SettingsScreenModern(
                 trailing = { Text("v${BuildConfig.VERSION_NAME}", color = scheme.onSurfaceVariant, fontSize = ForgeType.control) },
             )
             ThinDivider()
+            // What changed in this build: read here instead of a phone notification after each update.
+            var whatsNewOpen by rememberSaveable { mutableStateOf(false) }
+            SettingsRow(
+                icon = ForgeGlyph.INFO,
+                title = stringResource(R.string.chg_notif_channel),
+                onClick = { whatsNewOpen = !whatsNewOpen },
+                trailing = { Text(if (whatsNewOpen) "⌄" else "›", color = scheme.onSurfaceVariant) },
+            )
+            if (whatsNewOpen) {
+                Text(
+                    stringResource(R.string.chg_notif_text),
+                    fontSize = ForgeType.secondary,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                )
+            }
+            ThinDivider()
             SettingsRow(
                 icon = ForgeGlyph.REFRESH,
                 title = stringResource(R.string.settings_check_for_app_updates),
@@ -365,6 +455,13 @@ fun SettingsScreenModern(
                 subtitle = stringResource(R.string.settings_update_notify_sub),
                 checked = state.updateNotifications,
                 onCheckedChange = viewModel::setUpdateNotifications,
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_auto_install_updates),
+                subtitle = stringResource(R.string.settings_auto_install_updates_sub),
+                checked = state.autoInstallUpdates,
+                onCheckedChange = viewModel::setAutoInstallUpdates,
                 modifier = Modifier.padding(horizontal = 14.dp),
             )
             state.updateProgress?.let { fraction ->
@@ -486,7 +583,7 @@ internal fun AntigravityAccountCard(
                             text = stringResource(R.string.settings_complete_sign_in),
                             onClick = {
                                 if (agyVerificationCode.isNotBlank()) {
-                                    runCatching { viewModel.antigravityAuth.submitCode(agyVerificationCode.trim()) }
+                                    runCatching { viewModel.antigravityAuth.submitCode(agyVerificationCode.trim()) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SettingsScreenModern", it) }
                                     agyVerificationCode = ""
                                 }
                             },
@@ -737,8 +834,6 @@ internal fun RadioRow(
                     fontSize = ForgeType.secondary,
                     color = scheme.onSurfaceVariant,
                     fontFamily = if (mono) FontFamily.Monospace else null,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -860,4 +955,12 @@ internal fun ThemeModeGrid(active: ForgeThemeMode, onSelect: (String) -> Unit) {
             }
         }
     }
+}
+
+/** "412 MB" style size for the cache list. */
+private fun cacheSizeLabel(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> String.format(java.util.Locale.US, "%.1f GB", bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> "${bytes shr 20} MB"
+    bytes > 0 -> "${maxOf(1, bytes shr 10)} KB"
+    else -> "0"
 }
