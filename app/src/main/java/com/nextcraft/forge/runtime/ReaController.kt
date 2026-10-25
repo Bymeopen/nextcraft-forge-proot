@@ -99,7 +99,7 @@ class ReaController(context: Context) {
         val result = runner.run(
             workspaceDir = runner.toolWorkspace(TOOL_SLUG),
             slug = TOOL_SLUG,
-            command = "rm -rf /opt/rea /usr/local/bin/rea /root/.pocket-rea-version /root/.rea && echo removed",
+            command = "rm -rf /opt/rea /usr/local/bin/rea /root/.pocket-rea-version /root/.nextcraft-rea-version /root/.rea && echo removed",
             onChunk = ::appendLog,
         )
         val version = withContext(Dispatchers.IO) { readInstalledVersion() }
@@ -372,7 +372,7 @@ class ReaController(context: Context) {
     private fun readInstalledVersion(): String? = runCatching {
         // /root can be locked to root after an apt install in the chroot; without access the marker looks missing.
         if (!File(RuntimeInstaller.rootfsDir(appContext), "root").canExecute()) RuntimeInstaller(appContext).ensureAppAccess()
-        File(RuntimeInstaller.rootfsDir(appContext), "root/.pocket-rea-version").takeIf { it.isFile }?.readText()?.trim()
+        RuntimeMarkers.read(File(RuntimeInstaller.rootfsDir(appContext), "root/.nextcraft-rea-version"))?.trim()
     }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     /** Copies an asset directory (recursively) to the host [target]; Python bytecode caches are not shipped. */
@@ -459,7 +459,8 @@ class ReaController(context: Context) {
             printf '#!/bin/sh\nexec env PYTHONPATH=/opt/rea/lib PYTHONDONTWRITEBYTECODE=1 python3 -m rea "§@"\n' > /usr/local/bin/rea
             chmod 755 /usr/local/bin/rea
             echo "##STEP 4/4 Memverifikasi"
-            echo "$REA_VERSION" > /root/.pocket-rea-version
+            echo "$REA_VERSION" > /root/.nextcraft-rea-version
+            cp /root/.nextcraft-rea-version /root/.pocket-rea-version
             rea --version
         """.trimIndent().replace('§', '$')
     }

@@ -16,7 +16,7 @@ set -euo pipefail
 # npm resolves the dependency ranges of @deepseek-ai/dsh at build time, so a rebuild on a later day can pick newer
 # dependency versions and produce a different archive. Pin the result by its SHA-256 in RuntimeInstaller.
 CORE_ROOTFS="${NEXTCRAFT_CORE_ROOTFS:?Set NEXTCRAFT_CORE_ROOTFS to an extracted Core bundle rootfs}"
-DSH_VERSION="${NEXTCRAFT_DSH_VERSION:-0.1.2-rc.1}"
+DSH_VERSION="${NEXTCRAFT_DSH_VERSION:-0.2.1-rc.2}"
 BUNDLE_VERSION="${NEXTCRAFT_DSH_BUNDLE_VERSION:-2026.10.1}"
 DNS_SERVER="${NEXTCRAFT_DNS:-1.1.1.1}"
 EXTRA_CA_FILE="${NEXTCRAFT_EXTRA_CA_FILE:-}"
@@ -33,7 +33,7 @@ for tool in zstd python3 chroot tar; do
 done
 # Same validation as RuntimeInstaller: the version ends up in a shell command inside the guest.
 [[ "$DSH_VERSION" =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "Invalid DeepSeek Harness version: $DSH_VERSION" >&2; exit 1; }
-[[ -e "$CORE_ROOTFS/usr/local/bin/node" && -f "$CORE_ROOTFS/.pocket-rootfs-version" ]] || {
+[[ -e "$CORE_ROOTFS/usr/local/bin/node" && ( -f "$CORE_ROOTFS/.nextcraft-rootfs-version" || -f "$CORE_ROOTFS/.pocket-rootfs-version" ) ]] || {
   echo "$CORE_ROOTFS does not look like an extracted Core bundle (no Node.js)" >&2
   exit 1
 }
@@ -90,7 +90,7 @@ mkdir -p "$payload/usr/local/lib" "$payload/usr/local/bin"
 cp -a "$rootfs/usr/local/lib/dsh" "$payload/usr/local/lib/"
 cp -a "$rootfs/usr/local/bin/dsh" "$payload/usr/local/bin/"
 printf '%s\n' "$DSH_VERSION" > "$payload/.nextcraft-dsh-version"
-printf '%s\n' "$DSH_VERSION" > "$payload/.pocket-dsh-version"
+printf '%s\n' "$DSH_VERSION" > "$payload/.nextcraft-dsh-version"
 [[ -L "$payload/usr/local/bin/dsh" ]]
 [[ -e "$payload/usr/local/lib/dsh/node_modules/.bin/dsh" ]]
 # npm's cache and logs live under /root, outside the payload; make sure nothing from the build host leaked in.

@@ -156,7 +156,7 @@ fun rememberImeVisible(): State<Boolean> {
 fun forgeBackTarget(tab: ForgeTab): ForgeTab? = when (tab) {
     ForgeTab.PROJECTS -> null
     ForgeTab.FILES, ForgeTab.ANDROID, ForgeTab.PREVIEW,
-    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA,
+    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA, ForgeTab.BACKUP,
     -> ForgeTab.TOOLS
     ForgeTab.TERMINAL, ForgeTab.AGENT, ForgeTab.TOOLS, ForgeTab.SETTINGS -> ForgeTab.PROJECTS
 }
@@ -342,7 +342,7 @@ fun ForgePillIcon(
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .forgePressScale(interaction, pressedScale = 0.88f)
+            .forgePressScale(interaction, pressedScale = 0.88f, haptic = true)
             .size(width = 48.dp, height = 48.dp) // 48 dp is the minimum touch target
             .clip(RoundedCornerShape(100))
             .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
@@ -398,12 +398,13 @@ fun ForgePillTabs(
                         onClick = { onSelect(index) },
                     )
                     .forgeSelected(selected)
-                    .padding(horizontal = 15.dp),
+                    .padding(horizontal = if (equalWidth) 8.dp else 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = label,
-                    fontSize = ForgeType.body,
+                    // Equal segments are narrower (a third of the row at 360dp): one size down keeps "Antigravity" whole.
+                    fontSize = if (equalWidth) ForgeType.control else ForgeType.body,
                     color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.MiddleEllipsis,
@@ -427,7 +428,7 @@ fun ForgePrimaryButton(
         enabled = enabled,
         shape = RoundedCornerShape(100),
         interactionSource = interaction,
-        modifier = modifier.forgePressScale(interaction).heightIn(min = 44.dp),
+        modifier = modifier.forgePressScale(interaction, haptic = true).heightIn(min = 44.dp),
     ) {
         Text(text = text, fontWeight = FontWeight.SemiBold)
     }

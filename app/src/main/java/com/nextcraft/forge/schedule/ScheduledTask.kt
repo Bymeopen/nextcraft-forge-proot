@@ -144,6 +144,7 @@ object ScheduleLogic {
 
 /** Keeps the task list in app storage (plain JSON, no secrets). */
 class ScheduleStore(context: Context) {
+    private val appContext = context.applicationContext
     private val prefs = context.applicationContext.getSharedPreferences("nextcraft_schedule", Context.MODE_PRIVATE)
 
     @Synchronized
@@ -170,6 +171,8 @@ class ScheduleStore(context: Context) {
                 .put("enabled", t.enabled).put("byAgent", t.byAgent).put("runCount", t.runCount).put("last", t.lastRunAtMillis))
         }
         prefs.edit().putString(KEY, arr.toString()).apply()
+        // The periodic check exists only while there is a task to check.
+        ScheduleTickWorker.sync(appContext, tasks.any { it.enabled })
     }
 
     private companion object { const val KEY = "tasks" }

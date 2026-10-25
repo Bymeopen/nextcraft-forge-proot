@@ -156,7 +156,6 @@ object AndroidProjectTemplateGenerator {
             """,
         )
         val projectJson = """{"schemaVersion":1,"template":"${template.name}","packageName":"$namespace"}"""
-        write(root, ".pocketdev/android-project.json", projectJson)
         write(root, ".nextcraft/android-project.json", projectJson)
         write(
             root,
@@ -174,7 +173,7 @@ object AndroidProjectTemplateGenerator {
             "app/src/main/AndroidManifest.xml",
             """
             <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-                <application android:theme="@style/Theme.PocketDevApp" android:label="@string/app_name">
+                <application android:theme="@style/Theme.NextCraftApp" android:label="@string/app_name">
                     <activity android:name=".MainActivity" android:exported="true">
                         <intent-filter>
                             <action android:name="android.intent.action.MAIN" />
@@ -190,7 +189,7 @@ object AndroidProjectTemplateGenerator {
             "app/src/main/res/values/themes.xml",
             """
             <resources>
-                <style name="Theme.PocketDevApp" parent="android:style/Theme.Material.Light.NoActionBar">
+                <style name="Theme.NextCraftApp" parent="android:style/Theme.Material.Light.NoActionBar">
                     <item name="android:fontFamily">sans</item>
                     <item name="android:colorAccent">#6750A4</item>
                     <item name="android:statusBarColor">#FFFBFE</item>
@@ -243,7 +242,7 @@ object AndroidProjectTemplateGenerator {
             "app/src/main/AndroidManifest.xml",
             """
             <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-                <application android:theme="@style/Theme.PocketDevApp" android:label="@string/app_name">
+                <application android:theme="@style/Theme.NextCraftApp" android:label="@string/app_name">
                     <activity android:name=".MainActivity" android:exported="true">
                         <intent-filter>
                             <action android:name="android.intent.action.MAIN" />
@@ -259,7 +258,7 @@ object AndroidProjectTemplateGenerator {
             "app/src/main/res/values/themes.xml",
             """
             <resources>
-                <style name="Theme.PocketDevApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                <style name="Theme.NextCraftApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
                     <item name="colorPrimary">#6750A4</item>
                     <item name="android:statusBarColor">?android:colorBackground</item>
                     <item name="android:navigationBarColor">?android:colorBackground</item>
@@ -274,7 +273,7 @@ object AndroidProjectTemplateGenerator {
             "app/src/main/res/values-night/themes.xml",
             """
             <resources>
-                <style name="Theme.PocketDevApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                <style name="Theme.NextCraftApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
                     <item name="colorPrimary">#D0BCFF</item>
                     <item name="android:statusBarColor">?android:colorBackground</item>
                     <item name="android:navigationBarColor">?android:colorBackground</item>

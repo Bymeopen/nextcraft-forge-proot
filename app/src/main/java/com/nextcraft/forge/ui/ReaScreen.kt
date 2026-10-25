@@ -16,7 +16,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -463,7 +462,7 @@ private fun ReaLessonSheet(rea: ReaState, controller: ReaController, onDismiss: 
         }
     }
     if (confirmReveal) {
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { confirmReveal = false },
             title = { Text(stringResource(R.string.rea_lesson_reveal_title)) },
             text = { Text(stringResource(R.string.rea_lesson_reveal_message)) },

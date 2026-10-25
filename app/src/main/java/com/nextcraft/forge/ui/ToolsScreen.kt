@@ -24,16 +24,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
 
-private data class ToolEntry(
+internal data class ToolEntry(
     val tab: ForgeTab,
     val glyph: ForgeGlyph,
     @StringRes val title: Int,
     @StringRes val subtitle: Int,
 )
 
-private data class ToolSection(@StringRes val label: Int, val entries: List<ToolEntry>)
+internal data class ToolSection(@StringRes val label: Int, val entries: List<ToolEntry>)
 
-private val toolSections = listOf(
+internal val toolSections = listOf(
     ToolSection(
         R.string.tools_section_development,
         listOf(
@@ -41,7 +41,7 @@ private val toolSections = listOf(
             ToolEntry(ForgeTab.DIAGNOSTICS, ForgeGlyph.SHIELD, R.string.tools_diagnostics, R.string.tools_diagnostics_desc),
             ToolEntry(ForgeTab.REA, ForgeGlyph.SEARCH, R.string.tools_rea, R.string.tools_rea_desc),
             ToolEntry(ForgeTab.FILES, ForgeGlyph.FOLDER, R.string.tools_files, R.string.tools_files_desc),
-            ToolEntry(ForgeTab.FILE_BROWSER, ForgeGlyph.FOLDER, R.string.tools_file_browser, R.string.tools_file_browser_desc),
+            ToolEntry(ForgeTab.FILE_BROWSER, ForgeGlyph.FILE, R.string.tools_file_browser, R.string.tools_file_browser_desc),
             ToolEntry(ForgeTab.CODE_VIEWER, ForgeGlyph.EDIT, R.string.tools_code_viewer, R.string.tools_code_viewer_desc),
             ToolEntry(ForgeTab.PREVIEW, ForgeGlyph.GLOBE, R.string.tools_web_preview, R.string.tools_web_preview_desc),
         ),
@@ -65,6 +65,7 @@ private val toolSections = listOf(
         listOf(
             ToolEntry(ForgeTab.ROM, ForgeGlyph.CODE, R.string.tools_rom, R.string.tools_rom_desc),
             ToolEntry(ForgeTab.CHECKPOINTS, ForgeGlyph.HISTORY, R.string.tools_checkpoints, R.string.tools_checkpoints_desc),
+            ToolEntry(ForgeTab.BACKUP, ForgeGlyph.DOWNLOAD, R.string.tools_backup, R.string.tools_backup_desc),
         ),
     ),
 )

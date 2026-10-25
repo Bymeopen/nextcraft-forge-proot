@@ -14,9 +14,9 @@ class ForgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CrashReporter.install(this)
-        com.nextcraft.forge.schedule.ScheduleTickWorker.schedule(this)
-        runCatching { com.nextcraft.forge.update.ChangelogNotifier.notifyIfNew(this) }
-        if (com.nextcraft.forge.data.AppPreferences(this).updateNotifications) {
+        com.nextcraft.forge.schedule.ScheduleTickWorker.sync(this, com.nextcraft.forge.schedule.ScheduleStore(this).load().any { it.enabled })
+        val updatePrefs = com.nextcraft.forge.data.AppPreferences(this)
+        if (updatePrefs.updateNotifications || updatePrefs.autoInstallUpdates) {
             com.nextcraft.forge.update.UpdateCheckWorker.schedule(this)
         }
     }
@@ -46,7 +46,7 @@ object CrashReporter {
                     append(Log.getStackTraceString(error))
                 }
                 file.writeText(report.take(MAX_CHARS))
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ForgeApplication", it) }
             previous?.uncaughtException(thread, error)
         }
     }

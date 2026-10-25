@@ -80,6 +80,8 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         applyWindowTheme(AppPreferences(this).themeMode)
         super.onCreate(savedInstanceState)
+        com.nextcraft.forge.ui.glassUserSolid = AppPreferences(this).glassSolid
+        com.nextcraft.forge.ui.glassReducedEffects = com.nextcraft.forge.ui.detectReducedEffects(this)
         // First-time users are asked when they start the runtime setup; existing installs keep the old behaviour.
         if (AppPreferences(this).runtimeSetupComplete) requestNotificationPermissionIfNeeded()
         lifecycleScope.launch {
@@ -156,6 +158,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshRuntimeStatusOnResume()
+        com.nextcraft.forge.ui.ReturnToApp.dismiss(this)
     }
 
     override fun onTrimMemory(level: Int) {
@@ -164,6 +167,7 @@ class MainActivity : ComponentActivity() {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             viewModel.releaseMemoryCaches()
         }
+        com.nextcraft.forge.runtime.GradleDaemonReaper.onTrimMemory(this, level)
     }
 
     private fun needsNotificationPermission(): Boolean =
@@ -172,7 +176,7 @@ class MainActivity : ComponentActivity() {
 
     private fun requestNotificationPermissionIfNeeded() {
         if (needsNotificationPermission()) {
-            runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+            runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainActivity", it) }
         }
     }
 

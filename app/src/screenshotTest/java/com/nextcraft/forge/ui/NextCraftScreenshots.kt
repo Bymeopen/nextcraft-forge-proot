@@ -106,7 +106,7 @@ abstract class NextCraftScreenshots(private val label: String, private val theme
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                 ) {
                     ProjectRow(
-                        project = com.nextcraft.forge.model.Project(name = "Aplikasi Batrei", description = "Ruang kerja pemrograman umum", language = "Multibahasa", slug = "aplikasi-batrei", updatedAtMillis = now - 120_000),
+                        project = com.nextcraft.forge.model.Project(name = "Aplikasi Batrei", description = "General coding workspace", language = "Multibahasa", slug = "aplikasi-batrei", updatedAtMillis = now - 120_000),
                         active = true, locked = false, canDelete = true, onOpen = {}, onDelete = {}, onRename = {},
                     )
                     ProjectRow(
@@ -323,7 +323,7 @@ abstract class NextCraftScreenshots(private val label: String, private val theme
                 ForgePillTabs(items = listOf("Explorer (4)", "nextcraft-forge-dmesg.txt", "Perubahan", "Riwayat"), selectedIndex = 1, onSelect = {})
                 androidx.compose.foundation.layout.Column(modifier = Modifier.padding(horizontal = 14.dp).weight(1f)) {
                     ProjectRow(
-                        project = com.nextcraft.forge.model.Project(name = "Aplikasi Batrei", description = "Ruang kerja pemrograman umum", language = "Multibahasa", slug = "aplikasi-batrei", updatedAtMillis = now - 120_000),
+                        project = com.nextcraft.forge.model.Project(name = "Aplikasi Batrei", description = "General coding workspace", language = "Multibahasa", slug = "aplikasi-batrei", updatedAtMillis = now - 120_000),
                         active = true, locked = false, canDelete = true, onOpen = {}, onDelete = {}, onRename = {}, changedCount = 3, running = true,
                     )
                 }

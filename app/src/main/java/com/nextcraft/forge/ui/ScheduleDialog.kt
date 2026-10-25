@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -34,7 +33,7 @@ internal fun ScheduleDialog(state: ForgeUiState, viewModel: MainViewModel, onDis
     val tasks = state.scheduledTasks.filter { it.chatId == state.activeChatId }
     var prompt by rememberSaveable { mutableStateOf("") }
     var minutes by rememberSaveable { mutableIntStateOf(30) }
-    AlertDialog(
+    ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.schedule_title)) },
         text = {

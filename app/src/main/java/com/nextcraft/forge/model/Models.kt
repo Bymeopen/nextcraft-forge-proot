@@ -4,7 +4,6 @@ import java.text.Normalizer
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
-import kotlin.random.Random
 
 enum class ProviderProtocol {
     CLAUDE_LOGIN,
@@ -235,20 +234,17 @@ fun projectSlug(name: String): String {
 
 data class QuickChatIdentity(val displayName: String, val slug: String)
 
-fun generateQuickChatIdentity(usedSlugs: Set<String>, random: Random = Random.Default): QuickChatIdentity {
-    val adjectives = listOf("bright", "calm", "clever", "curious", "gentle", "nimble", "quiet", "swift", "wise", "bold")
-    val pioneers = listOf("turing", "lovelace", "hopper", "tesla", "curie", "ramanujan", "bose", "kalam", "faraday", "darwin")
-    repeat(20) {
-        val base = "${adjectives.random(random)}-${pioneers.random(random)}"
-        if (base !in usedSlugs) return QuickChatIdentity(base.toDisplayName(), base)
-    }
-    val base = "${adjectives.random(random)}-${pioneers.random(random)}"
-    val slug = generateSequence(2) { it + 1 }.map { "$base-$it" }.first { it !in usedSlugs }
-    return QuickChatIdentity(slug.toDisplayName(), slug)
-}
+private val QUICK_PROJECT_SLUG = Regex("^quick-project-(\\d+)$")
 
-private fun String.toDisplayName(): String = split('-').joinToString(" ") { word ->
-    word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+/**
+ * Quick projects are numbered: "Quick project 1", "Quick project 2", … ([label] is the localized "Quick project").
+ * The number follows the highest one in use, so deleting #2 does not make the next one reuse it. The folder stays
+ * `quick-project-N` when the user renames the project.
+ */
+fun generateQuickChatIdentity(usedSlugs: Set<String>, label: String): QuickChatIdentity {
+    val highest = usedSlugs.mapNotNull { QUICK_PROJECT_SLUG.find(it)?.groupValues?.get(1)?.toIntOrNull() }.maxOrNull() ?: 0
+    val number = generateSequence(highest + 1) { it + 1 }.first { "quick-project-$it" !in usedSlugs }
+    return QuickChatIdentity("$label $number", "quick-project-$number")
 }
 
 data class WorkspaceEntry(

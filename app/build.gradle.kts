@@ -66,6 +66,11 @@ android {
             isMinifyEnabled = false
             buildConfigField("String", "APP_VARIANT", "\"debug\"")
             buildConfigField("String", "APP_UPDATE_MANIFEST_URL", "\"$debugManifestUrl\"")
+            // Side-by-side test build (gradle.properties: nextcraft.sideBySideSuffix=x): its own package, data dir and
+            // rootfs, so it installs from scratch next to the main app.
+            (project.findProperty("nextcraft.sideBySideSuffix") as String?)?.takeIf { it.isNotBlank() }?.let {
+                applicationIdSuffix = ".$it"
+            }
         }
         release {
             isMinifyEnabled = true
@@ -74,6 +79,10 @@ android {
             signingConfigs.findByName("release")?.let { signingConfig = it }
             buildConfigField("String", "APP_VARIANT", "\"release\"")
         }
+    }
+
+    if ((project.findProperty("nextcraft.sideBySideSuffix") as String?).isNullOrBlank().not()) {
+        sourceSets.getByName("debug").res.srcDir("src/sideBySide/res")
     }
 
     compileOptions {

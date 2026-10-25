@@ -27,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -139,16 +138,14 @@ internal fun ChatTopBar(
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rename)) }, onClick = { menuOpen = false; onRename() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_usage)) }, onClick = { menuOpen = false; onUsage() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_schedule)) }, onClick = { menuOpen = false; onSchedule() })
-                if (state.agentKind == AgentKind.CLAUDE_CODE) {
-                    if (activeChat?.isolated == true) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
-                    } else {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.branch_menu_enable)) },
-                            enabled = !state.activeChatRunning,
-                            onClick = { menuOpen = false; onEnableBranch() },
-                        )
-                    }
+                if (activeChat?.isolated == true) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
+                } else {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.branch_menu_enable)) },
+                        enabled = !state.activeChatRunning,
+                        onClick = { menuOpen = false; onEnableBranch() },
+                    )
                 }
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rea)) }, onClick = { menuOpen = false; onOpenRea() })
                 DropdownMenuItem(
@@ -259,7 +256,7 @@ internal fun ChatDrawerRow(
 @Composable
 internal fun RenameChatDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var text by rememberSaveable { mutableStateOf(initial) }
-    AlertDialog(
+    ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.chat_rename_title), fontWeight = FontWeight.SemiBold) },
         text = {
@@ -355,9 +352,10 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
                 // One tab per provider: its own models and, for Claude and Antigravity, its own reasoning effort.
                 val agents = AgentKind.entries
                 ForgePillTabs(
-                    items = agents.map { it.displayTitle() },
+                    items = agents.map { it.shortTitle() },
                     selectedIndex = agents.indexOf(agent).coerceAtLeast(0),
                     onSelect = { sheetAgent = agents[it] },
+                    equalWidth = true, // 3 providers fit side by side; scrolling cut "Antigravity" at the edge
                 )
             }
             when (agent) {
@@ -600,7 +598,7 @@ internal fun BranchSheet(state: ForgeUiState, viewModel: MainViewModel, chatId: 
         }
     }
     if (confirmDiscard) {
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { confirmDiscard = false },
             title = { Text(stringResource(R.string.branch_discard), fontWeight = FontWeight.SemiBold) },
             text = { Text(stringResource(R.string.branch_discard_confirm)) },

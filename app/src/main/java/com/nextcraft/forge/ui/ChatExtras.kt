@@ -1,4 +1,8 @@
-@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(
+    ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
 
 package com.nextcraft.forge.ui
 
@@ -9,10 +13,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.widthIn
@@ -46,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -240,6 +247,40 @@ private fun ChangedFileRow(
     val tokens = LocalForgeThemeTokens.current
     val name = change.path.substringAfterLast('/')
     val dir = change.path.substringBeforeLast('/', "")
+    // Swipe right keeps the file, left reverts it (the revert has its own Undo snackbar). Only while the row is collapsed:
+    // an open diff scrolls sideways and would fight the swipe.
+    val haptics = LocalHapticFeedback.current
+    val swipe = androidx.compose.material3.rememberSwipeToDismissBoxState(
+        confirmValueChange = { target ->
+            when (target) {
+                androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onKeepFile(change.path) }
+                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onRevertFile(change.path) }
+                else -> Unit
+            }
+            false // the list drops the row itself once the change is resolved; if it is not, the row springs back
+        },
+    )
+    androidx.compose.material3.SwipeToDismissBox(
+        state = swipe,
+        enableDismissFromStartToEnd = enabled && !open,
+        enableDismissFromEndToStart = enabled && !open,
+        backgroundContent = {
+            val keeping = swipe.dismissDirection == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd
+            val reverting = swipe.dismissDirection == androidx.compose.material3.SwipeToDismissBoxValue.EndToStart
+            if (keeping || reverting) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background((if (keeping) tokens.successText else tokens.dangerText).copy(alpha = 0.16f)).padding(horizontal = 18.dp),
+                    contentAlignment = if (keeping) Alignment.CenterStart else Alignment.CenterEnd,
+                ) {
+                    Text(
+                        stringResource(if (keeping) R.string.chat_keep else R.string.chat_revert),
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (keeping) tokens.successText else tokens.dangerText,
+                    )
+                }
+            }
+        },
+    ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -290,6 +331,7 @@ private fun ChangedFileRow(
                 }
             }
         }
+    }
     }
 }
 
@@ -456,6 +498,8 @@ internal fun ChatComposer(
     /** Microphone button before the send button; null hides it. [listening] shows the recording state. */
     onMic: (() -> Unit)? = null,
     listening: Boolean = false,
+    /** 0..1 loudness while [listening]; the mic pulses with it. */
+    micLevel: Float = 0f,
     /** "Create image" entry of the attach menu (Nano Banana); null hides it. */
     onGenerateImage: (() -> Unit)? = null,
 ) {
@@ -567,16 +611,6 @@ internal fun ChatComposer(
                 }
             }
         }
-            if (onMic != null) {
-                IconButton(onClick = onMic) {
-                    ForgeIcon(
-                        glyph = ForgeGlyph.MIC,
-                        tint = if (listening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        size = 22.dp,
-                        description = stringResource(if (listening) R.string.voice_stop else R.string.voice_start),
-                    )
-                }
-            }
             val haptics = LocalHapticFeedback.current
             val reduceMotion = rememberReduceMotion()
             val sendScale by animateFloatAsState(
@@ -586,6 +620,7 @@ internal fun ChatComposer(
             )
             val sendBg by animateColorAsState(
                 targetValue = when {
+                    listening -> MaterialTheme.colorScheme.error
                     canSend -> MaterialTheme.colorScheme.primary
                     running -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
@@ -593,6 +628,7 @@ internal fun ChatComposer(
                 animationSpec = if (reduceMotion) snap() else tween(ForgeMotion.FADE_MS),
                 label = "sendBg",
             )
+            // No separate mic button: a long press starts voice input, freeing room for the model/route chips.
             Box(
                 modifier = Modifier
                     .forgeMinTouch()
@@ -600,21 +636,48 @@ internal fun ChatComposer(
                     .size(40.dp)
                     .clip(CircleShape)
                     .background(sendBg)
-                    .clickable(
-                        enabled = running || canSend,
+                    .combinedClickable(
+                        enabled = listening || running || canSend,
                         role = Role.Button,
-                        onClickLabel = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
-                    ) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        // While the agent works, sending queues the message; stop is available when nothing is typed.
-                        if (canSend) onSend() else if (running) onStop()
-                    },
+                        onClickLabel = stringResource(
+                            when {
+                                listening -> R.string.voice_stop
+                                running && !canSend -> R.string.agent_stop
+                                else -> R.string.agent_send
+                            },
+                        ),
+                        onLongClick = onMic?.takeIf { !listening && !running }?.let { mic ->
+                            {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                mic()
+                            }
+                        },
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            when {
+                                listening -> onMic?.invoke()
+                                canSend -> onSend()
+                                running -> onStop()
+                            }
+                        },
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (running && !canSend) Icons.Default.Close else Icons.Default.KeyboardArrowUp,
-                    contentDescription = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
+                    imageVector = when {
+                        listening -> Icons.Default.Close
+                        running && !canSend -> Icons.Default.Close
+                        else -> Icons.Default.KeyboardArrowUp
+                    },
+                    contentDescription = stringResource(
+                        when {
+                            listening -> R.string.voice_stop
+                            running && !canSend -> R.string.agent_stop
+                            else -> R.string.agent_send
+                        },
+                    ),
                     tint = when {
+                        listening -> MaterialTheme.colorScheme.onError
                         canSend -> MaterialTheme.colorScheme.onPrimary
                         running -> MaterialTheme.colorScheme.onError
                         else -> MaterialTheme.colorScheme.onSurfaceVariant

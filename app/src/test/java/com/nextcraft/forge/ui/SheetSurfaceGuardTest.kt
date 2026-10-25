@@ -27,6 +27,13 @@ class SheetSurfaceGuardTest {
     }
 
     @Test
+    fun alertDialog_isOnlyCalledByTheForgeWrapper() {
+        val offenders = uiFiles.filter { it.name != "ForgeGlass.kt" }
+            .flatMap { f -> Regex("""(?<![\w.])AlertDialog\(""").findAll(f.readText()).map { "${f.name}: offset ${it.range.first}" } }
+        assertTrue("call ForgeAlertDialog instead of AlertDialog:\n" + offenders.joinToString("\n"), offenders.isEmpty())
+    }
+
+    @Test
     fun forgeWrapper_usesTheOpaqueColour_andCountsOpenSheets() {
         val src = File("src/main/java/com/nextcraft/forge/ui/ForgeGlass.kt").readText()
         val call = callsOf(src, "ModalBottomSheet").single()

@@ -11,6 +11,8 @@ import androidx.compose.material3.MaterialTheme
 import android.os.Build
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -35,7 +37,24 @@ import com.kyant.backdrop.effects.vibrancy
  */
 internal val LocalForgeBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
 
-internal val glassBlurSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+/**
+ * Set at start-up when blur should be skipped even though the OS can do it: low-RAM devices (the blur is the costliest
+ * thing the app draws) and people who turned on the system's high-contrast text, who need solid surfaces.
+ */
+internal var glassReducedEffects: Boolean by androidx.compose.runtime.mutableStateOf(false)
+
+/** The user's own "solid Glass" choice (Settings > Appearance); a state, so flipping it updates the open screen at once. */
+internal var glassUserSolid: Boolean by androidx.compose.runtime.mutableStateOf(false)
+
+internal val glassBlurSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !glassReducedEffects && !glassUserSolid
+
+internal fun detectReducedEffects(context: android.content.Context): Boolean {
+    val lowRam = context.getSystemService(android.app.ActivityManager::class.java)?.isLowRamDevice == true
+    val highContrast = runCatching {
+        android.provider.Settings.Secure.getInt(context.contentResolver, "high_text_contrast_enabled", 0) == 1
+    }.getOrDefault(false)
+    return lowRam || highContrast
+}
 internal val glassLensSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
 /** Records the content behind floating chrome. Apply to the container that holds the screens, not the chrome. */
@@ -113,5 +132,38 @@ internal fun ForgeModalSheet(
         containerColor = forgeSheetColor(),
         contentColor = contentColor,
         content = content,
+    )
+}
+
+/** Counts an open modal in [LocalForgeSheetDepth] so the root blurs the page behind it (Glass), like a sheet does. */
+@Composable
+private fun CountAsOpenModal() {
+    val depth = LocalForgeSheetDepth.current
+    DisposableEffect(depth) {
+        depth?.let { it.intValue += 1 }
+        onDispose { depth?.let { it.intValue -= 1 } }
+    }
+}
+
+/** The one way to show an alert dialog: Material's AlertDialog plus the same blurred backdrop in Glass as a sheet. */
+@Composable
+internal fun ForgeAlertDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissButton: @Composable (() -> Unit)? = null,
+    title: @Composable (() -> Unit)? = null,
+    text: @Composable (() -> Unit)? = null,
+    shape: androidx.compose.ui.graphics.Shape = androidx.compose.material3.AlertDialogDefaults.shape,
+) {
+    CountAsOpenModal()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = confirmButton,
+        modifier = modifier,
+        dismissButton = dismissButton,
+        title = title,
+        text = text,
+        shape = shape,
     )
 }

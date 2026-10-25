@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -343,7 +342,7 @@ fun FilesAndDiffScreen(
     }
 
     pendingDeletePath?.let { targetPath ->
-        AlertDialog(
+        ForgeAlertDialog(
             modifier = Modifier.forgePopIn(),
             onDismissRequest = { pendingDeletePath = null },
             title = { Text(stringResource(R.string.files_delete_file_confirm_title)) },
@@ -741,7 +740,7 @@ private fun NameDialog(
     onConfirm: (String) -> Unit,
 ) {
     var value by rememberSaveable { mutableStateOf(initial) }
-    AlertDialog(
+    ForgeAlertDialog(
         modifier = Modifier.forgePopIn(),
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
@@ -1012,7 +1011,7 @@ private fun NewWorkspaceFileDialog(
     onCreate: (String) -> Unit,
 ) {
     var path by rememberSaveable(baseDir) { mutableStateOf(if (baseDir.isEmpty()) "" else "$baseDir/") }
-    AlertDialog(
+    ForgeAlertDialog(
         modifier = Modifier.forgePopIn(),
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),

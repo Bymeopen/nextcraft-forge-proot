@@ -108,8 +108,8 @@ internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onD
                         horizontalPadding = 0.dp,
                     )
                 }
-                if (state.sessionRunning) {
-                    // selectAgent refuses while a turn runs (it would desync the session that is still streaming).
+                if (state.activeChatRunning) {
+                    // selectAgent refuses while the open chat's turn runs; other chats and projects can keep running.
                     Text(stringResource(R.string.route_single_busy), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
                 }
             }
@@ -122,6 +122,8 @@ internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onD
                 ordered.forEachIndexed { index, agent ->
                     val on = agent in enabled
                     val ready = agent in state.readyAgents
+                    // Name and switch on one line, the weight/priority controls below, so nothing is squeezed.
+                    Column(modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(agent.displayTitle(), fontWeight = FontWeight.Medium)
@@ -131,6 +133,16 @@ internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onD
                                 color = if (ready) scheme.onSurfaceVariant else scheme.error,
                             )
                         }
+                        Switch(
+                            checked = on,
+                            onCheckedChange = { checked ->
+                                // At least one agent stays on, otherwise Failover and Balanced would have nobody to use.
+                                val next = if (checked) enabled + agent else enabled - agent
+                                if (next.isNotEmpty()) viewModel.setRouteAgents(next)
+                            },
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
                         if (on && routing.mode == RouteMode.BALANCED) {
                             val weight = routing.weightOf(agent)
                             // The share is among the agents that can actually answer; the others get nothing until they are set up.
@@ -163,14 +175,7 @@ internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onD
                                 Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.route_move_up, agent.displayTitle()))
                             }
                         }
-                        Switch(
-                            checked = on,
-                            onCheckedChange = { checked ->
-                                // At least one agent stays on, otherwise Failover and Balanced would have nobody to use.
-                                val next = if (checked) enabled + agent else enabled - agent
-                                if (next.isNotEmpty()) viewModel.setRouteAgents(next)
-                            },
-                        )
+                    }
                     }
                 }
                 if (routing.mode == RouteMode.BALANCED) {
@@ -212,9 +217,10 @@ private fun RouteRulesSection(routing: RoutingConfig, viewModel: MainViewModel) 
         modifier = Modifier.fillMaxWidth(),
     )
     ForgePillTabs(
-        items = agents.map { it.displayTitle() },
+        items = agents.map { it.shortTitle() },
         selectedIndex = agentIndex,
         onSelect = { agentIndex = it },
+        equalWidth = true, // 3 providers fit side by side; scrolling cut "Antigravity" at the edge
     )
     ForgePrimaryButton(
         text = stringResource(R.string.route_rule_add),
