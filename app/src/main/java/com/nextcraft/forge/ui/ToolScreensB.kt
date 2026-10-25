@@ -269,11 +269,15 @@ fun SshScreen(viewModel: MainViewModel) {
 fun CiCdScreen(viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
     val ci by viewModel.cicd.state.collectAsState()
+    val uiState by viewModel.state.collectAsState()
     val context = LocalContext.current
+    val activeBranch = uiState.projectRepo?.branch.orEmpty()
     var prTitle by rememberSaveable { mutableStateOf("") }
-    var prHead by rememberSaveable { mutableStateOf("") }
+    var prHead by rememberSaveable(activeBranch) {
+        mutableStateOf(if (activeBranch.isNotBlank() && activeBranch != "main") activeBranch else "")
+    }
     var prBase by rememberSaveable { mutableStateOf("main") }
-    LaunchedEffect(Unit) { viewModel.cicd.refresh() }
+    LaunchedEffect(uiState.activeProjectId) { viewModel.cicd.refresh() }
     ToolScaffold(
         title = stringResource(R.string.tools_cicd),
         subtitle = ci.repository ?: stringResource(R.string.tools_cicd_desc),
@@ -281,7 +285,7 @@ fun CiCdScreen(viewModel: MainViewModel) {
     ) {
         if (ci.loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         ci.message?.let { Text(it.asString(), fontSize = ForgeType.control, color = scheme.onSurfaceVariant) }
-        OutlinedButton(shape = RoundedCornerShape(100), onClick = viewModel.cicd::refresh, enabled = !ci.loading, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(shape = RoundedCornerShape(100), onClick = { viewModel.cicd.refresh() }, enabled = !ci.loading, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.tool_refresh))
         }
         if (ci.repository != null) {

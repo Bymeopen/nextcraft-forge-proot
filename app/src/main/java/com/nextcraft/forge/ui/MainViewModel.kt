@@ -1995,7 +1995,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val recent = current.takeLast(4)
         val summaryBullets = older.takeLast(12).joinToString("\n") { msg ->
             val role = if (msg.fromUser) "User" else "Agent"
-            val snippet = msg.text.replace(Regex("\\s+"), " ").trim().take(160)
+            val snippet = msg.text.replace(Regex("\\s+"), " ").trim().take(160).ifEmpty { "(tool/attachment turn)" }
             "- **$role**: $snippet"
         }
         val summaryMsg = ChatMessage(
@@ -2010,6 +2010,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update {
             it.copy(
                 messages = compacted,
+                retryPrompts = it.retryPrompts - chatId,
                 bannerMessage = UiText.Raw("Compacted ${older.size} messages into summary"),
             )
         }
@@ -2785,7 +2786,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (_state.value.activeProjectId == proj.id) {
                             _state.update { it.copy(activeTab = ForgeTab.ANDROID) }
                         }
-                        runAndroidBuild("assembleDebug", installAfterBuild = true)
+                        runAndroidBuild("assembleDebug", installAfterBuild = true, targetProject = proj)
                     }
                 }
                 // Wait for the bridge call to fully unwind so the next turn cannot race its shared state.
@@ -3587,13 +3588,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val nodes = withContext(Dispatchers.IO) {
                 runCatching {
+                    val outFile = File(getApplication<Application>().cacheDir, "forge_ui_dump.xml")
+                    outFile.delete()
                     val proc = ProcessBuilder(
                         "su",
                         "-c",
-                        "uiautomator dump /sdcard/forge_ui_dump.xml >/dev/null 2>&1 && cat /sdcard/forge_ui_dump.xml",
-                    ).redirectErrorStream(true).start()
-                    val xml = proc.inputStream.bufferedReader().readText()
-                    if (!proc.waitFor(12, java.util.concurrent.TimeUnit.SECONDS)) proc.destroyForcibly()
+                        "uiautomator dump /sdcard/forge_ui_dump.xml >/dev/null 2>&1 && cat /sdcard/forge_ui_dump.xml; rm -f /sdcard/forge_ui_dump.xml",
+                    ).redirectErrorStream(true).redirectOutput(outFile).start()
+                    runCatching { proc.outputStream.close() }
+                    val finished = proc.waitFor(12, java.util.concurrent.TimeUnit.SECONDS)
+                    if (!finished) proc.destroyForcibly()
+                    val xml = if (outFile.isFile) outFile.readText() else ""
+                    outFile.delete()
                     parseUiInspectorXml(xml)
                 }.getOrDefault(emptyList())
             }
@@ -3616,6 +3622,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         openConversation()
     }
 
+    private fun unescapeXmlAttr(raw: String): String {
+        if (!raw.contains('&')) return raw
+        return raw
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace(Regex("&#(\\d+);")) { m ->
+                m.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: m.value
+            }
+            .replace(Regex("&#x([0-9a-fA-F]+);")) { m ->
+                m.groupValues[1].toIntOrNull(16)?.toChar()?.toString() ?: m.value
+            }
+            .replace("&amp;", "&")
+    }
+
     private fun parseUiInspectorXml(xml: String): List<UiInspectorNode> {
         if (xml.isBlank()) return emptyList()
         val nodeRegex = Regex("""<node\s+([^>]+?)/?>""")
@@ -3625,7 +3647,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         for (match in nodeRegex.findAll(xml)) {
             val attrs = HashMap<String, String>()
             for (attr in attrRegex.findAll(match.groupValues[1])) {
-                attrs[attr.groupValues[1]] = attr.groupValues[2]
+                attrs[attr.groupValues[1]] = unescapeXmlAttr(attr.groupValues[2])
             }
             val rawId = attrs["resource-id"].orEmpty().substringAfterLast('/')
             val rawClass = attrs["class"].orEmpty().substringAfterLast('.')
@@ -3701,6 +3723,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 checkpoints.revertLatestTurn(project.id, ws)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
+            _state.value.selectedFilePath?.let { loadWorkspaceFile(it) }
         }
     }
 
@@ -4111,8 +4134,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun runAndroidBuild(task: String = "assembleDebug", installAfterBuild: Boolean = false) {
-        val project = _state.value.activeProject ?: return
+    fun runAndroidBuild(
+        task: String = "assembleDebug",
+        installAfterBuild: Boolean = false,
+        targetProject: Project? = _state.value.activeProject,
+    ) {
+        val project = targetProject ?: return
         if (project.id in _state.value.buildingProjectIds || projectBuildHandles.containsKey(project.id)) return
         val startedAt = System.currentTimeMillis()
         val initialRecord = AndroidBuildRecord(
@@ -4785,12 +4812,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                 val syncCmd = buildString {
                     append("if git remote get-url origin >/dev/null 2>&1; then ")
+                    append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
                     append("git config user.name ${shellSingleQuote(login)} && ")
                     append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
                     append("git add -A && ")
                     append("(git diff --cached --quiet || git commit -m ${shellSingleQuote(commitMessage)}) && ")
-                    append("git pull --rebase --autostash origin main >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1; ")
-                    append("git push -u origin HEAD:main; ")
+                    append("git pull --rebase --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1; ")
+                    append("git push -u origin \"HEAD:\$branch\"; ")
                     append("fi")
                 }
                 withGitHubCredentials(token, login) {
@@ -4815,7 +4843,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val pullCmd = buildString {
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
-                        append("git fetch origin && (git pull --rebase --autostash origin main || ")
+                        append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
+                        append("git fetch origin && (git pull --rebase --autostash origin \"\$branch\" || ")
                         append("{ git rebase --abort 2>/dev/null; false; }); ")
                         append("else echo 'No origin remote configured in workspace'; fi")
                     }

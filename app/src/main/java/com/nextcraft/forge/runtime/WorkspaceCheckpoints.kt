@@ -264,6 +264,7 @@ class WorkspaceCheckpoints(
     }
 
     fun revertHunk(projectId: String, workspace: File, path: String, hunkIndex: Int): Boolean {
+        if (hunkIndex < 0) return false
         val safeId = safeProjectId(projectId)
         if (isInternalRuntimePath(path)) return false
         return synchronized(lockFor(safeId)) {
@@ -300,8 +301,10 @@ class WorkspaceCheckpoints(
                     }
                 }
             }
+            val useCrlf = afterBytes.toString(Charsets.UTF_8).contains("\r\n") || beforeBytes.toString(Charsets.UTF_8).contains("\r\n")
+            val lineSep = if (useCrlf) "\r\n" else "\n"
             val hadTrailingNewline = afterBytes.isNotEmpty() && afterBytes.last() == '\n'.code.toByte()
-            val newText = updatedLines.joinToString("\n") + if (hadTrailingNewline && updatedLines.isNotEmpty()) "\n" else ""
+            val newText = updatedLines.joinToString(lineSep) + if (hadTrailingNewline && updatedLines.isNotEmpty()) lineSep else ""
             target.writeText(newText, Charsets.UTF_8)
             if (digest(target) == digest(original)) {
                 val remaining = pending.filterNot { it == path }
@@ -525,7 +528,7 @@ class WorkspaceCheckpoints(
 
     private fun textLines(bytes: ByteArray): List<String> {
         if (bytes.isEmpty() || !bytes.isProbablyText()) return emptyList()
-        val lines = bytes.toString(Charsets.UTF_8).split('\n')
+        val lines = bytes.toString(Charsets.UTF_8).split('\n').map { it.trimEnd('\r') }
         return if (lines.lastOrNull().isNullOrEmpty()) lines.dropLast(1) else lines
     }
 

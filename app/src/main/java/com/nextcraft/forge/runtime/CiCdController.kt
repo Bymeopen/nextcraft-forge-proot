@@ -52,14 +52,25 @@ class CiCdController(
     private val vault = ApiKeyVault(appContext)
     private val mutable = MutableStateFlow(CiCdState())
     val state: StateFlow<CiCdState> = mutable.asStateFlow()
+    @Volatile
+    private var lastProjectId: String? = null
 
-    fun refresh() {
+    fun refresh(preserveMessage: Boolean = false) {
         val project = activeProject()
         if (project == null) {
+            lastProjectId = null
             mutable.update { CiCdState(message = UiText.res(R.string.rt_open_project_first)) }
             return
         }
-        mutable.update { it.copy(loading = true, message = null) }
+        val switchedProject = lastProjectId != project.id
+        lastProjectId = project.id
+        mutable.update {
+            if (switchedProject) {
+                CiCdState(loading = true, message = if (preserveMessage) it.message else null)
+            } else {
+                it.copy(loading = true, message = if (preserveMessage) it.message else null)
+            }
+        }
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
@@ -73,6 +84,7 @@ class CiCdController(
                     listOf("$owner/$repo", wfs, rns, prs)
                 }
             }
+            if (lastProjectId != project.id) return@launch
             @Suppress("UNCHECKED_CAST")
             mutable.update { current ->
                 result.fold(
@@ -85,7 +97,16 @@ class CiCdController(
                             loading = false,
                         )
                     },
-                    onFailure = { current.copy(loading = false, message = it.toUiText(R.string.rt_cicd_load_failed)) },
+                    onFailure = {
+                        current.copy(
+                            repository = null,
+                            workflows = emptyList(),
+                            runs = emptyList(),
+                            pullRequests = emptyList(),
+                            loading = false,
+                            message = it.toUiText(R.string.rt_cicd_load_failed),
+                        )
+                    },
                 )
             }
         }
@@ -113,7 +134,7 @@ class CiCdController(
                     ),
                 )
             }
-            refresh()
+            if (result.isSuccess) refresh(preserveMessage = true)
         }
     }
 
@@ -138,7 +159,7 @@ class CiCdController(
                     ),
                 )
             }
-            refresh()
+            if (result.isSuccess) refresh(preserveMessage = true)
         }
     }
 

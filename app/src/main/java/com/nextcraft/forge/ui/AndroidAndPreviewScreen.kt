@@ -869,7 +869,7 @@ private fun UiInspectorPanel(
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalForgeThemeTokens.current
-    var selectedNode by remember { mutableStateOf<UiInspectorNode?>(null) }
+    var selectedNode by remember(state.uiInspectorNodes) { mutableStateOf<UiInspectorNode?>(null) }
     var instruction by rememberSaveable { mutableStateOf("") }
 
     Column(
@@ -932,6 +932,7 @@ private fun UiInspectorPanel(
                         onClick = {
                             viewModel.editUiElementWithAgent(node, instruction)
                             instruction = ""
+                            selectedNode = null
                         },
                         modifier = Modifier.fillMaxWidth(),
                     )

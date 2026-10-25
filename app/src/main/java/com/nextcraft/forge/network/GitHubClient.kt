@@ -300,6 +300,12 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
             json.optJSONObject(i)?.let { item ->
                 val head = item.optJSONObject("head")?.optString("ref").orEmpty()
                 val base = item.optJSONObject("base")?.optString("ref").orEmpty().ifBlank { "main" }
+                val mergeableState = item.optString("mergeable_state", "")
+                val isMergeable = if (item.isNull("mergeable")) {
+                    mergeableState != "dirty" && mergeableState != "conflicting"
+                } else {
+                    item.optBoolean("mergeable", true)
+                }
                 GitHubPullRequest(
                     number = item.optInt("number"),
                     title = item.optString("title"),
@@ -307,7 +313,7 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
                     baseBranch = base,
                     state = item.optString("state", "open"),
                     url = item.optString("html_url"),
-                    mergeable = item.optBoolean("mergeable", true),
+                    mergeable = isMergeable,
                 )
             }
         }.filter { it.number > 0 }
@@ -322,10 +328,15 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
         base: String = "main",
         body: String = "",
     ): GitHubPullRequest {
+        val cleanHead = head.trim()
+        val cleanBase = base.trim().ifBlank { "main" }
+        require(cleanHead.isNotEmpty() && cleanHead != cleanBase) {
+            "Head branch ($cleanHead) must differ from base branch ($cleanBase)"
+        }
         val payload = JSONObject()
             .put("title", title.trim())
-            .put("head", head.trim())
-            .put("base", base.trim().ifBlank { "main" })
+            .put("head", cleanHead)
+            .put("base", cleanBase)
             .put("body", body.trim())
         val item = postJson(
             "https://api.github.com/repos/${segment(owner)}/${segment(repo)}/pulls",
