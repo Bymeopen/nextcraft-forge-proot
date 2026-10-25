@@ -2149,7 +2149,10 @@ class RuntimeInstaller(private val context: Context) {
             // Go programs under ptrace: async preemption signals interrupt network syscalls (see proot-exec.sh).
             put("GODEBUG", "asyncpreemptoff=1")
             put("TERM", "xterm-256color")
-            putAll(prootOpt.environmentVars)
+            // PROOT_TMP_DIR/PROOT_L2S_DIR here are bare "/tmp/..." -- real top-level host paths the app has no
+            // permission to write to. proot-exec.sh computes its own app-owned versions of both; letting these
+            // override that default would break every launch ("mkdir: '/tmp/...': Permission denied").
+            putAll(prootOpt.environmentVars.filterKeys { it != "PROOT_TMP_DIR" && it != "PROOT_L2S_DIR" })
             putAll(environment)
         }
 
@@ -3328,8 +3331,11 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 exit 127
             fi
             # proot keeps its own state (translated /proc entries, temporary files) here; it must be app-writable.
+            # Forced unconditionally (not a `:-` default): a bare "/tmp/..." value exported earlier -- e.g. by the
+            # guest-side hardware optimizer, whose env block is meant for programs already inside the chroot -- is
+            # a real top-level host path the app cannot write to, and must never survive into proot's own loader.
             export PROOT_TMP_DIR="${'$'}{NEXTCRAFT_PROOT_TMP:-${'$'}ROOTFS/tmp/.proot-tmp}"
-            export PROOT_L2S_DIR="${'$'}{PROOT_L2S_DIR:-${'$'}ROOTFS/tmp/.proot-l2s}"
+            export PROOT_L2S_DIR="${'$'}ROOTFS/tmp/.proot-l2s"
             # Enable seccomp-BPF syscall filter on Linux 4.19+ unless explicitly disabled; legacy <4.19 kernels fallback to ptrace-only.
             if [ -z "${'$'}{PROOT_NO_SECCOMP:-}" ]; then
                 KVER=${'$'}(uname -r 2>/dev/null || echo "5.10.0")
