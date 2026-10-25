@@ -1,4 +1,8 @@
-@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(
+    ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
 
 package com.nextcraft.forge.ui
 
@@ -9,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -635,67 +640,73 @@ internal fun ChatComposer(
             ),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Attach: photos or any file; it lands in attachments/ inside the workspace.
-            Box {
-                IconButton(onClick = { attachMenuOpen = true }) {
-                    ForgeIcon(glyph = ForgeGlyph.PLUS, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 22.dp, description = stringResource(R.string.agent_attach))
-                }
-                DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.agent_attach_camera)) },
-                        onClick = { attachMenuOpen = false; onAttachCamera() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.agent_attach_file)) },
-                        onClick = { attachMenuOpen = false; onAttachFile() },
-                    )
-                    if (onGenerateImage != null) {
+            // Attach and the chips scroll on their own: long model/route labels must never push the mic and send
+            // buttons past the edge of a narrow phone, which left them off-screen and unreachable.
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Attach: photos or any file; it lands in attachments/ inside the workspace.
+                Box {
+                    IconButton(onClick = { attachMenuOpen = true }) {
+                        ForgeIcon(glyph = ForgeGlyph.PLUS, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 22.dp, description = stringResource(R.string.agent_attach))
+                    }
+                    DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.image_menu)) },
-                            onClick = { attachMenuOpen = false; onGenerateImage() },
+                            text = { Text(stringResource(R.string.agent_attach_camera)) },
+                            onClick = { attachMenuOpen = false; onAttachCamera() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.agent_attach_file)) },
+                            onClick = { attachMenuOpen = false; onAttachFile() },
+                        )
+                        if (onGenerateImage != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.image_menu)) },
+                                onClick = { attachMenuOpen = false; onGenerateImage() },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.capture_menu)) },
+                            enabled = captureEnabled,
+                            onClick = { attachMenuOpen = false; onCapture() },
                         )
                     }
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.capture_menu)) },
-                        enabled = captureEnabled,
-                        onClick = { attachMenuOpen = false; onCapture() },
-                    )
+                }
+                if (onModelChip != null && modelChipLabel.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onModelChip),
+                    ) {
+                        Text(
+                            text = modelChipLabel,
+                            fontSize = ForgeType.secondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 150.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                if (onRouteChip != null && routeChipLabel.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onRouteChip),
+                    ) {
+                        Text(
+                            text = routeChipLabel,
+                            fontSize = ForgeType.secondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 110.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
                 }
             }
-            if (onModelChip != null && modelChipLabel.isNotBlank()) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                    modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onModelChip),
-                ) {
-                    Text(
-                        text = modelChipLabel,
-                        fontSize = ForgeType.secondary,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 150.dp).padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            }
-            if (onRouteChip != null && routeChipLabel.isNotBlank()) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                    modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onRouteChip),
-                ) {
-                    Text(
-                        text = routeChipLabel,
-                        fontSize = ForgeType.secondary,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 110.dp).padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.weight(1f))
             if (onMic != null) {
                 val reduceMotionMic = rememberReduceMotion()
                 val pulseColor = MaterialTheme.colorScheme.error
@@ -724,12 +735,13 @@ internal fun ChatComposer(
             val haptics = LocalHapticFeedback.current
             val reduceMotion = rememberReduceMotion()
             val sendScale by animateFloatAsState(
-                targetValue = if (running || canSend) 1f else 0.86f,
+                targetValue = if (listening || running || canSend) 1f else 0.86f,
                 animationSpec = if (reduceMotion) snap() else ForgeMotion.springSnappy(),
                 label = "sendScale",
             )
             val sendBg by animateColorAsState(
                 targetValue = when {
+                    listening -> MaterialTheme.colorScheme.error
                     canSend -> MaterialTheme.colorScheme.primary
                     running -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
@@ -744,21 +756,49 @@ internal fun ChatComposer(
                     .size(40.dp)
                     .clip(CircleShape)
                     .background(sendBg)
-                    .clickable(
-                        enabled = running || canSend,
+                    .combinedClickable(
+                        enabled = listening || running || canSend || onMic != null,
                         role = Role.Button,
-                        onClickLabel = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
-                    ) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        // While the agent works, sending queues the message; stop is available when nothing is typed.
-                        if (canSend) onSend() else if (running) onStop()
-                    },
+                        onClickLabel = stringResource(
+                            when {
+                                listening -> R.string.voice_stop
+                                running && !canSend -> R.string.agent_stop
+                                else -> R.string.agent_send
+                            },
+                        ),
+                        onLongClick = onMic?.takeIf { !listening && !running }?.let { mic ->
+                            {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                mic()
+                            }
+                        },
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            // While the agent works, sending queues the message; stop is available when nothing is typed.
+                            when {
+                                listening -> onMic?.invoke()
+                                canSend -> onSend()
+                                running -> onStop()
+                            }
+                        },
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (running && !canSend) Icons.Default.Close else Icons.Default.KeyboardArrowUp,
-                    contentDescription = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
+                    imageVector = when {
+                        listening -> Icons.Default.Close
+                        running && !canSend -> Icons.Default.Close
+                        else -> Icons.Default.KeyboardArrowUp
+                    },
+                    contentDescription = stringResource(
+                        when {
+                            listening -> R.string.voice_stop
+                            running && !canSend -> R.string.agent_stop
+                            else -> R.string.agent_send
+                        },
+                    ),
                     tint = when {
+                        listening -> MaterialTheme.colorScheme.onError
                         canSend -> MaterialTheme.colorScheme.onPrimary
                         running -> MaterialTheme.colorScheme.onError
                         else -> MaterialTheme.colorScheme.onSurfaceVariant

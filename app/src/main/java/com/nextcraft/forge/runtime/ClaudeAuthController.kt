@@ -14,6 +14,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 enum class ClaudeAuthStatus { SIGNED_OUT, STARTING, AWAITING_BROWSER, COMPLETING, SIGNED_IN, ERROR }
@@ -55,7 +57,7 @@ class ClaudeAuthController(
     private val authOutput = File(context.cacheDir, "claude-auth-output.log")
     private val urlFile = File(RuntimeInstaller.bridgeRootDir(context), "claude-login-url")
     @Volatile private var process: Process? = null
-    private val loginStarting = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val loginMutex = Mutex()
     @Volatile private var stateBeforeLogin: ClaudeAuthState? = null
 
     init {
@@ -73,6 +75,34 @@ class ClaudeAuthController(
         } else {
             ClaudeAuthState()
         }
+    }
+
+    /** Taps back into the app from the Custom Tab, which never returns there on its own after sign-in. */
+    private fun notifySignedIn(account: String?) = runCatching {
+        val manager = context.getSystemService(android.app.NotificationManager::class.java) ?: return@runCatching
+        manager.createNotificationChannel(
+            android.app.NotificationChannel(
+                SIGN_IN_CHANNEL_ID,
+                context.getString(R.string.notif_channel_results),
+                android.app.NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?.apply { flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP }
+            ?: return@runCatching
+        val contentIntent = android.app.PendingIntent.getActivity(
+            context, 3, launchIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = androidx.core.app.NotificationCompat.Builder(context, SIGN_IN_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.notif_task_completed))
+            .setContentText(account?.let { context.getString(R.string.rt_auth_connected_as, it) } ?: context.getString(R.string.rt_auth_claude_connected))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        manager.notify(SIGN_IN_NOTIFICATION_ID, notification)
     }
 
     /**
@@ -97,19 +127,30 @@ class ClaudeAuthController(
     }
 
     suspend fun beginLogin(mode: ClaudeLoginMode, email: String = "") = withContext(Dispatchers.IO) {
-        if (!loginStarting.compareAndSet(false, true)) return@withContext
-        try {
+        // Signal any in-flight attempt to stop right away: the old reader loop polls loginGeneration every ~120ms
+        // and exits as soon as it sees a mismatch, releasing loginMutex below within a fraction of a second. Without
+        // this, a login already in progress (which can run for up to LOGIN_TIMEOUT_MS) would make a second tap on
+        // "Sign in with SSO" wait on the mutex for that whole time with zero feedback — the button would look dead.
+        loginGeneration.incrementAndGet()
+        process?.takeIf { it.isAlive }?.let { running ->
+            Thread {
+                runCatching {
+                    running.destroy()
+                    Thread.sleep(200)
+                    if (running.isAlive) running.destroyForcibly()
+                    running.waitFor()
+                }
+            }.apply { isDaemon = true }.start()
+        }
+        loginMutex.withLock {
             beginLoginLocked(mode, email.trim())
-        } finally {
-            loginStarting.set(false)
         }
     }
 
     private suspend fun beginLoginLocked(mode: ClaudeLoginMode, email: String) {
-        // Tapping "Sign in with SSO" while the account flow is still waiting must restart with the new mode; silently
-        // keeping the old process made the SSO button look dead. cancel() ends the old reader loop, which nulls `process`.
+        // The kill triggered in beginLogin() needs a moment to be noticed by the old reader loop (it polls every
+        // ~120ms) and for its `finally` block to null `process` out; give it a bit more room than that.
         if (process?.isAlive == true) {
-            cancel()
             val giveUp = android.os.SystemClock.elapsedRealtime() + RESTART_WAIT_MS
             while (process != null && android.os.SystemClock.elapsedRealtime() < giveUp) delay(50)
             if (process?.isAlive == true) {
@@ -233,6 +274,10 @@ class ClaudeAuthController(
                                 accountEmail = account,
                             )
                             onSignedInChanged(true)
+                            // The sign-in page shows "you can close this window" but a Custom Tab never closes itself
+                            // or returns to the app on its own; a notification is the only way back for someone who
+                            // does not remember to switch apps manually.
+                            notifySignedIn(account)
                             break
                         }
                     }
@@ -385,6 +430,8 @@ class ClaudeAuthController(
         const val LOGIN_TIMEOUT_MS = 15 * 60 * 1_000L
         const val RESTART_WAIT_MS = 5_000L
         const val CREDENTIAL_POLL_MS = 2_000L
+        const val SIGN_IN_CHANNEL_ID = "auth-results"
+        const val SIGN_IN_NOTIFICATION_ID = 43
         const val MAX_OUTPUT_CHARS = 100_000
         val EMAIL_PATTERN = Regex("[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     }
