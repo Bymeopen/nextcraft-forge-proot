@@ -367,8 +367,7 @@ fun AndroidBuildScreen(
                     viewModel.openConversation()
                 },
                 onOpenFile = { path ->
-                    viewModel.openWorkspaceFile(path)
-                    viewModel.selectTab(ForgeTab.FILES)
+                    viewModel.openFilesTabForEditing(path)
                 },
                 modifier = Modifier.weight(1f),
             )

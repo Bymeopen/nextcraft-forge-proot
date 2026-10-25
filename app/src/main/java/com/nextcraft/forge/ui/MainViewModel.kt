@@ -282,6 +282,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         { _state.value.activeProject },
         { checkpoints.ensureWorkspace(it) },
         { isProjectBusy(_state.value.activeProjectId) },
+        onRestored = { restoredProjectId ->
+            checkpoints.acceptAll(restoredProjectId)
+            viewModelScope.launch {
+                if (_state.value.activeProjectId == restoredProjectId) {
+                    refreshWorkspaceFilesAndChanges(restoredProjectId)
+                    _state.value.selectedFilePath?.let { loadWorkspaceFile(it) }
+                }
+            }
+        },
     )
 
     private val claudeRuntime = ClaudeRuntimeBridge(
@@ -332,6 +341,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runs.keys.any { it.projectId == projectId } || projectBuildHandles.containsKey(projectId)
 
     private val projectBuildHandles = java.util.concurrent.ConcurrentHashMap<String, ProjectBuildHandle>()
+    @Volatile private var installingProjectId: String? = null
     @Volatile private var activeTerminalProcess: Process? = null
     private var activeLogcatJob: Job? = null
     private var activeLogcatProcess: Process? = null
@@ -366,14 +376,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     "APK installation failed"
                 }
+                val targetId = installingProjectId ?: _state.value.activeProjectId
                 _state.update {
-                    val updatedRecord = it.androidBuild.copy(
+                    val baseRecord = it.projectBuilds[targetId] ?: it.androidBuild
+                    val updatedRecord = baseRecord.copy(
                         message = statusMsg,
                         stage = if (event.success) AndroidBuildStage.COMPLETE else AndroidBuildStage.FAILED,
                     )
                     it.copy(
-                        androidBuild = updatedRecord,
-                        projectBuilds = if (it.activeProjectId.isNotBlank()) it.projectBuilds + (it.activeProjectId to updatedRecord) else it.projectBuilds,
+                        androidBuild = if (it.activeProjectId == targetId) updatedRecord else it.androidBuild,
+                        projectBuilds = if (targetId.isNotBlank()) it.projectBuilds + (targetId to updatedRecord) else it.projectBuilds,
                         bannerMessage = UiText.Raw(statusMsg),
                     )
                 }
@@ -1165,6 +1177,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val nextRun = runs[runKey(project.id, nextChatId)]
         val messages = nextRun?.messages ?: preferences.loadMessages(project.id, nextChatId)
+        dropScheduledTasks { it.projectId == project.id && it.chatId == chatId }
         _state.update {
             it.copy(
                 chats = updatedChats,
@@ -1173,6 +1186,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeStatusLine = nextRun?.statusLine,
                 pendingToolRequest = nextRun?.pendingTool,
                 queuedPrompts = it.queuedPrompts.filterNot { q -> q.projectId == project.id && q.chatId == chatId },
+                retryPrompts = it.retryPrompts - chatId,
             )
         }
     }
@@ -1595,13 +1609,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update { it.copy(repoBusy = false, bannerMessage = banner) }
             refreshProjectRepo()
-            if (result == RepoOpResult.Done) refreshWorkspaceFilesAndChanges(project.id)
+            if (result == RepoOpResult.Done) {
+                refreshWorkspaceFilesAndChanges(project.id)
+                _state.value.selectedFilePath?.let { loadWorkspaceFile(it) }
+            }
         }
     }
 
     fun createRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_created) { chatBranches.createBranch(it, name) }
 
-    fun switchRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_switched) { chatBranches.switchBranch(it, name) }
+    fun switchRepoBranch(name: String) = leaveOpenFile { repoBranchOp(R.string.repo_branch_switched) { chatBranches.switchBranch(it, name) } }
 
     fun deleteRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_deleted) { chatBranches.deleteBranch(it, name) }
 
@@ -1739,6 +1756,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 messages = emptyList(),
                 activeStatusLine = null,
+                retryPrompts = it.retryPrompts - chatId,
+                queuedPrompts = it.queuedPrompts.filterNot { q -> q.projectId == project.id && q.chatId == chatId },
             )
         }
     }
@@ -2065,8 +2084,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val match = Regex("""^/loop\s+(\S+)(?:\s+([\s\S]+))?$""", RegexOption.IGNORE_CASE).matchEntire(text.trim()) ?: return false
         val first = match.groupValues[1]
         if (first.equals("off", ignoreCase = true)) {
+            val projectId = _state.value.activeProjectId
             val chatId = _state.value.activeChatId
-            dropScheduledTasks { it.chatId == chatId }
+            dropScheduledTasks { it.projectId == projectId && it.chatId == chatId }
             _state.update { it.copy(bannerMessage = UiText.res(R.string.schedule_cleared)) }
             return true
         }
@@ -3165,7 +3185,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Opens [relativePath] in the Files editor (from the read-only code viewer's Edit action). */
     fun openFilesTabForEditing(relativePath: String) {
         openWorkspaceFile(relativePath)
-        selectTab(ForgeTab.FILES)
+        if (_state.value.activeProjectId.isNotBlank()) {
+            _state.update { it.copy(activeTab = ForgeTab.PROJECTS, projectView = ProjectView.CONVERSATION, projectPane = ProjectPane.FILES) }
+        } else {
+            selectTab(ForgeTab.FILES)
+        }
     }
 
     fun openWorkspaceFile(relativePath: String) {
@@ -4322,7 +4346,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             if (succeeded && !cancelled && installAfterBuild && finalApk != null) {
-                installBuiltApk(finalApk.absolutePath)
+                installBuiltApk(finalApk.absolutePath, project.id)
             }
         }
         handle.job = job
@@ -4335,21 +4359,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val apk = withContext(Dispatchers.IO) {
                 runCatching { checkpoints.safeWorkspaceFile(checkpoints.ensureWorkspace(project.id), relativePath) }.getOrNull()
             }
-            if (apk != null && apk.isFile) installBuiltApk(apk.absolutePath)
+            if (apk != null && apk.isFile) installBuiltApk(apk.absolutePath, project.id)
         }
     }
 
-    fun installBuiltApk(apkPath: String? = _state.value.androidBuild.apkPath) {
+    fun installBuiltApk(
+        apkPath: String? = _state.value.androidBuild.apkPath,
+        projectId: String = _state.value.activeProjectId,
+    ) {
         val path = apkPath ?: return
         val apkFile = File(path)
         if (!apkFile.isFile) return
+        installingProjectId = projectId
         viewModelScope.launch {
             _state.update {
+                val baseRecord = it.projectBuilds[projectId] ?: it.androidBuild
+                val updatedRecord = baseRecord.copy(
+                    stage = AndroidBuildStage.INSTALLING,
+                    message = str(R.string.build_installing_apk, apkFile.name),
+                )
                 it.copy(
-                    androidBuild = it.androidBuild.copy(
-                        stage = AndroidBuildStage.INSTALLING,
-                        message = str(R.string.build_installing_apk, apkFile.name),
-                    ),
+                    androidBuild = if (it.activeProjectId == projectId) updatedRecord else it.androidBuild,
+                    projectBuilds = if (projectId.isNotBlank()) it.projectBuilds + (projectId to updatedRecord) else it.projectBuilds,
                 )
             }
             val errorMsg = withContext(Dispatchers.IO) {
@@ -4364,11 +4395,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (errorMsg != null) {
                 _state.update {
+                    val baseRecord = it.projectBuilds[projectId] ?: it.androidBuild
+                    val failedRecord = baseRecord.copy(
+                        stage = AndroidBuildStage.FAILED,
+                        message = errorMsg,
+                    )
                     it.copy(
-                        androidBuild = it.androidBuild.copy(
-                            stage = AndroidBuildStage.FAILED,
-                            message = errorMsg,
-                        ),
+                        androidBuild = if (it.activeProjectId == projectId) failedRecord else it.androidBuild,
+                        projectBuilds = if (projectId.isNotBlank()) it.projectBuilds + (projectId to failedRecord) else it.projectBuilds,
                         bannerMessage = UiText.Raw(errorMsg),
                         bannerAction = BannerAction(BannerActionKind.RETRY_APK_INSTALL, UiText.Raw(errorMsg)),
                     )
@@ -4539,7 +4573,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val openPorts = withContext(Dispatchers.IO) { LocalNetwork.scanOpenLocalPorts() }
             _state.update { current ->
-                val newUrl = if (openPorts.isNotEmpty() && current.previewUrl == "http://127.0.0.1:3000") {
+                val localPortMatch = Regex("""^https?://(?:127\.0\.0\.1|localhost):(\d+)(?:/.*)?$""", RegexOption.IGNORE_CASE)
+                    .matchEntire(current.previewUrl.trim())
+                val currentLocalPort = localPortMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+                val newUrl = if (openPorts.isNotEmpty() && (currentLocalPort != null && currentLocalPort !in openPorts)) {
                     "http://127.0.0.1:${openPorts.first()}"
                 } else {
                     current.previewUrl
@@ -4763,14 +4800,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val ws = checkpoints.ensureWorkspace(project.id)
                         val login = githubAuth.state.value.login.ifBlank { "x-access-token" }
                         val pushCmd = buildString {
-                            append("git init -b main && ")
+                            append("git init && ")
+                            append("git checkout -B main && ")
                             append("git config user.name ${shellSingleQuote(login)} && ")
                             append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
                             append("(git remote remove origin 2>/dev/null || true) && ")
                             append("git remote add origin ${shellSingleQuote(repo.cloneUrl)} && ")
                             append("git add -A && ")
                             append("(git diff --cached --quiet || git commit -m 'Initial commit from NextCraft Forge') && ")
-                            append("git push -u origin main")
+                            append("git push -u origin HEAD:main")
                         }
                         pushError = runCatching {
                             withGitHubCredentials(token, login) {
@@ -4783,6 +4821,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
             }
             result.onSuccess { (repo, updatedRepos, pushError) ->
+                if (pushActiveProject && pushError == null) {
+                    refreshProjectRepo()
+                    cicd.refresh()
+                }
                 githubAuth.publish(
                     updatedRepos,
                     if (pushError == null) {
@@ -4825,6 +4867,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     runCommandInChrootOrHost(project.slug, ws, syncCmd)
                 }
             }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+            if (_state.value.activeProjectId == project.id) {
+                refreshProjectRepo()
+            }
         }
     }
 
@@ -4854,6 +4899,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
             }
             refreshWorkspaceFilesAndChanges(project.id)
+            if (_state.value.activeProjectId == project.id) {
+                refreshProjectRepo()
+            }
             githubAuth.report(
                 result.fold(
                     onSuccess = { out ->
@@ -5033,7 +5081,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         synchronized(reservedSlugs) { reservedSlugs -= slug }
                         throw error
                     }
-                    project
+                    // If the archive unpacked into a single top-level wrapper folder (like GitHub's repo-main.zip),
+                    // hoist its contents up to the workspace root so tools see files directly at /workspace/<slug>.
+                    val topEntries = ws.listFiles()?.filter { it.name != "__MACOSX" }.orEmpty()
+                    if (topEntries.size == 1 && topEntries[0].isDirectory) {
+                        val wrapper = topEntries[0]
+                        wrapper.listFiles()?.forEach { child ->
+                            val dest = File(ws, child.name)
+                            if (!dest.exists()) child.renameTo(dest)
+                        }
+                        if (wrapper.listFiles().isNullOrEmpty()) wrapper.delete()
+                    }
+                    val isAndroidProject = findAndroidProjectRoot(ws) != null
+                    project.copy(
+                        type = if (isAndroidProject) ProjectType.ANDROID else ProjectType.GENERAL,
+                        language = if (isAndroidProject) "Kotlin / Android" else "Multi-language",
+                    )
                 }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
             }
             result.onSuccess { newProject ->

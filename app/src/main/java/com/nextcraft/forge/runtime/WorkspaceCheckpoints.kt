@@ -301,11 +301,15 @@ class WorkspaceCheckpoints(
                     }
                 }
             }
-            val useCrlf = afterBytes.toString(Charsets.UTF_8).contains("\r\n") || beforeBytes.toString(Charsets.UTF_8).contains("\r\n")
-            val lineSep = if (useCrlf) "\r\n" else "\n"
-            val hadTrailingNewline = afterBytes.isNotEmpty() && afterBytes.last() == '\n'.code.toByte()
-            val newText = updatedLines.joinToString(lineSep) + if (hadTrailingNewline && updatedLines.isNotEmpty()) lineSep else ""
-            target.writeText(newText, Charsets.UTF_8)
+            if (updatedLines == before) {
+                original.copyTo(target, overwrite = true)
+            } else {
+                val useCrlf = afterBytes.toString(Charsets.UTF_8).contains("\r\n") || beforeBytes.toString(Charsets.UTF_8).contains("\r\n")
+                val lineSep = if (useCrlf) "\r\n" else "\n"
+                val hadTrailingNewline = afterBytes.isNotEmpty() && afterBytes.last() == '\n'.code.toByte()
+                val newText = updatedLines.joinToString(lineSep) + if (hadTrailingNewline && updatedLines.isNotEmpty()) lineSep else ""
+                target.writeText(newText, Charsets.UTF_8)
+            }
             if (digest(target) == digest(original)) {
                 val remaining = pending.filterNot { it == path }
                 if (remaining.isEmpty()) {
