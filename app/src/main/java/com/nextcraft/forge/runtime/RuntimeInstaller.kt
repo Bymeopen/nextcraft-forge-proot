@@ -2038,6 +2038,7 @@ class RuntimeInstaller(private val context: Context) {
         File(targetRootfs, guestWorkspacePath.removePrefix("/")).mkdirs()
         writeAndroidGradleConfiguration(targetRootfs)
         AntigravityCustomizations.apply(targetRootfs, guestWorkspacePath) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+        AntigravityCustomizations.applyWorkspace(workspace, guestWorkspacePath)
         // ~/.claude.json belongs to Claude Code; other agents never read it, so they skip the parse + fsync per launch.
         if (trustClaudeWorkspace && guestWorkspacePath != "/root") {
             ensureWorkspaceTrust(guestWorkspacePath, environment, claudeMcpServers)

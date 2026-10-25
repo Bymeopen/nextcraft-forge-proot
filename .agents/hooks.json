@@ -1,0 +1,17 @@
+{
+  "hermes-security-gate": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /workspace/nextcraft-forge/.agents/scripts/security_gate.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
