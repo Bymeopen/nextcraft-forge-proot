@@ -88,6 +88,7 @@ class DiagnosticsController(private val context: Context) {
     private fun collectDevice(): List<Pair<UiText, UiText>> {
         val memory = ActivityManager.MemoryInfo()
         context.getSystemService(ActivityManager::class.java)?.getMemoryInfo(memory)
+        val hwProfile = runCatching { DeviceHardwareOptimizer.inspect(appContext, forceRefresh = true) }.getOrNull()
         val stat = runCatching { StatFs(appContext.filesDir.absolutePath) }.getOrNull()
         val battery = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -98,7 +99,29 @@ class DiagnosticsController(private val context: Context) {
             add(row(R.string.diag_device, UiText.Raw("${Build.MANUFACTURER} ${Build.MODEL}")))
             add(row(R.string.diag_android, UiText.Raw("${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")))
             add(row(R.string.diag_cpu, UiText.res(R.string.diag_cores, Build.SUPPORTED_ABIS.firstOrNull().orEmpty(), Runtime.getRuntime().availableProcessors())))
+            if (hwProfile != null) {
+                add(
+                    UiText.Raw("SoC / Core topology") to UiText.Raw(
+                        "${hwProfile.socVendor.displayName} (${hwProfile.socModel}) · ${hwProfile.topology.performanceCores}P+${hwProfile.topology.efficiencyCores}E · ${hwProfile.socTier.label}",
+                    ),
+                )
+            }
             add(row(R.string.diag_ram, UiText.res(R.string.diag_free_of, formatBytes(memory.availMem), formatBytes(memory.totalMem))))
+            if (hwProfile != null) {
+                val swapLabel = if (hwProfile.swap.hasActiveSwap) {
+                    val alg = hwProfile.swap.zramAlgorithm?.let { " ($it)" }.orEmpty()
+                    "${hwProfile.swap.swapFreeMb} MB free of ${hwProfile.swap.swapTotalMb} MB$alg"
+                } else {
+                    "Inactive (0 MB)"
+                }
+                add(UiText.Raw("RAM tier & SwapRAM / ZRAM") to UiText.Raw("${hwProfile.ramTier.label} class · Swap: $swapLabel"))
+                val prootCfg = ProotAndChrootOptimizer.buildConfig(hwProfile, hasRootAccess = false)
+                add(
+                    UiText.Raw("Container / PRoot optimization") to UiText.Raw(
+                        "${prootCfg.backend.displayName} · /dev/shm ${prootCfg.shmSizeMb}M · /tmp ${prootCfg.tmpSizeMb}M · UV_THREADS=${prootCfg.uvThreadpoolSize}",
+                    ),
+                )
+            }
             // What this app itself costs right now: the numbers to compare before and after an optimisation.
             appMemoryMb()?.let { (pss, heap) -> add(row(R.string.diag_app_memory, UiText.res(R.string.diag_app_memory_value, pss, heap))) }
             procStatusValue("Threads")?.let { add(row(R.string.diag_app_threads, UiText.Raw(it.toString()))) }

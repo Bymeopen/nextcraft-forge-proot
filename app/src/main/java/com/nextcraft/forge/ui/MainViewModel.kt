@@ -74,6 +74,8 @@ import com.nextcraft.forge.runtime.SshController
 import com.nextcraft.forge.runtime.SnapshotsController
 import com.nextcraft.forge.runtime.RomStudioController
 import com.nextcraft.forge.runtime.DiagnosticsController
+import com.nextcraft.forge.runtime.DeviceHardwareOptimizer
+import com.nextcraft.forge.runtime.ProotAndChrootOptimizer
 import com.nextcraft.forge.runtime.CiCdController
 import com.nextcraft.forge.runtime.BuildMatrixController
 import com.nextcraft.forge.runtime.GoProjectTemplateGenerator
@@ -2076,13 +2078,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun canStartAnotherRun(agent: AgentKind = _state.value.agentKind, ignoringKey: RunKey? = null): Boolean {
         val active = if (ignoringKey == null) runs else runs.filterKeys { it != ignoringKey }
         if (active.isEmpty()) return true
-        if (active.size >= MAX_PARALLEL_CHATS) return false
+        val hwProfile = DeviceHardwareOptimizer.inspect(getApplication())
+        val maxParallel = DeviceHardwareOptimizer.maxParallelChatsFor(hwProfile).coerceAtMost(MAX_PARALLEL_CHATS)
+        if (active.size >= maxParallel) return false
         val memory = android.app.ActivityManager.MemoryInfo()
         getApplication<Application>().getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(memory)
-        val minFreeBytes = when (agent) {
-            AgentKind.CLAUDE_CODE -> MIN_FREE_BYTES_FOR_CLAUDE_RUN
-            AgentKind.ANTIGRAVITY, AgentKind.DEEPSEEK_HARNESS -> MIN_FREE_BYTES_FOR_LIGHT_RUN
-        }
+        val minFreeBytes = DeviceHardwareOptimizer.minFreeBytesForRun(
+            profile = hwProfile,
+            isHeavyNodeAgent = agent == AgentKind.CLAUDE_CODE,
+        )
         return !memory.lowMemory && memory.availMem >= minFreeBytes
     }
 

@@ -49,7 +49,18 @@
                 exit 127
             fi
             # proot keeps its own state (translated /proc entries, temporary files) here; it must be app-writable.
-            export PROOT_TMP_DIR="${NEXTCRAFT_PROOT_TMP:-$ROOTFS/tmp}"
+            export PROOT_TMP_DIR="${NEXTCRAFT_PROOT_TMP:-$ROOTFS/tmp/.proot-tmp}"
+            export PROOT_L2S_DIR="${PROOT_L2S_DIR:-$ROOTFS/tmp/.proot-l2s}"
+            # Enable seccomp-BPF syscall filter on Linux 4.19+ unless explicitly disabled; legacy <4.19 kernels fallback to ptrace-only.
+            if [ -z "${PROOT_NO_SECCOMP:-}" ]; then
+                KVER=$(uname -r 2>/dev/null || echo "5.10.0")
+                KMAJ=${KVER%%.*}
+                KREST=${KVER#*.}
+                KMIN=${KREST%%.*}
+                if [ "${KMAJ:-5}" -lt 4 ] || { [ "${KMAJ:-5}" -eq 4 ] && [ "${KMIN:-19}" -lt 19 ]; }; then
+                    export PROOT_NO_SECCOMP=1
+                fi
+            fi
             # Every guest execve goes through proot's ELF loader. By default proot extracts it into PROOT_TMP_DIR, which Android
             # (SELinux, targetSdk >= 29) refuses to exec from app data, so nothing in the guest would start. The loader ships in
             # the APK next to proot itself (libproot_loader.so) and is named here.
@@ -59,7 +70,7 @@
             HOST_RESP="$HOST_BRIDGE-responses"
             SHM_DIR="$ROOTFS/tmp/.nextcraft-shm"
 
-            mkdir -p "$ROOTFS$GUEST_WORKSPACE" "$HOST_WORKSPACE" "$HOST_BRIDGE" "$HOST_RESP" "$PROOT_TMP_DIR" "$SHM_DIR" \
+            mkdir -p "$ROOTFS$GUEST_WORKSPACE" "$HOST_WORKSPACE" "$HOST_BRIDGE" "$HOST_RESP" "$PROOT_TMP_DIR" "$PROOT_L2S_DIR" "$SHM_DIR" \
                 "$ROOTFS/nextcraft-bridge" "$ROOTFS/pocketdev-bridge" "$ROOTFS/pocket-bridge" "$ROOTFS/pocketdev-bridge-responses" "$ROOTFS/nextcraft-bridge-responses" \
                 "$ROOTFS/tmp" "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys"
 
@@ -83,6 +94,7 @@
             # Android's app seccomp policy kills a process on io_uring_setup (SIGSYS, exit 159). libuv (Node 20+) opens
             # an io_uring by default, which took down every npm/node run; this makes it use epoll instead.
             export UV_USE_IO_URING=0
+            export UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-6}"
             # Go binaries (Antigravity's agy, dsh) preempt goroutines with SIGURG many times a second. Under ptrace every
             # signal is a tracer round trip and can interrupt an in-flight connect/read, which surfaces as random
             # "dial tcp"/"i/o timeout" failures that never happen in a kernel chroot. Cooperative preemption only.
@@ -168,13 +180,18 @@ esac
 if [ "$HOST_WORKSPACE" != "$ROOTFS$GUEST_WORKSPACE" ]; then
                 BINDS="$BINDS -b $HOST_WORKSPACE:$GUEST_WORKSPACE"
             fi
-            BINDS="$BINDS -b $HOST_BRIDGE:/nextcraft-bridge -b $HOST_BRIDGE:/pocketdev-bridge -b $HOST_BRIDGE:/pocket-bridge -b $HOST_RESP:/pocketdev-bridge-responses"
+            BINDS="$BINDS -b $HOST_BRIDGE:/nextcraft-bridge -b $HOST_BRIDGE:/pocketdev-bridge -b $HOST_BRIDGE:/pocket-bridge -b $HOST_RESP:/pocketdev-bridge-responses -b $HOST_RESP:/nextcraft-bridge-responses"
+
+            KERNEL_OPT=""
+            if [ -n "${NEXTCRAFT_KERNEL_RELEASE:-}" ]; then
+                KERNEL_OPT="-k $NEXTCRAFT_KERNEL_RELEASE"
+            fi
 
             # Same extension set as proot-distro: --kill-on-exit ends every guest process with proot (a cancelled build
             # never lingers), --link2symlink emulates hard links, --sysvipc emulates SysV IPC that Android forbids,
             # -L fixes lstat sizes for dpkg. -0 makes the guest see uid 0 (apt, npm -g).
             # shellcheck disable=SC2086
-            exec "$PROOT" --kill-on-exit --link2symlink --sysvipc -L -0 -r "$ROOTFS" \
+            exec "$PROOT" --kill-on-exit --link2symlink --sysvipc -L -0 $KERNEL_OPT -r "$ROOTFS" \
                 $BINDS \
                 -w "$GUEST_WORKSPACE" \
                 /usr/bin/env GUEST_WORKSPACE="$GUEST_WORKSPACE" /bin/sh -c 'cd "$GUEST_WORKSPACE" && exec "$@"' -- "$@"
