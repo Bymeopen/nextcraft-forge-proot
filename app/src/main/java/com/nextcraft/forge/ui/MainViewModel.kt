@@ -4924,7 +4924,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
                         append("git add -A && ")
                         append("(git diff --cached --quiet || git commit -m ${shellSingleQuote(commitMessage)}) && ")
-                        append("(git pull --rebase --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1 || true) && ")
+                        append("(git pull --rebase=merges --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1 || true) && ")
                         append("git push -u origin \"HEAD:\$branch\"; ")
                         append("else echo 'No origin remote configured in workspace' >&2; false; fi")
                     }
