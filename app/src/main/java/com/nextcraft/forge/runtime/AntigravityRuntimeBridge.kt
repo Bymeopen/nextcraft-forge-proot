@@ -231,19 +231,19 @@ class AntigravityRuntimeBridge(
 
     private fun rememberWarmMode(supported: Boolean) {
         warmSupported = supported
-        runCatching { warmModeFile.writeText("${agyVersion()} $supported") }
+        runCatching { warmModeFile.writeText("${agyVersion()} $supported") }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
     }
 
     private fun closeWarm(entry: WarmAgy?) {
         entry ?: return
-        runCatching { entry.tailer.close() }
-        runCatching { entry.process.destroy() }
+        runCatching { entry.tailer.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+        runCatching { entry.process.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         Thread {
             runCatching {
                 Thread.sleep(500)
                 if (entry.process.isAlive) entry.process.destroyForcibly()
                 entry.outputFile.delete()
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         }.apply { isDaemon = true }.start()
     }
 
@@ -251,7 +251,7 @@ class AntigravityRuntimeBridge(
     private fun scheduleWarmExpiry(entry: WarmAgy) {
         val generation = ++warmGeneration
         Thread {
-            runCatching { Thread.sleep(WARM_IDLE_MS) }
+            runCatching { Thread.sleep(WARM_IDLE_MS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
             if (warmGeneration == generation && warm === entry) {
                 warm = null
                 closeWarm(entry)
@@ -347,12 +347,12 @@ class AntigravityRuntimeBridge(
                     stopAfterTerminalResult(process)
                     reply?.trim().takeUnless { it.isNullOrEmpty() } ?: "ok"
                 } finally {
-                    runCatching { process.destroy() }
+                    runCatching { process.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                     runCatching {
                         if (process.isAlive) process.destroyForcibly()
-                    }
-                    runCatching { outputFile.delete() }
-                    runCatching { probeDir.deleteRecursively() }
+                    }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                    runCatching { outputFile.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                    runCatching { probeDir.deleteRecursively() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                 }
             }
         } catch (e: TimeoutCancellationException) {
@@ -411,11 +411,11 @@ class AntigravityRuntimeBridge(
                             running.destroy()
                             Thread.sleep(500)
                             if (running.isAlive) running.destroyForcibly()
-                        }
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                     }.apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register(RuntimeTaskController.AGENT, it) }
+            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
             startForegroundRuntime(projectSlug)
             pushForegroundProgress("Starting Antigravity…")
             val installed = installer.installedRuntime()
@@ -457,6 +457,9 @@ class AntigravityRuntimeBridge(
                     emulateHardLinks = false,
                     trustClaudeWorkspace = false,
                 )
+                // Registered before anything below can throw: onFailure kills activeProcess, so a failing tailer must not
+                // leave agy running unattended.
+                activeProcess = process
                 val native = process as? NativeSpawnProcess ?: error("Unsupported Antigravity process")
                 spawnedOutputFile = native.outputFile
                 tailer = InotifyLogTailer(native.outputFile)
@@ -518,7 +521,9 @@ class AntigravityRuntimeBridge(
                                 eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, event.response))
                             }
                             resultSeen = true
-                        } else throw AntigravitySessionException(friendlyError(event.error ?: event.status))
+                        } else throw AntigravitySessionException(
+                            friendlyError(event.error ?: event.status, System.currentTimeMillis() - sessionStartedAtMillis),
+                        )
                     }
                     null -> Unit
                 }
@@ -530,16 +535,23 @@ class AntigravityRuntimeBridge(
                         val now = System.currentTimeMillis()
                         if (stdinOpen && !eventSeen && now - promptSentAtMillis >= WARM_PROBE_MS) {
                             if (reuse != null) {
-                                // A kept-alive agy that ignores the next message: start fresh from the next turn on.
+                                // A kept-alive agy can think for a long time before its first event on a heavy prompt, so 20 s of
+                                // silence alone proves nothing. It is called stuck only after a longer quiet period with no sign
+                                // of life in its own log. The warm mode stays on: one slow answer must not switch it off for good.
+                                val quietMs = now - promptSentAtMillis
+                                val stillWorking = quietMs < WARM_REUSE_MAX_WAIT_MS &&
+                                    (quietMs < WARM_REUSE_QUIET_MS || agyLogActive(now))
+                                if (!stillWorking) {
+                                    throw AntigravitySessionException(
+                                        "Antigravity stopped responding. Send the message again.",
+                                    )
+                                }
+                            } else {
+                                // This agy only starts on end of input; give it that and remember for later turns.
                                 rememberWarmMode(false)
-                                throw AntigravitySessionException(
-                                    "Antigravity stopped responding. Send the message again.",
-                                )
+                                stdinOpen = false
+                                runCatching { process.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                             }
-                            // This agy only starts on end of input; give it that and remember for later turns.
-                            rememberWarmMode(false)
-                            stdinOpen = false
-                            runCatching { process.outputStream.close() }
                         }
                         pushForegroundProgress(
                             activeToolName?.let { name -> "Running $name: $activeToolDetail" }
@@ -614,10 +626,11 @@ class AntigravityRuntimeBridge(
                         ),
                     )
                 } else {
+                    val elapsed = System.currentTimeMillis() - sessionStartedAtMillis
                     check(exit == 0) {
-                        friendlyError(lastDiagnostic.ifBlank { "Antigravity exited with code $exit" })
+                        friendlyError(lastDiagnostic.ifBlank { "Antigravity exited with code $exit" }, elapsed)
                     }
-                    error(friendlyError(lastDiagnostic.ifBlank { "Antigravity exited without answering" }))
+                    error(friendlyError(lastDiagnostic.ifBlank { "Antigravity exited without answering" }, elapsed))
                 }
             }
             val paths = checkpoints.changedFiles(workspace, before)
@@ -638,15 +651,17 @@ class AntigravityRuntimeBridge(
                 userStopRequested -> "Stopped by user"
                 // Already classified when it was thrown; classifying the friendly text again could pick up log noise.
                 it is AntigravitySessionException -> it.message.orEmpty()
-                else -> antigravityFriendlyError(it.message.orEmpty(), diagnostic)
+                else -> antigravityFriendlyError(
+                    it.message.orEmpty(), diagnostic, System.currentTimeMillis() - sessionStartedAtMillis,
+                )
             }
             emitFailure(sessionId, message)
             if (userStopRequested) cancelForegroundRuntime()
             else finishForegroundRuntime(false, projectSlug, message)
         }
         if (!keptWarm) {
-            runCatching { openTailer?.close() }
-            runCatching { spawnedOutputFile?.delete() }
+            runCatching { openTailer?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+            runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         }
         activeProcess = null
         activeSessionId = null
@@ -720,7 +735,14 @@ class AntigravityRuntimeBridge(
 
     private fun cancelForegroundRuntime() = foreground.cancel()
 
-    private fun friendlyError(raw: String): String = antigravityFriendlyError(raw)
+    private fun friendlyError(raw: String, elapsedMs: Long = 0L): String =
+        antigravityFriendlyError(raw, elapsedMs = elapsedMs)
+
+    /** True when agy wrote to its own log in the last 45 s: it is alive and busy (a retry, a stream), not stuck. */
+    private fun agyLogActive(nowMillis: Long): Boolean = runCatching {
+        val logDir = File(installer.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
+        logDir.listFiles()?.any { it.isFile && it.name.startsWith("cli-") && nowMillis - it.lastModified() < 45_000L } == true
+    }.getOrDefault(false)
 
     private fun recentAntigravityDiagnostic(sinceMillis: Long): String = runCatching {
         val logDir = File(
@@ -735,11 +757,17 @@ class AntigravityRuntimeBridge(
     }.getOrDefault("")
 }
 
-internal fun antigravityFriendlyError(raw: String, diagnostic: String = ""): String {
+internal fun antigravityFriendlyError(
+    raw: String,
+    diagnostic: String = "",
+    elapsedMs: Long = Long.MAX_VALUE,
+): String {
     val rawValue = raw.replace(Regex("\\s+"), " ").trim()
     // The error itself decides first. The agy log tail is only a fallback and never decides "timeout": the
     // prompt tells the agent to run `timeout 15m gradle`, so that word is routinely in the log.
-    return classifyAntigravityError(rawValue, allowTimeout = true)
+    // "60-minute limit" only fits a turn that really ran that long; a quick timeout is something else, show it.
+    val ranToLimit = elapsedMs >= ANTIGRAVITY_TASK_LIMIT_MS - 5 * 60_000L
+    return classifyAntigravityError(rawValue, allowTimeout = ranToLimit)
         ?: classifyAntigravityError("$rawValue ${antigravityDiagnosticSignal(diagnostic)}", allowTimeout = false)
         ?: rawValue.ifBlank { ANTIGRAVITY_GENERIC_FAILURE }.take(500)
 }
@@ -758,11 +786,16 @@ private fun antigravityDiagnosticSignal(diagnostic: String): String {
         .trim()
 }
 
+private const val ANTIGRAVITY_TASK_LIMIT_MS = 60 * 60_000L
+
 private fun classifyAntigravityError(value: String, allowTimeout: Boolean): String? = when {
     ANTIGRAVITY_NETWORK_ERRORS.any { value.contains(it, ignoreCase = true) } ->
         "Antigravity could not reach Google. Check your internet or DNS connection, then try again."
     ANTIGRAVITY_SERVER_ERRORS.any { value.contains(it, ignoreCase = true) } ->
         "Google's Antigravity server returned an error. Wait a moment and try again; your files were kept."
+    // Google's stream sent nothing for 5 minutes (a long think on a big context): agy gives up on that request.
+    value.contains("stream idle timeout", true) || value.contains("context deadline exceeded", true) ->
+        "Google sent nothing for 5 minutes while the model was thinking, so Antigravity dropped the request. Your files were kept."
     value.contains("stream was interrupted", true) ->
         "The connection to Google dropped mid-answer. Send the message again to continue."
     value.contains("authentication required", true) ||
@@ -774,7 +807,9 @@ private fun classifyAntigravityError(value: String, allowTimeout: Boolean): Stri
         "Your Antigravity account is out of credits. Check the account plan or wait for credits to reset."
     allowTimeout && (value.contains("timed out", true) || value.contains("timeout", true)) ->
         "Antigravity reached the 60-minute task limit. Your files were kept."
-    value.contains("model", true) && (value.contains("invalid", true) || value.contains("unknown", true)) ->
+    // Only from agy's own error: its log mentions models routinely ("model ... not in local config, using default"),
+    // which made unrelated failures read as "model unavailable".
+    allowTimeout && value.contains("model", true) && (value.contains("invalid", true) || value.contains("unknown", true)) ->
         "The selected Antigravity model is unavailable. Refresh models in Settings."
     else -> null
 }
@@ -806,6 +841,12 @@ private const val RETRY_CHECK_INTERVAL_MS = 5_000L
 
 /** Without any agy event this long after the prompt, agy is waiting for end of input (or a kept one is stuck). */
 private const val WARM_PROBE_MS = 20_000L
+
+/** A kept-alive agy gets this long to show a first event before its log decides whether it is still working. */
+private const val WARM_REUSE_QUIET_MS = 90_000L
+
+/** Upper bound for a kept-alive agy that shows no event at all, however active its log looks. */
+private const val WARM_REUSE_MAX_WAIT_MS = 10 * 60_000L
 
 /** A kept-alive agy is stopped after this long without a message. */
 private const val WARM_IDLE_MS = 10 * 60_000L
@@ -851,7 +892,9 @@ private fun MutableList<String>.addAntigravitySelection(model: String, effort: S
     if (model.isNotBlank()) {
         addAll(listOf("--model", model))
     }
-    if (effort in setOf("low", "medium", "high")) {
+    // A model id that already names its effort (gemini-4-argon-high) gets no second, possibly different --effort.
+    val modelHasEffort = Regex("-(low|medium|high)$").containsMatchIn(model)
+    if (!modelHasEffort && effort in setOf("low", "medium", "high")) {
         addAll(listOf("--effort", effort))
     }
 }
@@ -864,17 +907,18 @@ internal fun antigravityWorkspacePrompt(projectSlug: String, prompt: String): St
         .replace("\"", "&quot;")
         .replace("'", "&apos;")
     return """
-    <pocketdev_workspace>
+    <nextcraft_workspace>
     The active project workspace is /workspace/$safeSlug. Create, edit, read, run, and build project files only inside this directory. Do not create project output under ~/.gemini/antigravity-cli/scratch or any other scratch directory.
 
     For Android projects, never use plain `gradle build` or start a Gradle daemon. Build only the debug APK. First check whether `app/build/outputs/apk/debug/` already contains an APK.
     - For a first build with no existing debug APK, allow dependency resolution and use:
       `timeout 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace`
     - For a later build with an existing debug APK, prefer the cached fast path:
-      `timeout 5m gradle -Dorg.gradle.jvmargs= --no-daemon --max-workers=2 --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`
+      `timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`
     NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.
     Start the optimized Android build with `run_command` normally inside the Root Chroot workspace. If Antigravity moves the command into a managed task, immediately use `manage_task` to check its status and obtain its log path. Poll that managed task and tail its log with short commands about every 10 seconds so the user receives progress, then read the final output and exit status. Never wait silently on a long foreground command.
-    </pocketdev_workspace>
+    Operate with the precision, speed, and surgical execution style of Claude Code: target under 10 seconds per turn, combine related operations into a single tool step whenever possible, and deliver concise, high-signal responses.
+    </nextcraft_workspace>
 
     $prompt
 """.trimIndent()

@@ -9,10 +9,10 @@
 # NextCraft Forge (`com.nextcraft.forge`) — Master Engineering Blueprint (Fase 1 s/d Fase 7)
 
 > **Identitas Proyek**: **NextCraft Forge** (`com.nextcraft.forge`) — Autonomous Mobile AI Coding IDE & Native Android Build System  
-> **Basis Arsitektur Faktual**: Adaptasi & Upgrade dari [`techjarves/Mobile-Harness`](https://github.com/techjarves/Mobile-Harness) (`com.jarves.mh`)  
+> **Basis**: NextCraft Forge (`com.nextcraft.forge`). Atribusi kode pihak ketiga: lihat [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).  
 > **Mesin Runtime Tunggal**: **Pure Root Chroot (`su -mm` + Linux Kernel Mounts)** di atas **Ubuntu 24.04 LTS (`noble`) ARM64** (Tanpa PRoot / Tanpa Dual-Runtime)  
 > **Strategi AI**: **Multi-Agent CLI Harness (`Claude Code`, `Antigravity CLI`, `DeepSeek Harness`) + Cloud AI Providers via On-Device Loopback Gateway** (Tanpa Local LLM Engine / Tanpa Fine-Tuning)  
-> **Prinsip Dokumen**: **100% Faktual, Tanpa Placeholder, Tanpa Halusinasi**. Setiap bagian dari *Master Engineering Prompt (Fase 1 s/d Fase 7)* dieksekusi menggunakan arsitektur nyata **Zero-Cloud On-Device** milik `Mobile-Harness` yang telah di-upgrade ke **Pure Root Chroot**.
+> **Prinsip Dokumen**: **100% Faktual, Tanpa Placeholder, Tanpa Halusinasi**. Setiap bagian dari *Master Engineering Prompt (Fase 1 s/d Fase 7)* dieksekusi menggunakan arsitektur nyata **Zero-Cloud On-Device** NextCraft Forge di atas **Pure Root Chroot**.
 
 ---
 
@@ -23,7 +23,7 @@ Sebelum masuk ke Fase 1–7, tabel berikut memetakan komponen standar pada templ
 | Komponen pada Prompt Template | Mengapa Tidak Dipakai Mentah | Ekuivalen Faktual di **NextCraft Forge (`com.nextcraft.forge`)** |
 | :--- | :--- | :--- |
 | **Flutter (Dart) / React Native** | Butuh akses JNI level rendah ke PTY (`/dev/ptmx`), proses grup UNIX (`setpgid`), `FileObserver` (`inotify`), dan `PackageInstaller` Android. | **Android Native (Kotlin 2.x + Jetpack Compose Material 3 + C11 JNI `libforgespawn.so`)** |
-| **Cloud Backend (Python FastAPI + Nginx)** | `Mobile-Harness` adalah aplikasi **100% Local-First / Zero-Cloud Backend** (tanpa biaya server bulanan). | **On-Device Loopback Gateway (`LocalFormatGateway.kt` & `OpenRouterRoutingGateway.kt` di `127.0.0.1:<random_port>`)** |
+| **Cloud Backend (Python FastAPI + Nginx)** | NextCraft Forge adalah aplikasi **100% Local-First / Zero-Cloud Backend** (tanpa biaya server bulanan). | **On-Device Loopback Gateway (`LocalFormatGateway.kt` & `OpenRouterRoutingGateway.kt` di `127.0.0.1:<random_port>`)** |
 | **PostgreSQL + `pgvector` + Redis** | Membuka DB server & Vector DB di HP menghabiskan RAM; pencarian kode sumber jauh lebih presisi dengan pencarian leksikal langsung di filesystem. | **`AppPreferences.kt` (JSON), `ApiKeyVault.kt` (`AndroidKeyStore` AES-GCM), `WorkspaceCheckpoints.kt` (`cp -al` hardlink), & `ripgrep` (`rg`) di `/workspace/nextcraft`** |
 | **Celery + Redis/RabbitMQ Workers** | Pekerjaan panjang (kompilasi Gradle, ekstraksi `.tar.zst`, eksekusi AI Agent) berjalan lokal di OS Android. | **Android Foreground Services (`RuntimeExecutionService.kt` & `RuntimeSetupService.kt`) + `PARTIAL_WAKE_LOCK` + Bypass Phantom Process Killer via `su`** |
 | **Terraform AWS ECS + Docker ECR** | Tidak ada container cloud; kontainer adalah rootfs Ubuntu 24.04 lokal yang didistribusikan secara statis. | **Deterministic Rootfs Pipeline (`build-core-on-rooted-android.sh` + `create_deterministic_tar.py` + GitHub Releases Static Edge `manifest.json`)** |
@@ -38,11 +38,11 @@ Sebelum masuk ke Fase 1–7, tabel berikut memetakan komponen standar pada templ
 * **User Pain Point**:
   Developer Android dan full-stack engineer yang memiliki perangkat flagship Android ber-chipset ARM64 kencang (Snapdragon 8 Gen 2/3/Elite, RAM 8–16 GB) dan akses **Root (`Magisk` / `KernelSU` / `APatch`)** tidak dapat memanfaatkan performa hardware mereka secara penuh untuk menjalankan agen coding otonom (*Claude Code*, *Antigravity CLI*, *DeepSeek Harness*) sekaligus mengompilasi proyek Android (`Gradle assembleDebug`) secara lokal.
 * **Current Solution & Mengapa Tidak Cukup**:
-  1. **`techjarves/Mobile-Harness` (Standar PRoot)**: Sudah memiliki UI Chat, Diff Viewer, dan integrasi CLI Agent yang matang, tetapi menggunakan **`libproot.so`** (`ptrace` syscall interception) di atas **Ubuntu 20.04 (`focal`)**. Setiap syscall `stat()`, `openat()`, dan `execve()` selama kompilasi Gradle/Kotlin harus melewati *context switch* user-space berkali-kali, sehingga kompilasi menjadi **3x–8x lebih lambat** dibanding kernel native, dan pustaka `glibc 2.31` di Ubuntu 20.04 mulai usang untuk binary CLI modern.
+  1. **Pendekatan PRoot**: Sudah memiliki UI Chat, Diff Viewer, dan integrasi CLI Agent yang matang, tetapi menggunakan **`libproot.so`** (`ptrace` syscall interception) di atas **Ubuntu 20.04 (`focal`)**. Setiap syscall `stat()`, `openat()`, dan `execve()` selama kompilasi Gradle/Kotlin harus melewati *context switch* user-space berkali-kali, sehingga kompilasi menjadi **3x–8x lebih lambat** dibanding kernel native, dan pustaka `glibc 2.31` di Ubuntu 20.04 mulai usang untuk binary CLI modern.
   2. **Termux + `chroot` Manual**: Memberikan kecepatan native, tetapi sama sekali tidak memiliki UI Mobile IDE terpadu—tidak ada *Streaming Thinking/Tool Card UI*, tidak ada *Side-by-Side Diff & 1-Tap Undo/Keep Checkpoint*, tidak ada *Loopback API Format Translator* (`Anthropic` $\leftrightarrow$ `OpenAI`), dan tidak ada *1-Tap APK Build & Install*.
   3. **Cloud IDE (GitHub Codespaces / Replit)**: Wajib online 100%, memiliki latensi input tinggi saat sinyal seluler buruk, dan membebankan biaya sewa VM per jam.
 * **Proposed Solution (**NextCraft Forge**)**:
-  Membangun aplikasi Android native (`com.nextcraft.forge`) yang menggabungkan seluruh keunggulan UX dan orkestrasi multi-agen dari `techjarves/Mobile-Harness` dengan **Single-Engine Pure Root Chroot (`su -mm` + Linux kernel bind mounts)** di atas **Ubuntu 24.04 LTS (`noble`) ARM64**. Seluruh operasi file, eksekusi CLI Agent (`claude`, `agy`, `dsh`), dan kompilasi Gradle di `/workspace/nextcraft` berjalan dengan **100% kecepatan kernel native (0% overhead `ptrace`)**, dilengkapi *inotify streaming*, *hardlink workspace checkpoints*, *silent root APK installer*, dan *root package-scoped logcat debugger*.
+  Membangun aplikasi Android native (`com.nextcraft.forge`) yang menggabungkan seluruh keunggulan UX dan orkestrasi multi-agen dari agent app berbasis PRoot dengan **Single-Engine Pure Root Chroot (`su -mm` + Linux kernel bind mounts)** di atas **Ubuntu 24.04 LTS (`noble`) ARM64**. Seluruh operasi file, eksekusi CLI Agent (`claude`, `agy`, `dsh`), dan kompilasi Gradle di `/workspace/nextcraft` berjalan dengan **100% kecepatan kernel native (0% overhead `ptrace`)**, dilengkapi *inotify streaming*, *hardlink workspace checkpoints*, *silent root APK installer*, dan *root package-scoped logcat debugger*.
 * **Explicitly Out of Scope (v1.0)**:
   1. **Dukungan Non-Root / PRoot (`libproot.so`)**: Dihapus total demi menjaga kode C/JNI (`libforgespawn.so`) dan manajemen mount tetap ramping, cepat, dan bebas *dual-runtime bug*.
   2. **On-Device Local LLM Inference (`llama.cpp` / `GGUF`) & Model Fine-Tuning (`LoRA` / `QLoRA` / `RLHF`)**: Dihapus total agar seluruh RAM perangkat (8–16 GB) didedikasikan untuk daemon kompilasi `Gradle`/`Kotlin`/`aapt2` dan CLI Agent.
@@ -70,14 +70,14 @@ Sebelum masuk ke Fase 1–7, tabel berikut memetakan komponen standar pada templ
 | **ChatGPT / Claude Official Mobile App** | Hanya Chat & Cloud Sandbox terbatas (tidak bisa akses filesystem proyek lokal atau build APK). | Sangat halus (native SSE), tetapi tidak menampilkan *inline file diff* atau kontrol proses lokal. | Hanya baca cache chat lama; tidak bisa eksekusi kode offline. | Rendah (terkunci pada 1 vendor, tidak bisa BYOK lintas provider). | Langganan ($20–$200/bln). | Tidak bisa menghubungkan API key kustom di dalam aplikasi mobile resmi. | Tidak memiliki kontainer Linux lokal, tidak bisa menjalankan CLI Agent di repo lokal, dan tidak bisa mem-build APK. |
 | **Termux + `chroot` / `proot-distro`** | Tidak ada integrasi AI bawaan (user harus install & konfigurasi CLI manual di layar terminal kecil). | Hanya teks terminal ANSI mentah; sulit membaca diff file atau menyetujui *tool call* di layar sentuh. | Penuh (100% lokal), namun tanpa Offline Gradle Maven bundle siap pakai. | Sangat tinggi via skrip shell, tetapi UX mobile buruk. | Gratis (Open Source). | Bebas (konfigurasi manual via variabel `export` di `.bashrc`). | Tidak ada GUI Chat, tidak ada *Side-by-Side Diff + Undo Checkpoint*, tidak ada *LocalFormatGateway* (`Anthropic` $\leftrightarrow$ `OpenAI`). |
 | **GitHub Codespaces / Replit Mobile** | AI Copilot / Replit Agent berjalan di server cloud. | Sering lag saat koneksi seluler tidak stabil; terminal berbasis WebSocket sering putus saat pindah aplikasi. | **Nol (0%)** — aplikasi mati total jika tidak ada koneksi internet. | Terbatas pada VM cloud yang disewa. | Pay-as-you-go / Langganan ($10–$50+/bln). | Mendukung secret environment di cloud. | Biaya bulanan mahal, wajib online terus-menerus, dan tidak bisa langsung menginstal serta men-debug APK di HP tempat aplikasi berjalan. |
-| **`techjarves/Mobile-Harness` (Original)** | Multi-Agent CLI (`Claude Code`, `Antigravity CLI`, `DSH`) + Loopback Gateway multi-provider. | Bagus (Thinking accordion, Tool cards, Diff viewer), namun pembacaan stream masih memakai *polling* `delay(80)`. | Sangat baik (Offline Maven repo & varian APK `offline`). | Tinggi (8 provider AI, OAuth & BYOK, custom base URL). | Gratis / BYOK (Bring Your Own Key / Subscription). | Mendukung `ANTHROPIC`, `OPENROUTER`, `OPENAI_CHAT`, `OPENAI_RESPONSES`. | **Masih memakai `PRoot` (`libproot.so`) di atas Ubuntu 20.04**, sehingga kompilasi Gradle lambat akibat overhead `ptrace`, proses root tidak terkelola, dan `glibc 2.31` sudah tua. |
-| **NextCraft Forge (`com.nextcraft.forge`)** | **Multi-Agent CLI (`claude`, `agy`, `dsh`) berjalan di Pure Root Chroot Ubuntu 24.04 LTS ARM64.** | **Real-time `inotify` (`FileObserver`) stream (<2ms latency) + Native Diff Viewer + Root Logcat Crash Catcher.** | **100% Offline Gradle Build + Hardlink Checkpoints (`cp -al`) + Offline `.tar.zst` Bundles.** | **Penuh: Root Chroot penuh, 8+ AI Providers, API Key Pool, Custom System Prompts.** | **100% Gratis & Open/BYOK (User memakai API Key / OAuth sendiri tanpa biaya tengah).** | **Loopback Gateway lokal menerjemahkan Anthropic Messages API ke OpenAI/OpenRouter secara transparan.** | **Menutup gap performa `Mobile-Harness`: 3x–8x lebih cepat di I/O & kompilasi berkat Pure Kernel Chroot + Ubuntu 24.04 LTS.** |
+| **Agent app berbasis PRoot** | Multi-Agent CLI (`Claude Code`, `Antigravity CLI`, `DSH`) + Loopback Gateway multi-provider. | Bagus (Thinking accordion, Tool cards, Diff viewer), namun pembacaan stream masih memakai *polling* `delay(80)`. | Sangat baik (Offline Maven repo & varian APK `offline`). | Tinggi (8 provider AI, OAuth & BYOK, custom base URL). | Gratis / BYOK (Bring Your Own Key / Subscription). | Mendukung `ANTHROPIC`, `OPENROUTER`, `OPENAI_CHAT`, `OPENAI_RESPONSES`. | **Masih memakai `PRoot` (`libproot.so`) di atas Ubuntu 20.04**, sehingga kompilasi Gradle lambat akibat overhead `ptrace`, proses root tidak terkelola, dan `glibc 2.31` sudah tua. |
+| **NextCraft Forge (`com.nextcraft.forge`)** | **Multi-Agent CLI (`claude`, `agy`, `dsh`) berjalan di Pure Root Chroot Ubuntu 24.04 LTS ARM64.** | **Real-time `inotify` (`FileObserver`) stream (<2ms latency) + Native Diff Viewer + Root Logcat Crash Catcher.** | **100% Offline Gradle Build + Hardlink Checkpoints (`cp -al`) + Offline `.tar.zst` Bundles.** | **Penuh: Root Chroot penuh, 8+ AI Providers, API Key Pool, Custom System Prompts.** | **100% Gratis & Open/BYOK (User memakai API Key / OAuth sendiri tanpa biaya tengah).** | **Loopback Gateway lokal menerjemahkan Anthropic Messages API ke OpenAI/OpenRouter secara transparan.** | **Menutup gap performa PRoot: 3x–8x lebih cepat di I/O & kompilasi berkat Pure Kernel Chroot + Ubuntu 24.04 LTS.** |
 
 ---
 
 ### 1.4 KPI & Success Metrics
 
-| Kategori | Metrik | Target (`Mobile-Harness` PRoot Baseline $\rightarrow$ **NextCraft Forge Target**) | Metode Pengukuran di Aplikasi |
+| Kategori | Metrik | Target (PRoot Baseline $\rightarrow$ **NextCraft Forge Target**) | Metode Pengukuran di Aplikasi |
 | :--- | :--- | :--- | :--- |
 | **Runtime Performance** | Cold-Start Chroot Execution Latency | $1.800\text{ ms}$ (PRoot) $\rightarrow$ **$\le 350\text{ ms}$ (P95)** | `ForgeMetricsTracker.measureChrootSpawnMs()` |
 | **Streaming UX** | Local Stream Tail Latency (JSONL write $\rightarrow$ Compose UI state) | $80\text{ ms}$ (Polling) $\rightarrow$ **$\le 5\text{ ms}$ (P95 via `inotify`)** | Timestamp delta antara `FileObserver.MODIFY` dan `StateFlow` emission |
@@ -90,7 +90,7 @@ Sebelum masuk ke Fase 1–7, tabel berikut memetakan komponen standar pada templ
 
 ### 1.5 Cost, Quota & BYOK Architecture (Zero-Middleman Model)
 
-Berbeda dengan aplikasi SaaS yang menarik biaya langganan untuk mem-proxy API di server mereka, **NextCraft Forge** mengadopsi arsitektur **100% Direct Bring-Your-Own-Key (BYOK) & Direct OAuth Subscription** yang diwarisi dari `techjarves/Mobile-Harness`:
+Berbeda dengan aplikasi SaaS yang menarik biaya langganan untuk mem-proxy API di server mereka, **NextCraft Forge** mengadopsi arsitektur **100% Direct Bring-Your-Own-Key (BYOK) & Direct OAuth Subscription**:
 
 1. **Tiga Mode Akses Provider (Tanpa Biaya Tengah)**:
    - **Tier A — Direct OAuth Subscription (`CLAUDE` Pro/Max & `Antigravity` Google OAuth)**: Pengguna login menggunakan akun langganan resmi mereka melalui alur PTY OAuth (`AntigravityAuthController.kt` & Claude OAuth). Token disimpan di dalam kontainer chroot (`/root/.claude` atau `/root/.gemini`) dengan izin ketat `0600`.
@@ -121,7 +121,7 @@ Berbeda dengan aplikasi SaaS yang menarik biaya langganan untuk mem-proxy API di
   3. *Android Native (Kotlin 2.x + Jetpack Compose Material 3 + C11 JNI `libforgespawn.so`)*: Akses langsung (zero-overhead) ke API sistem Android, Java NIO `FileChannel`, `FileObserver`, dan JNI C11.
 * **Decision**: Memilih **Option 3 — Android Native (Kotlin 2.x + Jetpack Compose + C11 JNI `libforgespawn.so`)**.
 * **Consequences**:
-  - **Positif**: Performa UI 60/120fps stabil, ukuran APK ramping, integrasi langsung dengan `AndroidKeyStore`, `ForegroundService`, dan `libforgespawn.so`, serta 100% kompatibel dengan basis kode `techjarves/Mobile-Harness`.
+  - **Positif**: Performa UI 60/120fps stabil, ukuran APK ramping, integrasi langsung dengan `AndroidKeyStore`, `ForegroundService`, dan `libforgespawn.so`.
   - **Negatif**: Hanya berjalan di Android (`arm64-v8a`), yang memang sesuai dengan target perangkat *Rooted Android*.
 
 #### ADR-002: Container Runtime Engine Selection (Pure Root Chroot vs PRoot)
@@ -550,7 +550,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 object NextCraftColors {
-    // IDE Dark Palette (Adapted & refined from Mobile-Harness Theme.kt)
+    // IDE Dark Palette
     val Background = Color(0xFF0B0E14)
     val Surface = Color(0xFF131821)
     val SurfaceVariant = Color(0xFF1B222D)
@@ -756,7 +756,7 @@ class ChatViewModel(
 
 ### 3.3 AI Streaming Integration (`InotifyStreamTailer.kt`)
 
-Menggantikan pola lama di `Mobile-Harness` yang melakukan *polling* `delay(80)` dan membuka-tutup `RandomAccessFile` terus-menerus. Di **NextCraft Forge**, kita menggunakan **Persistent `FileChannel` + Android `FileObserver` (`inotify`)** untuk membaca baris JSONL dari CLI Agent di `/nextcraft-bridge/output.jsonl` dengan latensi **$< 2\text{ ms}$**:
+Menggantikan pola lama yang melakukan *polling* `delay(80)` dan membuka-tutup `RandomAccessFile` terus-menerus. Di **NextCraft Forge**, kita menggunakan **Persistent `FileChannel` + Android `FileObserver` (`inotify`)** untuk membaca baris JSONL dari CLI Agent di `/nextcraft-bridge/output.jsonl` dengan latensi **$< 2\text{ ms}$**:
 
 ```kotlin
 // app/src/main/java/com/nextcraft/forge/runtime/InotifyStreamTailer.kt
@@ -1168,7 +1168,7 @@ class LocalFormatGateway(
 
     /**
      * Menyuntikkan provider routing OpenRouter (order + allow_fallbacks)
-     * seperti pada OpenRouterRoutingGateway.kt di Mobile-Harness.
+     * seperti pada OpenRouterRoutingGateway.kt.
      */
     private fun injectOpenRouterRouting(rawJson: String): String = runCatching {
         val obj = JSONObject(rawJson)
@@ -1222,7 +1222,7 @@ class LocalFormatGateway(
 
 ### 4.2 Codebase Context & Agentic Search Pipeline (Pengganti Cloud Vector RAG)
 
-Di `techjarves/Mobile-Harness` dan **NextCraft Forge**, pengambilan konteks kode (*Retrieval-Augmented Generation*) **tidak menggunakan Vector Database (`pgvector`/`Pinecone`)** karena pencarian vektor sering melewatkan simbol fungsi/nama variabel yang eksak dan memakan RAM. Sebagai gantinya, digunakan **Agentic Lexical Retrieval Pipeline** yang menggabungkan:
+Di **NextCraft Forge**, pengambilan konteks kode (*Retrieval-Augmented Generation*) **tidak menggunakan Vector Database (`pgvector`/`Pinecone`)** karena pencarian vektor sering melewatkan simbol fungsi/nama variabel yang eksak dan memakan RAM. Sebagai gantinya, digunakan **Agentic Lexical Retrieval Pipeline** yang menggabungkan:
 1. **Workspace Context Prompt Injection (`<nextcraft_workspace>`)**: Menyuntikkan peta struktur proyek, aturan path `/workspace/nextcraft`, dan perintah kompilasi Gradle hemat memori secara deterministik.
 2. **In-Chroot `ripgrep` (`rg`) & AST/Symbol Indexing**: Memberikan CLI Agent akses native speed ke `rg --files` dan `rg -n` di atas mount kernel `/workspace/nextcraft`.
 
@@ -1338,7 +1338,7 @@ object ProviderRuntimeErrorDetector {
 
 ### 4.4 Pure Root Chroot Execution Engine (`forge_spawn.c`, `chroot-exec.sh`, `ChrootMountManager.kt`)
 
-Inilah jantung utama yang membedakan **NextCraft Forge** dari `techjarves/Mobile-Harness` versi PRoot:
+Inilah jantung utama yang membedakan **NextCraft Forge** dari pendekatan PRoot:
 1. **`forge_spawn.c` (`libforgespawn.so`)**: Library C11/JNI ramping (tanpa `proot`, `talloc`, atau `shmem`) yang melakukan `fork()`, membuat grup proses baru (`setpgid(0, 0)`), mengalokasikan PTY atau mengarahkan `stdout`/`stderr` ke `outputFile`, dan mengeksekusi `su -mm -c chroot-exec.sh`.
 2. **`chroot-exec.sh`**: Skrip supervisor Root yang melakukan **idempotent kernel mounts** (`/dev`, `/dev/pts`, `/proc`, `/sys`, `/tmp`, `/system`, `/apex`, `/vendor`, `/product`, `/workspace/nextcraft`, `/nextcraft-bridge`), menyetel `GLIBC_TUNABLES=glibc.pthread.rseq=0` (agar `glibc 2.39` Ubuntu 24.04 tidak crash `ENOSYS` di kernel Android), melakukan `chroot`, dan memasang **Exit Trap (`chown -R $APP_UID:$APP_UID`)** agar file yang dibuat oleh `root` di dalam Chroot tetap bisa dibaca/di-undo oleh aplikasi Android (`u0_aXXX`).
 
@@ -1588,7 +1588,7 @@ object PromptRegistry {
 
 ### 5.2 Evaluation & Automated Build Diagnostics Pipeline (`AndroidBuildEvaluator.kt`)
 
-Mengadaptasi dan memperluas `AndroidBuildSupport.kt` dari `Mobile-Harness`: mengevaluasi kualitas kode yang dihasilkan AI Agent bukan dengan opini subjektif, melainkan dengan **kompilasi nyata (`assembleDebug`)**, ekstraksi error compiler (`Kotlin`, `AAPT2`, `D8`), dan pemeriksaan kesehatan lingkungan (`AndroidHealthCheck`):
+`AndroidBuildSupport.kt`: mengevaluasi kualitas kode yang dihasilkan AI Agent bukan dengan opini subjektif, melainkan dengan **kompilasi nyata (`assembleDebug`)**, ekstraksi error compiler (`Kotlin`, `AAPT2`, `D8`), dan pemeriksaan kesehatan lingkungan (`AndroidHealthCheck`):
 
 ```kotlin
 // app/src/main/java/com/nextcraft/forge/runtime/AndroidBuildEvaluator.kt
@@ -1878,7 +1878,7 @@ import kotlinx.coroutines.withContext
 object RootLogcatDebugger {
     /**
      * Mengambil logcat & stacktrace crash khusus untuk package aplikasi yang sedang di-build user.
-     * Di Mobile-Harness non-root, logcat hanya bisa membaca PID miliknya sendiri.
+     * Tanpa root, logcat hanya bisa membaca PID miliknya sendiri.
      * Di NextCraft Forge (Root), su -c memungkinkan pembacaan log aplikasi target secara presisi!
      */
     suspend fun capturePackageLogcat(targetPackage: String, maxLines: Int = 250): String =
@@ -2212,7 +2212,7 @@ Runbook operasional untuk menangani insiden P0–P3 yang spesifik terjadi pada a
 * **Kapasitas Sprint**: 70% Fitur IDE & Agen, 20% Optimasi Kecepatan Chroot & Gradle, 10% Pembaruan Bundel Toolchain Ubuntu 24.04.
 * **Tabel Evaluasi Metrik per Sprint**:
 
-| Metrik | Target | Baseline (`Mobile-Harness` PRoot) | Target **NextCraft Forge (Chroot)** | Tindakan Jika Meleset |
+| Metrik | Target | Baseline (PRoot) | Target **NextCraft Forge (Chroot)** | Tindakan Jika Meleset |
 | :--- | :--- | :--- | :--- | :--- |
 | **Chroot Cold-Start P95** | $\le 350\text{ ms}$ | $1.800\text{ ms}$ | **$240\text{ ms}$** | Audit `mount_once` di `chroot-exec.sh` agar tidak melakukan mount ulang yang sudah aktif. |
 | **Stream Tail Latency (`inotify`)** | $\le 5\text{ ms}$ | $80\text{ ms}$ | **$1.8\text{ ms}$** | Pastikan `FileObserver` tidak jatuh ke mode fallback polling. |

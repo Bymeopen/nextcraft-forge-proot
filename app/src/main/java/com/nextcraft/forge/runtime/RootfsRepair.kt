@@ -57,7 +57,29 @@ internal object RootfsRepair {
         return all
     }
 
-    fun safeDeleteRecursively(targetDir: File): Boolean {
+    /**
+     * While the marker exists chroot-exec refuses to mount (it checks after taking the mount lock), so no launch can add
+     * mounts between [ensureUnmounted] and the rename or delete that follows. Nested calls share one marker.
+     */
+    private val maintenanceDepth = java.util.concurrent.atomic.AtomicInteger()
+
+    internal fun maintenanceMarker(runtimeChild: File): File = File(runtimeChild.absoluteFile.parentFile, MAINTENANCE_MARKER)
+
+    private inline fun <T> underMaintenance(runtimeChild: File, block: () -> T): T {
+        val marker = maintenanceMarker(runtimeChild)
+        if (maintenanceDepth.getAndIncrement() == 0) runCatching { marker.parentFile?.mkdirs(); marker.writeText("1") }
+        try {
+            return block()
+        } finally {
+            if (maintenanceDepth.decrementAndGet() == 0) marker.delete()
+        }
+    }
+
+    const val MAINTENANCE_MARKER = ".rootfs-maintenance"
+
+    fun safeDeleteRecursively(targetDir: File): Boolean = underMaintenance(targetDir) { safeDeleteLocked(targetDir) }
+
+    private fun safeDeleteLocked(targetDir: File): Boolean {
         if (!targetDir.exists()) return true
         return targetDir.deleteRecursively() || !targetDir.exists()
     }
@@ -69,6 +91,10 @@ internal object RootfsRepair {
         validate: (File) -> Boolean,
     ) {
         if (!backup.exists()) return
+        underMaintenance(rootfs) { reconcileLocked(rootfs, staging, backup, validate) }
+    }
+
+    private fun reconcileLocked(rootfs: File, staging: File, backup: File, validate: (File) -> Boolean) {
 
         if (!rootfs.exists()) {
             check(moveDirectory(backup, rootfs)) { "Could not restore the previous Linux environment" }
@@ -97,6 +123,10 @@ internal object RootfsRepair {
             "Rebuilt Linux environment failed validation"
         }
         check(!backup.exists()) { "A previous Linux environment repair is still pending" }
+        underMaintenance(rootfs) { activateLocked(rootfs, staging, backup, validate) }
+    }
+
+    private fun activateLocked(rootfs: File, staging: File, backup: File, validate: (File) -> Boolean) {
 
         val hadRootfs = rootfs.exists()
         if (hadRootfs) {

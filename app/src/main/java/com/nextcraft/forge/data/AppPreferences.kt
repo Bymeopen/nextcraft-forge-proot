@@ -103,7 +103,8 @@ class AppPreferences(private val context: Context) {
         set(value) { preferences.edit().putString("primary_agent_kind", value).apply() }
 
     var antigravityModel: String
-        get() = preferences.getString("agent_antigravity_model", "") ?: ""
+        get() = preferences.getString("agent_antigravity_model", "claude-sonnet-5-5-low")
+            ?.takeIf { it.isNotBlank() } ?: "claude-sonnet-5-5-low"
         set(value) { preferences.edit().putString("agent_antigravity_model", value).apply() }
 
     /** Email of the signed-in Claude account, remembered so the account card shows it before `claude auth status` answers. */
@@ -117,7 +118,7 @@ class AppPreferences(private val context: Context) {
         set(value) { preferences.edit().putString("agent_claude_effort", value).apply() }
 
     var antigravityEffort: String
-        get() = preferences.getString("agent_antigravity_effort", "high") ?: "high"
+        get() = preferences.getString("agent_antigravity_effort", "low") ?: "low"
         set(value) { preferences.edit().putString("agent_antigravity_effort", value).apply() }
 
     var antigravitySignedIn: Boolean
@@ -131,6 +132,11 @@ class AppPreferences(private val context: Context) {
     var githubLogin: String
         get() = preferences.getString("github_login", "") ?: ""
         set(value) { preferences.edit().putString("github_login", value).apply() }
+
+    /** Keep the agent's file changes automatically after each turn instead of asking for a review. On by default. */
+    var autoKeepChanges: Boolean
+        get() = preferences.getBoolean("auto_keep_changes", true)
+        set(value) { preferences.edit().putBoolean("auto_keep_changes", value).apply() }
 
     /** Offer the libGDX game starter in New project and its build targets. Off by default. */
     var gameTemplatesEnabled: Boolean
@@ -147,6 +153,11 @@ class AppPreferences(private val context: Context) {
         get() = preferences.getBoolean("update_notifications", true)
         set(value) { preferences.edit().putBoolean("update_notifications", value).apply() }
 
+    /** Downloads and installs a newer build in the background while the app is idle (root needed; otherwise only notifies). */
+    var autoInstallUpdates: Boolean
+        get() = preferences.getBoolean("auto_install_updates", true)
+        set(value) { preferences.edit().putBoolean("auto_install_updates", value).apply() }
+
     /** versionCode of the newest build already announced, so one build never notifies twice. */
     var lastNotifiedUpdateCode: Long
         get() = preferences.getLong("last_notified_update_code", 0L)
@@ -154,6 +165,11 @@ class AppPreferences(private val context: Context) {
 
 
     /** Adds a note about the `rea` toolkit to chat messages that concern binaries. Off by default: nothing extra is sent. */
+    /** Lets the agent create timers with a `[[schedule: …]]` line in its reply (and tells it how). */
+    var scheduleEnabled: Boolean
+        get() = preferences.getBoolean("schedule_enabled", true)
+        set(value) { preferences.edit().putBoolean("schedule_enabled", value).apply() }
+
     var reaChatHint: Boolean
         get() = preferences.getBoolean("rea_chat_hint", false)
         set(value) { preferences.edit().putBoolean("rea_chat_hint", value).apply() }
@@ -212,6 +228,11 @@ class AppPreferences(private val context: Context) {
     var themeMode: String
         get() = preferences.getString("theme_mode", "dark") ?: "dark"
         set(value) { preferences.edit().putString("theme_mode", value).apply() }
+
+    /** Glass without blur: solid surfaces, for people who find the frosted look hard to read or whose phone is slow. */
+    var glassSolid: Boolean
+        get() = preferences.getBoolean("glass_solid", false)
+        set(value) { preferences.edit().putBoolean("glass_solid", value).apply() }
 
     var languageCode: String
         get() = preferences.getString("language_code", "system") ?: "system"
@@ -467,7 +488,7 @@ class AppPreferences(private val context: Context) {
     /** Moves an unreadable file aside so the next save does not overwrite it. */
     private fun quarantine(file: File) {
         android.util.Log.w("AppPreferences", "Quarantining unreadable ${file.name}")
-        runCatching { file.renameTo(File(file.parentFile, "${file.name}.corrupt-${System.currentTimeMillis()}")) }
+        runCatching { file.renameTo(File(file.parentFile, "${file.name}.corrupt-${System.currentTimeMillis()}")) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AppPreferences", it) }
     }
 
     /** Writes via a temp file that is fsynced before the rename, so a power loss cannot leave an empty file. */

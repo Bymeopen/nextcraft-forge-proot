@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
@@ -282,25 +281,19 @@ internal fun RuntimeOnboardingScreen(
                     .heightIn(min = 48.dp),
             )
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+        // The three quiet actions share one wrapping row: a separate row for each cost ~100dp of the checklist's height.
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.Center,
         ) {
             ForgeTextButton(onClick = onRepairRootfs, enabled = !isInstalling) { Text(stringResource(R.string.onb_repair)) }
-            Text("·", color = scheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterVertically))
             ForgeTextButton(onClick = onRefreshStatus) { Text(stringResource(R.string.onb_recheck)) }
+            ForgeTextButton(onClick = onEnterWorkspaceAnyway) {
+                Text(stringResource(R.string.onb_continue_anyway), color = scheme.onSurfaceVariant)
+            }
         }
-        Divider(
-            color = scheme.outlineVariant,
-            thickness = 0.5.dp,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-        )
-        ForgeTextButton(
-            onClick = onEnterWorkspaceAnyway,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        ) { Text(stringResource(R.string.onb_continue_anyway), color = scheme.onSurfaceVariant) }
     }
     }
     }

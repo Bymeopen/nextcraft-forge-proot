@@ -85,10 +85,12 @@ fun AgentConfigScreen(
     val isProvisioning = state.setupSnapshot.status == RuntimeSetupStatus.RUNNING
     val runtimeBusy = !state.runtimeInstalled || isProvisioning
 
+    val scroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .forgeFadingVertical(scroll, MaterialTheme.colorScheme.background)
+            .verticalScroll(scroll)
             .padding(start = 14.dp, end = 14.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -99,16 +101,25 @@ fun AgentConfigScreen(
             subtitle = listOf(
                 state.agentKind.displayTitle(),
                 (if (state.agentKind == AgentKind.ANTIGRAVITY) state.antigravityModel else state.providerProfile.model).ifBlank { "default" },
-            ).joinToString(" · "),
+            // Two deliberate lines: " · " in one line wrapped after the dot next to the status chip.
+            ).joinToString("\n"),
             horizontalPadding = 6.dp,
             trailing = {
+                val installed = state.agentKind in state.installedAgents
                 AgentStatusPill(
-                    when {
+                    status = when {
                         // A connection test means nothing before the agent is installed.
-                        state.agentKind !in state.installedAgents -> AgentStatus.NOT_INSTALLED
+                        !installed -> AgentStatus.NOT_INSTALLED
                         statusText.startsWith("✓") -> AgentStatus.ONLINE
                         statusText.startsWith("✕") -> AgentStatus.FAILED
                         else -> AgentStatus.NOT_TESTED
+                    },
+                    busy = installed && state.apiBusy,
+                    // One tap on the chip runs the same test as "Test connection" further down.
+                    onClick = when {
+                        !installed -> null
+                        state.agentKind == AgentKind.ANTIGRAVITY -> viewModel::validateAntigravityConnection
+                        else -> viewModel::validateProviderConnection
                     },
                 )
             },
@@ -116,9 +127,10 @@ fun AgentConfigScreen(
 
         val agents = AgentKind.entries
         ForgePillTabs(
-            items = agents.map { it.displayTitle() },
+            items = agents.map { it.shortTitle() },
             selectedIndex = agents.indexOf(state.agentKind).coerceAtLeast(0),
             onSelect = { viewModel.selectAgent(agents[it]) },
+            equalWidth = true, // 3 providers fit side by side; scrolling cut "Antigravity" at the edge
         )
         val agent = state.agentKind
         val agentInstalled = agent in state.installedAgents
@@ -183,7 +195,8 @@ fun AgentConfigScreen(
             ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.agent_ai_provider),
-                    fontSize = ForgeType.screenTitle,
+                    // A card heading, not a second page title: the page's own title ("Atur AI") must stay the biggest text.
+                    fontSize = ForgeType.cardTitle,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = ForgeSpace.card, top = ForgeSpace.cardInner, end = ForgeSpace.card, bottom = 4.dp),
                 )
@@ -508,22 +521,42 @@ fun AgentConfigScreen(
 
 private enum class AgentStatus { ONLINE, NOT_TESTED, FAILED, NOT_INSTALLED }
 
-/** Connection state chip at the end of the screen header: Online after a passing test, Failed after a failing one. */
+/**
+ * Connection state chip at the end of the screen header: Online after a passing test, Failed after a failing one.
+ * It is also the shortcut to run that test ([onClick]); while a check runs it says so instead of keeping a stale state.
+ */
 @Composable
-private fun AgentStatusPill(status: AgentStatus) {
+private fun AgentStatusPill(status: AgentStatus, busy: Boolean, onClick: (() -> Unit)?) {
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
-    val (label, dot) = when (status) {
-        AgentStatus.ONLINE -> stringResource(R.string.agent_status_online) to tokens.successText
-        AgentStatus.FAILED -> stringResource(R.string.agent_status_failed) to tokens.dangerText
-        AgentStatus.NOT_TESTED -> stringResource(R.string.agent_status_not_tested) to scheme.onSurfaceVariant
-        AgentStatus.NOT_INSTALLED -> stringResource(R.string.agent_status_not_installed) to scheme.onSurfaceVariant
+    val (label, dot) = when {
+        busy -> stringResource(R.string.agent_status_checking) to scheme.primary
+        status == AgentStatus.ONLINE -> stringResource(R.string.agent_status_online) to tokens.successText
+        status == AgentStatus.FAILED -> stringResource(R.string.agent_status_failed) to tokens.dangerText
+        status == AgentStatus.NOT_TESTED -> stringResource(R.string.agent_status_not_tested) to scheme.onSurfaceVariant
+        else -> stringResource(R.string.agent_status_not_installed) to scheme.onSurfaceVariant
     }
-    Surface(shape = RoundedCornerShape(100), color = tokens.cardElevatedColor, border = tokens.cardBorderStroke) {
-        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(dot))
+    val tappable = onClick != null && !busy
+    Surface(
+        shape = RoundedCornerShape(100),
+        color = tokens.cardElevatedColor,
+        border = tokens.cardBorderStroke,
+        modifier = Modifier
+            .heightIn(min = ForgeSpace.minTouch)
+            .clip(RoundedCornerShape(100))
+            .then(if (tappable) Modifier.clickable(role = Role.Button, onClickLabel = stringResource(R.string.agent_test_connection), onClick = onClick!!) else Modifier),
+    ) {
+        Row(
+            modifier = Modifier.heightIn(min = ForgeSpace.minTouch).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (busy) {
+                androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = dot)
+            } else {
+                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(dot))
+            }
             Spacer(modifier = Modifier.width(8.dp))
-            Text(label, fontSize = ForgeType.secondary, fontWeight = FontWeight.Medium, color = if (status == AgentStatus.NOT_TESTED || status == AgentStatus.NOT_INSTALLED) scheme.onSurfaceVariant else dot)
+            Text(label, fontSize = ForgeType.secondary, fontWeight = FontWeight.Medium, color = if (busy || status == AgentStatus.NOT_TESTED || status == AgentStatus.NOT_INSTALLED) scheme.onSurfaceVariant else dot)
         }
     }
 }

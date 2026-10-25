@@ -49,6 +49,13 @@ fun AgentKind.displayTitle(): String = when (this) {
     AgentKind.ANTIGRAVITY -> "Antigravity CLI"
 }
 
+/** Short name for segmented controls, where three labels share one row and "Antigravity CLI" does not fit. */
+fun AgentKind.shortTitle(): String = when (this) {
+    AgentKind.CLAUDE_CODE -> "Claude"
+    AgentKind.DEEPSEEK_HARNESS -> "DeepSeek"
+    AgentKind.ANTIGRAVITY -> "Antigravity"
+}
+
 @StringRes
 fun AgentKind.subtitleRes(): Int = when (this) {
     AgentKind.CLAUDE_CODE -> R.string.agent_claude_sub
