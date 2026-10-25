@@ -225,7 +225,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                             ProjectPane.TERMINAL -> ForgeTab.TERMINAL
                             ProjectPane.PREVIEW -> ForgeTab.PREVIEW
                         },
-                        changedCount = state.changedItems.size,
+                        changedCount = state.changedItems.count { it.accepted == null },
                         agentRunning = state.runningChatIds.isNotEmpty(),
                         terminalBusy = state.terminalRunning,
                         onSelectTab = { tab ->
@@ -243,7 +243,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                     ForgeBottomBar(
                         entries = navEntries,
                         selectedTab = state.activeTab,
-                        changedCount = state.changedItems.size,
+                        changedCount = state.changedItems.count { it.accepted == null },
                         agentRunning = state.sessionRunning,
                         terminalBusy = state.terminalRunning,
                         onSelectTab = viewModel::selectTab,

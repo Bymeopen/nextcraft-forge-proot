@@ -177,7 +177,7 @@ internal fun RepoSheet(
                 item { Text(stringResource(R.string.repo_prs_empty), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant) }
             }
             items(pending, key = { it.id }) { chat ->
-                val st = state.branchStatus.getValue(chat.id)
+                val st = state.branchStatus[chat.id] ?: return@items
                 val busy = chat.id in state.branchBusy
                 val running = chat.id in state.runningChatIds
                 Surface(shape = RoundedCornerShape(16.dp), color = tokens.cardElevatedColor, border = tokens.cardBorderStroke, modifier = Modifier.fillMaxWidth()) {

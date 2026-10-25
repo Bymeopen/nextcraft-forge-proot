@@ -85,6 +85,7 @@ class BuildMatrixController(
     context: Context,
     private val activeProject: () -> Project?,
     private val workspaceFor: (String) -> File,
+    private val onWorkspaceChanged: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -152,6 +153,7 @@ class BuildMatrixController(
                 throw cancelled
             } finally {
                 mutable.update { it.copy(running = false) }
+                onWorkspaceChanged(project.id)
             }
         }
     }
@@ -160,10 +162,12 @@ class BuildMatrixController(
     fun createIosWorkflow() {
         val project = activeProject()?.takeIf { it.id == mutable.value.projectId } ?: return
         scope.launch {
+            var created = false
             val message = withContext(Dispatchers.IO) {
                 runCatching {
                     val workspace = workspaceFor(project.id)
                     if (writeIosWorkflow(workspace)) {
+                        created = true
                         "✓ $IOS_WORKFLOW_PATH created. Commit and push it, then run it from the CI/CD tool (macOS runner).\n"
                     } else {
                         "$IOS_WORKFLOW_PATH already exists or no Xcode project was found; nothing written.\n"
@@ -171,6 +175,7 @@ class BuildMatrixController(
                 }.getOrElse { "✕ ${it.message ?: "could not write the workflow"}\n" }
             }
             mutable.update { it.copy(log = appendLog(it.log, message)) }
+            if (created) onWorkspaceChanged(project.id)
         }
     }
 
@@ -232,6 +237,7 @@ class BuildMatrixController(
                 throw cancelled
             } finally {
                 mutable.update { it.copy(running = false) }
+                onWorkspaceChanged(project.id)
             }
         }
     }

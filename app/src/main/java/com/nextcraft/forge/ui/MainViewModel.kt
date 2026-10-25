@@ -271,8 +271,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Developer tools (Tools tab). Each owns its state flow and runs its commands in the chroot.
     val diagnostics = DiagnosticsController(application)
-    val rea = com.nextcraft.forge.runtime.ReaController(application)
-    val buildMatrix = BuildMatrixController(application, { _state.value.activeProject }, { checkpoints.ensureWorkspace(it) })
+    val rea = com.nextcraft.forge.runtime.ReaController(application) { changedProjectId ->
+        viewModelScope.launch {
+            if (_state.value.activeProjectId == changedProjectId) {
+                refreshWorkspaceFilesAndChanges(changedProjectId)
+            }
+        }
+    }
+    val buildMatrix = BuildMatrixController(
+        application,
+        { _state.value.activeProject },
+        { checkpoints.ensureWorkspace(it) },
+        onWorkspaceChanged = { changedProjectId ->
+            viewModelScope.launch {
+                if (_state.value.activeProjectId == changedProjectId) {
+                    refreshWorkspaceFilesAndChanges(changedProjectId)
+                }
+            }
+        },
+    )
     val cicd = CiCdController(application, { _state.value.activeProject }, { checkpoints.ensureWorkspace(it) })
     val ssh = SshController(application)
     val rom = RomStudioController(application)
@@ -1021,6 +1038,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingDeleteJob?.cancel()
         val project = pending.project
         synchronized(reservedSlugs) { reservedSlugs -= project.slug }
+        dropScheduledTasks { it.projectId == project.id }
         _state.update { it.copy(undoDelete = null) }
         viewModelScope.launch(Dispatchers.IO) {
             wipeProjectData(project)
@@ -1044,6 +1062,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             File(getApplication<Application>().filesDir, "workspaces/${projectId}").deleteRecursivelyNoFollow()
             checkpoints.checkpointDir(projectId).deleteRecursively()
+            File(getApplication<Application>().filesDir, "snapshots/${projectId}").deleteRecursively()
         }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
     }
 
@@ -1688,7 +1707,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is BranchMergeResult.Failed -> UiText.res(R.string.branch_failed, result.message)
             }
             _state.update { it.copy(bannerMessage = message) }
-            if (result == BranchMergeResult.Done) refreshWorkspaceFilesAndChanges(project.id)
+            if (result == BranchMergeResult.Done) {
+                refreshWorkspaceFilesAndChanges(project.id)
+                refreshProjectRepo()
+            }
             refreshBranchStatus(chatId)
         }
     }
@@ -3953,7 +3975,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun clearTerminal() = clearTerminal(null)
+    fun clearTerminal() {
+        terminals.values.forEach { it.session?.reset() }
+        _state.update { it.copy(bannerMessage = UiText.res(R.string.terminal_clear_terminal)) }
+    }
 
     fun clearTerminal(chatId: String?) {
         // reset() clears the screen and attributes; the shell redraws its prompt on the next key.

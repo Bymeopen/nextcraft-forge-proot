@@ -354,6 +354,11 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
     val agent = if (multi) sheetAgent else state.agentKind
     val profile = if (agent == state.agentKind) state.providerProfile else state.agentProfiles[agent] ?: state.providerProfile
     val discovered = if (agent == state.agentKind) state.discoveredModels else emptyList()
+    androidx.compose.runtime.LaunchedEffect(agent) {
+        if (agent == AgentKind.ANTIGRAVITY && state.antigravityModels.isEmpty() && !state.antigravityModelsLoading) {
+            viewModel.refreshAntigravityModels()
+        }
+    }
     ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
