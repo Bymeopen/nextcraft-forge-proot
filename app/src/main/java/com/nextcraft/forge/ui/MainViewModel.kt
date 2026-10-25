@@ -2317,13 +2317,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun canStartAnotherRun(agent: AgentKind = _state.value.agentKind, ignoringKey: RunKey? = null): Boolean {
         val active = if (ignoringKey == null) runs else runs.filterKeys { it != ignoringKey }
         if (active.isEmpty()) return true
-        if (active.size >= MAX_PARALLEL_CHATS) return false
+        val hwProfile = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(getApplication())
+        val maxParallel = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.maxParallelChatsFor(hwProfile)
+            .coerceAtMost(MAX_PARALLEL_CHATS)
+        if (active.size >= maxParallel) return false
         val memory = android.app.ActivityManager.MemoryInfo()
         getApplication<Application>().getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(memory)
-        val minFreeBytes = when (agent) {
-            AgentKind.CLAUDE_CODE -> MIN_FREE_BYTES_FOR_CLAUDE_RUN
-            AgentKind.ANTIGRAVITY, AgentKind.DEEPSEEK_HARNESS -> MIN_FREE_BYTES_FOR_LIGHT_RUN
-        }
+        val isHeavyNodeAgent = agent == AgentKind.CLAUDE_CODE
+        val minFreeBytes = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.minFreeBytesForRun(hwProfile, isHeavyNodeAgent)
         return !memory.lowMemory && memory.availMem >= minFreeBytes
     }
 

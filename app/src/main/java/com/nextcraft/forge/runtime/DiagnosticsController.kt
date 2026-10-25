@@ -94,11 +94,33 @@ class DiagnosticsController(private val context: Context) {
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val charging = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
             ?.let { it == BatteryManager.BATTERY_STATUS_CHARGING || it == BatteryManager.BATTERY_STATUS_FULL } == true
+        val hwProfile = runCatching { DeviceHardwareOptimizer.inspect(appContext, forceRefresh = true) }.getOrNull()
         return buildList {
             add(row(R.string.diag_device, UiText.Raw("${Build.MANUFACTURER} ${Build.MODEL}")))
             add(row(R.string.diag_android, UiText.Raw("${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")))
-            add(row(R.string.diag_cpu, UiText.res(R.string.diag_cores, Build.SUPPORTED_ABIS.firstOrNull().orEmpty(), Runtime.getRuntime().availableProcessors())))
+            if (hwProfile != null) {
+                add(UiText.Raw("SoC / Profile") to UiText.Raw("${hwProfile.socVendor.displayName} (${hwProfile.socModel}) · ${hwProfile.socTier.label}"))
+                add(
+                    row(
+                        R.string.diag_cpu,
+                        UiText.Raw(
+                            "${Build.SUPPORTED_ABIS.firstOrNull().orEmpty()} · ${hwProfile.topology.totalCores} cores " +
+                                "(${hwProfile.topology.performanceCores}P+${hwProfile.topology.efficiencyCores}E)",
+                        ),
+                    ),
+                )
+            } else {
+                add(row(R.string.diag_cpu, UiText.res(R.string.diag_cores, Build.SUPPORTED_ABIS.firstOrNull().orEmpty(), Runtime.getRuntime().availableProcessors())))
+            }
             add(row(R.string.diag_ram, UiText.res(R.string.diag_free_of, formatBytes(memory.availMem), formatBytes(memory.totalMem))))
+            if (hwProfile != null && hwProfile.swap.hasActiveSwap) {
+                val algSuffix = hwProfile.swap.zramAlgorithm?.let { " ($it)" }.orEmpty()
+                add(
+                    UiText.Raw("SwapRAM / ZRAM") to UiText.Raw(
+                        "${formatBytes(hwProfile.swap.swapFreeMb * 1024L * 1024L)} free of ${formatBytes(hwProfile.swap.swapTotalMb * 1024L * 1024L)}$algSuffix",
+                    ),
+                )
+            }
             // What this app itself costs right now: the numbers to compare before and after an optimisation.
             appMemoryMb()?.let { (pss, heap) -> add(row(R.string.diag_app_memory, UiText.res(R.string.diag_app_memory_value, pss, heap))) }
             procStatusValue("Threads")?.let { add(row(R.string.diag_app_threads, UiText.Raw(it.toString()))) }

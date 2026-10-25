@@ -505,16 +505,23 @@ fun LiveResourceMiniBar(
     val stats = remember { mutableStateOf("") }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
+            val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context, forceRefresh = true)
             val mem = android.app.ActivityManager.MemoryInfo()
             context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mem)
-            val freeGb = String.format(java.util.Locale.US, "%.1f GB", mem.availMem / (1024.0 * 1024.0 * 1024.0))
+            val freeGb = String.format(java.util.Locale.US, "%.1f", mem.availMem / (1024.0 * 1024.0 * 1024.0))
             val totalGb = String.format(java.util.Locale.US, "%.1f GB", mem.totalMem / (1024.0 * 1024.0 * 1024.0))
-            val heapMb = Runtime.getRuntime().let { (it.totalMemory() - it.freeMemory()) shr 20 }
+            val swapStr = if (hw.swap.hasActiveSwap) {
+                val swapUsedGb = String.format(java.util.Locale.US, "%.1f", hw.swap.swapUsedMb / 1024.0)
+                val swapTotalGb = String.format(java.util.Locale.US, "%.1f GB", hw.swap.swapTotalMb / 1024.0)
+                " · Swap $swapUsedGb/$swapTotalGb"
+            } else {
+                ""
+            }
             val bat = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
             val level = bat?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = bat?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
             val batStr = if (level >= 0 && scale > 0) " · ${level * 100 / scale}%" else ""
-            stats.value = "RAM $freeGb / $totalGb · Heap ${heapMb}MB$batStr"
+            stats.value = "${hw.socVendor.shortBadge} · RAM $freeGb/$totalGb$swapStr$batStr"
             kotlinx.coroutines.delay(5_000)
         }
     }

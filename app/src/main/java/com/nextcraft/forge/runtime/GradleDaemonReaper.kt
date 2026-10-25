@@ -19,7 +19,9 @@ internal object GradleDaemonReaper {
         "for p in \$(pgrep -f 'org[.]gradle[.]launcher[.]daemon[.]bootstrap[.]GradleDaemon|[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do " +
             "a=\$(cut -d' ' -f14,15 /proc/\$p/stat 2>/dev/null); sleep 1; " +
             "b=\$(cut -d' ' -f14,15 /proc/\$p/stat 2>/dev/null); " +
-            "[ -n \"\$a\" ] && [ \"\$a\" = \"\$b\" ] && kill \$p; done"
+            "[ -n \"\$a\" ] && [ \"\$a\" = \"\$b\" ] && kill \$p; done; " +
+            "sync 2>/dev/null || true; " +
+            "echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true"
 
     @Volatile private var lastRunAt = 0L
 

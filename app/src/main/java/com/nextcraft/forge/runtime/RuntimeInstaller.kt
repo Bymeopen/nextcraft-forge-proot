@@ -1467,11 +1467,26 @@ class RuntimeInstaller(private val context: Context) {
         val gradleDir = File(runtimeRootfs, "root/.gradle").apply { mkdirs() }
         val properties = File(gradleDir, "gradle.properties")
         val existingLines = properties.readTextOrNull()?.lineSequence()?.toList().orEmpty()
+        val hwProfile = DeviceHardwareOptimizer.inspect(context)
         val managedLines = listOf(
             "$ANDROID_AAPT2_PROPERTY=$ANDROID_AAPT2_GUEST_PATH",
-            "$GRADLE_JVMARGS_PROPERTY=${gradleJvmArgs(deviceTotalMemoryMb())}",
+            "$GRADLE_JVMARGS_PROPERTY=${gradleJvmArgs(
+                totalMemoryMb = hwProfile.totalRamMb,
+                swapTotalMb = hwProfile.swap.swapTotalMb,
+                swapFreeMb = hwProfile.swap.swapFreeMb,
+                socVendor = hwProfile.socVendor,
+                socTier = hwProfile.socTier,
+                performanceCores = hwProfile.topology.performanceCores,
+            )}",
             "$KOTLIN_EXECUTION_PROPERTY=in-process",
-        ) + gradleSpeedProperties(deviceTotalMemoryMb()).map { (key, value) -> "$key=$value" }
+        ) + gradleSpeedProperties(
+            totalMemoryMb = hwProfile.totalRamMb,
+            swapTotalMb = hwProfile.swap.swapTotalMb,
+            swapFreeMb = hwProfile.swap.swapFreeMb,
+            socVendor = hwProfile.socVendor,
+            socTier = hwProfile.socTier,
+            performanceCores = hwProfile.topology.performanceCores,
+        ).map { (key, value) -> "$key=$value" }
         val updatedLines = existingLines.filterNot(::isManagedAndroidGradleProperty) + managedLines
         if (existingLines == updatedLines) return
 
@@ -2846,17 +2861,27 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
          *  - configuration cache (problems only warn, so incompatible builds still run) and the build cache;
          *  - workers: 4 / 3 / 2 and parallel project execution only on 10 GB+ (each worker adds memory).
          */
-        internal fun gradleSpeedProperties(totalMemoryMb: Long): List<Pair<String, String>> {
-            val (daemon, workers, parallel) = when {
-                totalMemoryMb >= 10_000 -> Triple(true, 4, true)
-                totalMemoryMb >= 7_000 -> Triple(true, 3, false)
-                else -> Triple(false, 2, false)
-            }
+        internal fun gradleSpeedProperties(
+            totalMemoryMb: Long,
+            swapTotalMb: Long = 0L,
+            swapFreeMb: Long = swapTotalMb,
+            socVendor: DeviceHardwareOptimizer.SocVendor = DeviceHardwareOptimizer.SocVendor.GENERIC_ARM64,
+            socTier: DeviceHardwareOptimizer.SocTier = DeviceHardwareOptimizer.SocTier.BALANCED_MID,
+            performanceCores: Int = 4,
+        ): List<Pair<String, String>> {
+            val tuning = DeviceHardwareOptimizer.computeGradleTuning(
+                totalMemoryMb = totalMemoryMb,
+                swapTotalMb = swapTotalMb,
+                swapFreeMb = swapFreeMb,
+                socVendor = socVendor,
+                socTier = socTier,
+                performanceCores = performanceCores,
+            )
             return listOf(
-                "org.gradle.daemon" to daemon.toString(),
-                "org.gradle.daemon.idletimeout" to "600000",
-                GRADLE_WORKERS_PROPERTY to workers.toString(),
-                GRADLE_PARALLEL_PROPERTY to parallel.toString(),
+                "org.gradle.daemon" to tuning.daemonEnabled.toString(),
+                "org.gradle.daemon.idletimeout" to tuning.daemonIdleTimeoutMs.toString(),
+                GRADLE_WORKERS_PROPERTY to tuning.maxWorkers.toString(),
+                GRADLE_PARALLEL_PROPERTY to tuning.parallelExecution.toString(),
                 "org.gradle.caching" to "true",
                 "org.gradle.configuration-cache" to "true",
                 "org.gradle.configuration-cache.problems" to "warn",
@@ -2864,21 +2889,28 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         }
 
         /**
-         * Gradle JVM options for builds inside the chroot, sized to the device so small phones are not pushed into the
-         * low-memory killer (exit 137) and large ones can build Room/KSP projects that need more:
-         *  - 10 GB or more reported (12 GB class phones): 3 GB heap, 1.5 GB metaspace;
-         *  - 7 GB or more (8 GB class): 2 GB heap, 1 GB metaspace;
-         *  - below that: an eighth of RAM for the heap (at least 768 MB), 512 MB metaspace.
-         * Android reports less than the marketed size (an "8 GB" phone shows about 7.3 GB), hence the thresholds.
+         * Gradle JVM options for builds inside the chroot, sized to the device's RAM tier (4/6/8/10/12/16 GB+),
+         * built-in phone SwapRAM / ZRAM, and SoC core topology so small phones are not pushed into the
+         * low-memory killer (exit 137) and large ones can build Room/KSP projects at full speed.
          */
-        internal fun gradleJvmArgs(totalMemoryMb: Long): String {
-            val (heapMb, metaspaceMb) = when {
-                totalMemoryMb >= 10_000 -> 3072L to 1536
-                totalMemoryMb >= 7_000 -> 2048L to 1024
-                else -> ((totalMemoryMb / 8).coerceIn(768L, 1024L) / 128) * 128 to 512
-            }
-            return "-Xmx${heapMb}m -XX:MaxMetaspaceSize=${metaspaceMb}m " +
-                "-XX:+UseG1GC -XX:G1PeriodicGCInterval=15000 -XX:+G1PeriodicGCInvokesConcurrent " +
+        internal fun gradleJvmArgs(
+            totalMemoryMb: Long,
+            swapTotalMb: Long = 0L,
+            swapFreeMb: Long = swapTotalMb,
+            socVendor: DeviceHardwareOptimizer.SocVendor = DeviceHardwareOptimizer.SocVendor.GENERIC_ARM64,
+            socTier: DeviceHardwareOptimizer.SocTier = DeviceHardwareOptimizer.SocTier.BALANCED_MID,
+            performanceCores: Int = 4,
+        ): String {
+            val tuning = DeviceHardwareOptimizer.computeGradleTuning(
+                totalMemoryMb = totalMemoryMb,
+                swapTotalMb = swapTotalMb,
+                swapFreeMb = swapFreeMb,
+                socVendor = socVendor,
+                socTier = socTier,
+                performanceCores = performanceCores,
+            )
+            return "-Xmx${tuning.heapMb}m -XX:MaxMetaspaceSize=${tuning.metaspaceMb}m " +
+                "-XX:+UseG1GC -XX:+UseStringDeduplication -XX:G1PeriodicGCInterval=15000 -XX:+G1PeriodicGCInvokesConcurrent " +
                 "-XX:G1HeapWastePercent=5 -XX:MaxHeapFreeRatio=40 -XX:MinHeapFreeRatio=15 " +
                 "-Dfile.encoding=UTF-8"
         }
@@ -3381,7 +3413,28 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"
             export REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
             export GIT_SSL_CAINFO="/etc/ssl/certs/ca-certificates.crt"
-            export NODE_OPTIONS="${'$'}{NODE_OPTIONS:---dns-result-order=ipv4first}"
+            # Auto-size Node.js V8 heap (--max-old-space-size) and glibc arenas based on phone RAM (4/6/8/10/12/16GB+) and built-in SwapRAM/ZRAM
+            if [ -z "${'$'}NODE_OPTIONS" ]; then
+                MEM_KB=${'$'}(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 4194304)
+                SWAP_KB=${'$'}(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+                MEM_MB=${'$'}((MEM_KB / 1024))
+                SWAP_MB=${'$'}((SWAP_KB / 1024))
+                if [ "${'$'}MEM_MB" -ge 13500 ]; then
+                    NODE_HEAP_MB=4096
+                elif [ "${'$'}MEM_MB" -ge 10400 ]; then
+                    NODE_HEAP_MB=3072
+                elif [ "${'$'}MEM_MB" -ge 8800 ]; then
+                    NODE_HEAP_MB=2560
+                elif [ "${'$'}MEM_MB" -ge 6800 ]; then
+                    NODE_HEAP_MB=2048
+                elif [ "${'$'}MEM_MB" -ge 4500 ]; then
+                    if [ "${'$'}SWAP_MB" -ge 2048 ]; then NODE_HEAP_MB=1792; else NODE_HEAP_MB=1536; fi
+                else
+                    NODE_HEAP_MB=1024
+                fi
+                export NODE_OPTIONS="--dns-result-order=ipv4first --max-old-space-size=${'$'}NODE_HEAP_MB"
+            fi
+            export MALLOC_ARENA_MAX="${'$'}{MALLOC_ARENA_MAX:-2}"
             export COREPACK_ENABLE_DOWNLOAD_PROMPT="0"
             export GLIBC_TUNABLES="glibc.pthread.rseq=0"
             export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"

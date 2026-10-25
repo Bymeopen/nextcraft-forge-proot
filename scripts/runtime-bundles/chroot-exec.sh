@@ -285,7 +285,28 @@ export CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"
 export REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 export GIT_SSL_CAINFO="/etc/ssl/certs/ca-certificates.crt"
-export NODE_OPTIONS="${NODE_OPTIONS:---dns-result-order=ipv4first}"
+# Auto-size Node.js V8 heap (--max-old-space-size) and glibc arenas based on phone RAM (4/6/8/10/12/16GB+) and built-in SwapRAM/ZRAM
+if [ -z "$NODE_OPTIONS" ]; then
+    MEM_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 4194304)
+    SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    MEM_MB=$((MEM_KB / 1024))
+    SWAP_MB=$((SWAP_KB / 1024))
+    if [ "$MEM_MB" -ge 13500 ]; then
+        NODE_HEAP_MB=4096
+    elif [ "$MEM_MB" -ge 10400 ]; then
+        NODE_HEAP_MB=3072
+    elif [ "$MEM_MB" -ge 8800 ]; then
+        NODE_HEAP_MB=2560
+    elif [ "$MEM_MB" -ge 6800 ]; then
+        NODE_HEAP_MB=2048
+    elif [ "$MEM_MB" -ge 4500 ]; then
+        if [ "$SWAP_MB" -ge 2048 ]; then NODE_HEAP_MB=1792; else NODE_HEAP_MB=1536; fi
+    else
+        NODE_HEAP_MB=1024
+    fi
+    export NODE_OPTIONS="--dns-result-order=ipv4first --max-old-space-size=$NODE_HEAP_MB"
+fi
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT="0"
 export GLIBC_TUNABLES="glibc.pthread.rseq=0"
 export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
