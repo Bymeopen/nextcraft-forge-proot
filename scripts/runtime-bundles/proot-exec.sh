@@ -162,7 +162,7 @@
             fake /proc/sys/kernel/overflowuid overflowuid "65534"
             fake /proc/sys/kernel/overflowgid overflowgid "65534"
             [ -r /sys/fs/selinux ] && [ ! -r /sys/fs/selinux/enforce ] && BINDS="$BINDS -b $SYSDATA/sys_empty:/sys/fs/selinux"
-            for bionic_dir in /system /apex /vendor /product; do
+            for bionic_dir in /system /apex /vendor /product /system_ext /odm; do
                 [ -d "$bionic_dir" ] && BINDS="$BINDS -b $bionic_dir"
             done
             # Shared storage as proot-distro binds it; readable only when Android granted the app storage access.
