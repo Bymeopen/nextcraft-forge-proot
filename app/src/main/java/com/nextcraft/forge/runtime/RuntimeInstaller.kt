@@ -2046,6 +2046,11 @@ class RuntimeInstaller(private val context: Context) {
         File(context.filesDir, "runtime-bridge-responses").mkdirs()
         val appUid = AndroidProcess.myUid().toString()
 
+        val hwProfile = DeviceHardwareOptimizer.inspect(context)
+        val prootConfig = ProotAndChrootOptimizer.buildConfig(
+            hwProfile = hwProfile,
+            emulateHardLinks = true,
+        )
         val guestEnv = buildMap {
             put("HOME", "/root")
             put("USER", "root")
@@ -2065,6 +2070,7 @@ class RuntimeInstaller(private val context: Context) {
             put("LANG", "C.UTF-8")
             put("TERM", "xterm-256color")
             put("GLIBC_TUNABLES", "glibc.pthread.rseq=0")
+            putAll(prootConfig.environmentVars)
             putAll(environment)
         }
 
@@ -2245,6 +2251,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         )
         ensureSystemGitTrust()
         applyAndroidHostTools()
+        ProotAndChrootOptimizer.applyGuestWrappers(rootfs) { file, body, mode -> writeRootfsFileAtomically(file, body, mode = mode) }
         AntigravityCustomizations.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         ensureWorkspaceTrust("/workspace")
     }
@@ -3309,8 +3316,18 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             mount_once "/dev/pts" "${'$'}ROOTFS/dev/pts" "bind" "rw"
             mount_once "proc" "${'$'}ROOTFS/proc" "proc" "rw,nosuid,nodev,noexec"
             mount_once "sysfs" "${'$'}ROOTFS/sys" "sysfs" "rw,nosuid,nodev,noexec"
-            mount_once "tmpfs" "${'$'}ROOTFS/tmp" "tmpfs" "rw,nosuid,nodev,mode=1777"
-            mount_once "tmpfs" "${'$'}ROOTFS/dev/shm" "tmpfs" "rw,nosuid,nodev,mode=1777,size=256M"
+            TMP_MB="${'$'}{NEXTCRAFT_TMP_MB:-512}"
+            SHM_MB="${'$'}{NEXTCRAFT_SHM_MB:-256}"
+            mount_once "tmpfs" "${'$'}ROOTFS/tmp" "tmpfs" "rw,nosuid,nodev,mode=1777,size=${'$'}{TMP_MB}M"
+            mount_once "tmpfs" "${'$'}ROOTFS/dev/shm" "tmpfs" "rw,nosuid,nodev,mode=1777,size=${'$'}{SHM_MB}M"
+            mkdir -p "${'$'}ROOTFS/tmp/.proot-tmp" "${'$'}ROOTFS/tmp/.proot-l2s" 2>/dev/null || true
+            chmod 1777 "${'$'}ROOTFS/tmp/.proot-tmp" "${'$'}ROOTFS/tmp/.proot-l2s" 2>/dev/null || true
+            if [ ! -e "${'$'}ROOTFS/dev/fd" ]; then
+                ln -sf /proc/self/fd "${'$'}ROOTFS/dev/fd" 2>/dev/null || true
+            fi
+            [ ! -e "${'$'}ROOTFS/dev/stdin" ] && ln -sf /proc/self/fd/0 "${'$'}ROOTFS/dev/stdin" 2>/dev/null || true
+            [ ! -e "${'$'}ROOTFS/dev/stdout" ] && ln -sf /proc/self/fd/1 "${'$'}ROOTFS/dev/stdout" 2>/dev/null || true
+            [ ! -e "${'$'}ROOTFS/dev/stderr" ] && ln -sf /proc/self/fd/2 "${'$'}ROOTFS/dev/stderr" 2>/dev/null || true
 
             for bionic_dir in /system /apex /vendor /product; do
                 if [ -d "${'$'}bionic_dir" ]; then
@@ -3383,8 +3400,13 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                     "${'$'}ROOTFS"|"${'$'}ROOTFS"/*)
                         ;;
                     *)
-                        chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_WORKSPACE" 2>/dev/null || true
-                        chmod -R u+rwX,g+rwX "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                        if command -v find >/dev/null 2>&1 && command -v xargs >/dev/null 2>&1; then
+                            find "${'$'}HOST_WORKSPACE" \( ! -user "${'$'}APP_UID" -o ! -group "${'$'}APP_UID" \) -print0 2>/dev/null | xargs -0 -r chown -h "${'$'}APP_UID:${'$'}APP_UID" 2>/dev/null || chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                            find "${'$'}HOST_WORKSPACE" ! -perm -u+rw,g+rw -print0 2>/dev/null | xargs -0 -r chmod u+rwX,g+rwX 2>/dev/null || chmod -R u+rwX,g+rwX "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                        else
+                            chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                            chmod -R u+rwX,g+rwX "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                        fi
                         ;;
                 esac
                 chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_BRIDGE" 2>/dev/null || true
@@ -3435,6 +3457,9 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 export NODE_OPTIONS="--dns-result-order=ipv4first --max-old-space-size=${'$'}NODE_HEAP_MB"
             fi
             export MALLOC_ARENA_MAX="${'$'}{MALLOC_ARENA_MAX:-2}"
+            export PROOT_TMP_DIR="${'$'}{PROOT_TMP_DIR:-/tmp/.proot-tmp}"
+            export PROOT_L2S_DIR="${'$'}{PROOT_L2S_DIR:-/tmp/.proot-l2s}"
+            export UV_THREADPOOL_SIZE="${'$'}{UV_THREADPOOL_SIZE:-4}"
             export COREPACK_ENABLE_DOWNLOAD_PROMPT="0"
             export GLIBC_TUNABLES="glibc.pthread.rseq=0"
             export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
@@ -3447,6 +3472,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             esac
 
             CHROOT_BIN=""
+            PROOT_BIN=""
             for candidate in /system/bin/chroot /system/xbin/chroot /sbin/chroot /debug_ramdisk/chroot "${'$'}ROOTFS/usr/sbin/chroot"; do
                 if [ -x "${'$'}candidate" ]; then
                     CHROOT_BIN="${'$'}candidate"
@@ -3457,8 +3483,16 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 if command -v busybox >/dev/null 2>&1; then
                     CHROOT_BIN="busybox chroot"
                 else
-                    echo "chroot binary not found on host or guest rootfs" >&2
-                    exit 127
+                    for pcand in "${'$'}ROOTFS/usr/bin/proot" "${'$'}ROOTFS/usr/local/bin/proot" /system/bin/proot /data/data/com.termux/files/usr/bin/proot; do
+                        if [ -x "${'$'}pcand" ]; then
+                            PROOT_BIN="${'$'}pcand"
+                            break
+                        fi
+                    done
+                    if [ -z "${'$'}PROOT_BIN" ]; then
+                        echo "chroot or proot binary not found on host or guest rootfs" >&2
+                        exit 127
+                    fi
                 fi
             fi
 
@@ -3498,9 +3532,21 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             }
 
             exec 9>&-
-            ${'$'}SETSID ${'$'}CHROOT_BIN "${'$'}ROOTFS" /usr/bin/env \
-                GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" \
-                /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@" <&3 3<&- &
+            if [ -n "${'$'}CHROOT_BIN" ]; then
+                ${'$'}SETSID ${'$'}CHROOT_BIN "${'$'}ROOTFS" /usr/bin/env \
+                    GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" \
+                    /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@" <&3 3<&- &
+            else
+                ${'$'}SETSID "${'$'}PROOT_BIN" --root-id --link2symlink --sysvipc --kill-on-exit \
+                    -r "${'$'}ROOTFS" \
+                    -b /dev -b /dev/urandom:/dev/random -b /proc -b /proc/self/fd:/dev/fd -b /sys -b /system -b /apex -b /vendor -b /product \
+                    -b "${'$'}HOST_WORKSPACE:${'$'}GUEST_WORKSPACE" \
+                    -b "${'$'}HOST_BRIDGE:/nextcraft-bridge" \
+                    -b "${'$'}HOST_RESP:/nextcraft-bridge-responses" \
+                    -w "${'$'}GUEST_WORKSPACE" \
+                    /usr/bin/env GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" \
+                    /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@" <&3 3<&- &
+            fi
             child=${'$'}!
             trap 'forward_signal INT' INT
             trap 'forward_signal TERM' TERM

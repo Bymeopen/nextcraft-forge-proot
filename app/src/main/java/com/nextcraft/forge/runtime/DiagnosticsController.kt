@@ -152,6 +152,15 @@ class DiagnosticsController(private val context: Context) {
             add(row(R.string.diag_linux, UiText.res(if (installed) R.string.diag_installed else R.string.diag_not_installed)))
             runCatching { RuntimeMarkers.read(File(rootfs, ".nextcraft-rootfs-version"))?.trim() }.getOrNull()
                 ?.takeIf { it.isNotBlank() }?.let { add(row(R.string.diag_rootfs, UiText.Raw(it))) }
+            runCatching {
+                val hw = DeviceHardwareOptimizer.inspect(appContext)
+                val prootCfg = ProotAndChrootOptimizer.buildConfig(hw, hasRootAccess = root)
+                add(
+                    UiText.Raw("Container / PRoot optimization") to UiText.Raw(
+                        "${prootCfg.backend.displayName} · /dev/shm ${prootCfg.shmSizeMb}MB · /tmp ${prootCfg.tmpSizeMb}MB · UV threads ${prootCfg.uvThreadpoolSize}",
+                    ),
+                )
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DiagnosticsController", it) }
             if (installed) {
                 // The marker REA's installer writes; the version says whether the Learn/firmware/plugin features are there.
                 val rea = runCatching { RuntimeMarkers.read(File(rootfs, "root/.nextcraft-rea-version"))?.trim() }.getOrNull()?.takeIf { it.isNotBlank() }
