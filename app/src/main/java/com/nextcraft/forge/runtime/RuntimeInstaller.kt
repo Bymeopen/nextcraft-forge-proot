@@ -1517,11 +1517,12 @@ class RuntimeInstaller(private val context: Context) {
         val gradleDir = File(runtimeRootfs, "root/.gradle").apply { mkdirs() }
         val properties = File(gradleDir, "gradle.properties")
         val existingLines = properties.readTextOrNull()?.lineSequence()?.toList().orEmpty()
+        val hwProfile = DeviceHardwareOptimizer.inspect(context)
         val managedLines = listOf(
             "$ANDROID_AAPT2_PROPERTY=$ANDROID_AAPT2_GUEST_PATH",
-            "$GRADLE_JVMARGS_PROPERTY=${gradleJvmArgs(deviceTotalMemoryMb())}",
+            "$GRADLE_JVMARGS_PROPERTY=${gradleJvmArgs(hwProfile)}",
             "$KOTLIN_EXECUTION_PROPERTY=in-process",
-        ) + gradleSpeedProperties(deviceTotalMemoryMb()).map { (key, value) -> "$key=$value" }
+        ) + gradleSpeedProperties(hwProfile).map { (key, value) -> "$key=$value" }
         val updatedLines = existingLines.filterNot(::isManagedAndroidGradleProperty) + managedLines
         if (existingLines == updatedLines) return
 
@@ -2124,6 +2125,8 @@ class RuntimeInstaller(private val context: Context) {
         val appUid = AndroidProcess.myUid().toString()
 
         val guestEnv = buildMap {
+            val hwProfile = DeviceHardwareOptimizer.inspect(context)
+            val prootOpt = ProotAndChrootOptimizer.buildConfig(hwProfile, hasRootAccess = false)
             put("HOME", "/root")
             put("USER", "root")
             put("LOGNAME", "root")
@@ -2146,6 +2149,7 @@ class RuntimeInstaller(private val context: Context) {
             // Go programs under ptrace: async preemption signals interrupt network syscalls (see proot-exec.sh).
             put("GODEBUG", "asyncpreemptoff=1")
             put("TERM", "xterm-256color")
+            putAll(prootOpt.environmentVars)
             putAll(environment)
         }
 
@@ -2352,6 +2356,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             mode = 0b111101101,
         )
         ensureSystemGitTrust()
+        ProotAndChrootOptimizer.applyGuestWrappers(rootfs) { file, body, mode -> writeRootfsFileAtomically(file, body, mode = mode) }
         AntigravityCustomizations.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         ensureWorkspaceTrust("/workspace")
         ensureSharedTmpPermissions()
@@ -3013,39 +3018,48 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
          *  - configuration cache (problems only warn, so incompatible builds still run) and the build cache;
          *  - workers: 4 / 3 / 2 and parallel project execution only on 10 GB+ (each worker adds memory).
          */
-        internal fun gradleSpeedProperties(totalMemoryMb: Long): List<Pair<String, String>> {
-            val (daemon, workers, parallel) = when {
-                totalMemoryMb >= 10_000 -> Triple(true, 4, true)
-                totalMemoryMb >= 7_000 -> Triple(true, 3, false)
-                else -> Triple(false, 2, false)
-            }
-            return listOf(
-                "org.gradle.daemon" to daemon.toString(),
-                "org.gradle.daemon.idletimeout" to "600000",
-                GRADLE_WORKERS_PROPERTY to workers.toString(),
-                GRADLE_PARALLEL_PROPERTY to parallel.toString(),
-                "org.gradle.caching" to "true",
-                "org.gradle.configuration-cache" to "true",
-                "org.gradle.configuration-cache.problems" to "warn",
-            )
-        }
+        internal fun gradleSpeedProperties(totalMemoryMb: Long): List<Pair<String, String>> =
+            gradleSpeedProperties(DeviceHardwareOptimizer.computeGradleTuning(totalMemoryMb))
 
-        /**
-         * Gradle JVM options for builds inside the chroot, sized to the device so small phones are not pushed into the
-         * low-memory killer (exit 137) and large ones can build Room/KSP projects that need more:
-         *  - 10 GB or more reported (12 GB class phones): 3 GB heap, 1.5 GB metaspace;
-         *  - 7 GB or more (8 GB class): 2 GB heap, 1 GB metaspace;
-         *  - below that: an eighth of RAM for the heap (at least 768 MB), 512 MB metaspace.
-         * Android reports less than the marketed size (an "8 GB" phone shows about 7.3 GB), hence the thresholds.
-         */
-        internal fun gradleJvmArgs(totalMemoryMb: Long): String {
-            val (heapMb, metaspaceMb) = when {
-                totalMemoryMb >= 10_000 -> 3072L to 1536
-                totalMemoryMb >= 7_000 -> 2048L to 1024
-                else -> ((totalMemoryMb / 8).coerceIn(768L, 1024L) / 128) * 128 to 512
-            }
-            return "-Xmx${heapMb}m -XX:MaxMetaspaceSize=${metaspaceMb}m -Dfile.encoding=UTF-8"
-        }
+        internal fun gradleSpeedProperties(profile: DeviceHardwareOptimizer.HardwareProfile): List<Pair<String, String>> =
+            gradleSpeedProperties(
+                DeviceHardwareOptimizer.computeGradleTuning(
+                    totalMemoryMb = profile.totalRamMb,
+                    swapTotalMb = profile.swap.swapTotalMb,
+                    swapFreeMb = profile.swap.swapFreeMb,
+                    socVendor = profile.socVendor,
+                    socTier = profile.socTier,
+                    performanceCores = profile.topology.performanceCores,
+                ),
+            )
+
+        internal fun gradleSpeedProperties(tuning: DeviceHardwareOptimizer.GradleTuning): List<Pair<String, String>> = listOf(
+            "org.gradle.daemon" to tuning.daemonEnabled.toString(),
+            "org.gradle.daemon.idletimeout" to tuning.daemonIdleTimeoutMs.toString(),
+            GRADLE_WORKERS_PROPERTY to tuning.maxWorkers.toString(),
+            GRADLE_PARALLEL_PROPERTY to tuning.parallelExecution.toString(),
+            "org.gradle.caching" to "true",
+            "org.gradle.configuration-cache" to "true",
+            "org.gradle.configuration-cache.problems" to "warn",
+        )
+
+        internal fun gradleJvmArgs(totalMemoryMb: Long): String =
+            gradleJvmArgs(DeviceHardwareOptimizer.computeGradleTuning(totalMemoryMb))
+
+        internal fun gradleJvmArgs(profile: DeviceHardwareOptimizer.HardwareProfile): String =
+            gradleJvmArgs(
+                DeviceHardwareOptimizer.computeGradleTuning(
+                    totalMemoryMb = profile.totalRamMb,
+                    swapTotalMb = profile.swap.swapTotalMb,
+                    swapFreeMb = profile.swap.swapFreeMb,
+                    socVendor = profile.socVendor,
+                    socTier = profile.socTier,
+                    performanceCores = profile.topology.performanceCores,
+                ),
+            )
+
+        internal fun gradleJvmArgs(tuning: DeviceHardwareOptimizer.GradleTuning): String =
+            "-Xmx${tuning.heapMb}m -XX:MaxMetaspaceSize=${tuning.metaspaceMb}m -Dfile.encoding=UTF-8"
 
         /** Top-level rootfs directories that proot-exec.sh binds from Android or the app on every launch. */
         private val BIND_MOUNTED_TOP_LEVEL = setOf("proc", "sys", "dev", "system", "apex", "vendor", "product", "system_ext", "odm", "workspace", "data", "storage", "mnt", "sdcard", "tmp", "root", "nextcraft-bridge", "pocketdev-bridge", "pocket-bridge", "pocketdev-bridge-responses", "nextcraft-bridge-responses")
@@ -3314,7 +3328,18 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 exit 127
             fi
             # proot keeps its own state (translated /proc entries, temporary files) here; it must be app-writable.
-            export PROOT_TMP_DIR="${'$'}{NEXTCRAFT_PROOT_TMP:-${'$'}ROOTFS/tmp}"
+            export PROOT_TMP_DIR="${'$'}{NEXTCRAFT_PROOT_TMP:-${'$'}ROOTFS/tmp/.proot-tmp}"
+            export PROOT_L2S_DIR="${'$'}{PROOT_L2S_DIR:-${'$'}ROOTFS/tmp/.proot-l2s}"
+            # Enable seccomp-BPF syscall filter on Linux 4.19+ unless explicitly disabled; legacy <4.19 kernels fallback to ptrace-only.
+            if [ -z "${'$'}{PROOT_NO_SECCOMP:-}" ]; then
+                KVER=${'$'}(uname -r 2>/dev/null || echo "5.10.0")
+                KMAJ=${'$'}{KVER%%.*}
+                KREST=${'$'}{KVER#*.}
+                KMIN=${'$'}{KREST%%.*}
+                if [ "${'$'}{KMAJ:-5}" -lt 4 ] || { [ "${'$'}{KMAJ:-5}" -eq 4 ] && [ "${'$'}{KMIN:-19}" -lt 19 ]; }; then
+                    export PROOT_NO_SECCOMP=1
+                fi
+            fi
             # Every guest execve goes through proot's ELF loader. By default proot extracts it into PROOT_TMP_DIR, which Android
             # (SELinux, targetSdk >= 29) refuses to exec from app data, so nothing in the guest would start. The loader ships in
             # the APK next to proot itself (libproot_loader.so) and is named here.
@@ -3324,7 +3349,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             HOST_RESP="${'$'}HOST_BRIDGE-responses"
             SHM_DIR="${'$'}ROOTFS/tmp/.nextcraft-shm"
 
-            mkdir -p "${'$'}ROOTFS${'$'}GUEST_WORKSPACE" "${'$'}HOST_WORKSPACE" "${'$'}HOST_BRIDGE" "${'$'}HOST_RESP" "${'$'}PROOT_TMP_DIR" "${'$'}SHM_DIR" \
+            mkdir -p "${'$'}ROOTFS${'$'}GUEST_WORKSPACE" "${'$'}HOST_WORKSPACE" "${'$'}HOST_BRIDGE" "${'$'}HOST_RESP" "${'$'}PROOT_TMP_DIR" "${'$'}PROOT_L2S_DIR" "${'$'}SHM_DIR" \
                 "${'$'}ROOTFS/nextcraft-bridge" "${'$'}ROOTFS/pocketdev-bridge" "${'$'}ROOTFS/pocket-bridge" "${'$'}ROOTFS/pocketdev-bridge-responses" "${'$'}ROOTFS/nextcraft-bridge-responses" \
                 "${'$'}ROOTFS/tmp" "${'$'}ROOTFS/dev" "${'$'}ROOTFS/proc" "${'$'}ROOTFS/sys"
             chmod 1777 "${'$'}SHM_DIR" 2>/dev/null || true
@@ -3349,6 +3374,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             # Android's app seccomp policy kills a process on io_uring_setup (SIGSYS, exit 159). libuv (Node 20+) opens
             # an io_uring by default, which took down every npm/node run; this makes it use epoll instead.
             export UV_USE_IO_URING=0
+            export UV_THREADPOOL_SIZE="${'$'}{UV_THREADPOOL_SIZE:-6}"
             # Go binaries (Antigravity's agy, dsh) preempt goroutines with SIGURG many times a second. Under ptrace every
             # signal is a tracer round trip and can interrupt an in-flight connect/read, which surfaces as random
             # "dial tcp"/"i/o timeout" failures that never happen in a kernel chroot. Cooperative preemption only.
@@ -3416,7 +3442,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             fake /proc/sys/kernel/overflowuid overflowuid "65534"
             fake /proc/sys/kernel/overflowgid overflowgid "65534"
             [ -r /sys/fs/selinux ] && [ ! -r /sys/fs/selinux/enforce ] && BINDS="${'$'}BINDS -b ${'$'}SYSDATA/sys_empty:/sys/fs/selinux"
-            for bionic_dir in /system /apex /vendor /product; do
+            for bionic_dir in /system /apex /vendor /product /system_ext /odm; do
                 [ -d "${'$'}bionic_dir" ] && BINDS="${'$'}BINDS -b ${'$'}bionic_dir"
             done
             # Shared storage as proot-distro binds it; readable only when Android granted the app storage access.
@@ -3434,13 +3460,18 @@ esac
 if [ "${'$'}HOST_WORKSPACE" != "${'$'}ROOTFS${'$'}GUEST_WORKSPACE" ]; then
                 BINDS="${'$'}BINDS -b ${'$'}HOST_WORKSPACE:${'$'}GUEST_WORKSPACE"
             fi
-            BINDS="${'$'}BINDS -b ${'$'}HOST_BRIDGE:/nextcraft-bridge -b ${'$'}HOST_BRIDGE:/pocketdev-bridge -b ${'$'}HOST_BRIDGE:/pocket-bridge -b ${'$'}HOST_RESP:/pocketdev-bridge-responses"
+            BINDS="${'$'}BINDS -b ${'$'}HOST_BRIDGE:/nextcraft-bridge -b ${'$'}HOST_BRIDGE:/pocketdev-bridge -b ${'$'}HOST_BRIDGE:/pocket-bridge -b ${'$'}HOST_RESP:/pocketdev-bridge-responses -b ${'$'}HOST_RESP:/nextcraft-bridge-responses"
+
+            KERNEL_OPT=""
+            if [ -n "${'$'}{NEXTCRAFT_KERNEL_RELEASE:-}" ]; then
+                KERNEL_OPT="-k ${'$'}NEXTCRAFT_KERNEL_RELEASE"
+            fi
 
             # Same extension set as proot-distro: --kill-on-exit ends every guest process with proot (a cancelled build
             # never lingers), --link2symlink emulates hard links, --sysvipc emulates SysV IPC that Android forbids,
             # -L fixes lstat sizes for dpkg. -0 makes the guest see uid 0 (apt, npm -g).
             # shellcheck disable=SC2086
-            exec "${'$'}PROOT" --kill-on-exit --link2symlink --sysvipc -L -0 -r "${'$'}ROOTFS" \
+            exec "${'$'}PROOT" --kill-on-exit --link2symlink --sysvipc -L -0 ${'$'}KERNEL_OPT -r "${'$'}ROOTFS" \
                 ${'$'}BINDS \
                 -w "${'$'}GUEST_WORKSPACE" \
                 /usr/bin/env GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@"

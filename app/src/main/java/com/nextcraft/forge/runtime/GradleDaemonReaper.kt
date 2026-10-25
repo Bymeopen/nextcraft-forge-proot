@@ -27,13 +27,27 @@ internal object GradleDaemonReaper {
 
     /** True for the trim levels (and low-memory state) where an idle daemon should give its memory back. */
     @Suppress("DEPRECATION")
-    internal fun shouldStop(level: Int, lowMemory: Boolean): Boolean =
-        lowMemory || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+    internal fun shouldStop(
+        level: Int,
+        lowMemory: Boolean,
+        totalRamMb: Long = 8_192L,
+        swapFreeMb: Long = 2_048L,
+    ): Boolean {
+        if (lowMemory || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            return true
+        }
+        // On <= 6 GB phones or when SwapRAM/ZRAM is nearly full (< 512 MB free), reap idle daemons earlier on RUNNING_LOW
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && (totalRamMb < 6_800L || swapFreeMb < 512L)) {
+            return true
+        }
+        return false
+    }
 
     fun onTrimMemory(context: Context, level: Int) {
         val info = ActivityManager.MemoryInfo()
         context.getSystemService(ActivityManager::class.java)?.getMemoryInfo(info)
-        if (!shouldStop(level, info.lowMemory)) return
+        val hw = DeviceHardwareOptimizer.inspect(context)
+        if (!shouldStop(level, info.lowMemory, hw.totalRamMb, hw.swap.swapFreeMb)) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastRunAt < 30_000) return
         lastRunAt = now
