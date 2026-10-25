@@ -62,6 +62,7 @@
             mkdir -p "$ROOTFS$GUEST_WORKSPACE" "$HOST_WORKSPACE" "$HOST_BRIDGE" "$HOST_RESP" "$PROOT_TMP_DIR" "$SHM_DIR" \
                 "$ROOTFS/nextcraft-bridge" "$ROOTFS/pocketdev-bridge" "$ROOTFS/pocket-bridge" "$ROOTFS/pocketdev-bridge-responses" "$ROOTFS/nextcraft-bridge-responses" \
                 "$ROOTFS/tmp" "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys"
+            chmod 1777 "$SHM_DIR" 2>/dev/null || true
 
             if [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
                 mkdir -p "$ROOTFS/etc"

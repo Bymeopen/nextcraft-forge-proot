@@ -2289,6 +2289,23 @@ printf '%s\n' "${'$'}1" > "${'$'}BRIDGE/claude-login-url.tmp" && mv "${'$'}BRIDG
 """,
             mode = 0b111101101,
         )
+        // `BROWSER` is only in the environment for launches the app itself starts (ClaudeAuthController etc.); a
+        // `claude auth login` or any other CLI's "open a URL" run by hand from the Terminal tab sees no browser at
+        // all (there is none in the guest) and fails looking for xdg-open/sensible-browser. A system-wide default
+        // plus the freedesktop-standard binary names cover both cases without needing the app to launch it.
+        writeRootfsFileAtomically(
+            File(rootfs, "etc/profile.d/nextcraft-browser.sh"),
+            "export BROWSER=\"${'$'}{BROWSER:-/opt/nextcraft/open-url.sh}\"\n",
+            mode = 0b110100100,
+        )
+        listOf("usr/bin/xdg-open", "usr/local/bin/xdg-open", "usr/bin/www-browser", "usr/bin/sensible-browser").forEach { path ->
+            val link = File(rootfs, path)
+            runCatching {
+                link.parentFile?.mkdirs()
+                if (java.nio.file.Files.isSymbolicLink(link.toPath()) || link.exists()) link.delete()
+                Os.symlink("/opt/nextcraft/open-url.sh", link.absolutePath)
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+        }
 
         val settingsContent = JSONObject()
             .put("disableAllHooks", false)
@@ -2337,6 +2354,26 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         ensureSystemGitTrust()
         AntigravityCustomizations.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         ensureWorkspaceTrust("/workspace")
+        ensureSharedTmpPermissions()
+    }
+
+    /**
+     * /tmp, /var/tmp and /dev/shm need the sticky bit (so one user's files in a shared scratch dir cannot be deleted
+     * by another) and world read/write/execute for every build tool that writes there; some rootfs extractions have
+     * left them locked to root-only (0700), which a non-root agent process cannot write into at all.
+     */
+    private fun ensureSharedTmpPermissions() {
+        val sharedSticky = listOf("tmp", "var/tmp").map { File(rootfs, it) }
+        sharedSticky.forEach { dir ->
+            runCatching {
+                dir.mkdirs()
+                Os.chmod(dir.absolutePath, 0b1_111_111_111) // 01777: sticky + rwxrwxrwx
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+        }
+        runCatching {
+            val run = File(rootfs, "run").apply { mkdirs() }
+            Os.chmod(run.absolutePath, 0b111_101_101) // 0755
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
     }
 
     /**
@@ -3290,6 +3327,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             mkdir -p "${'$'}ROOTFS${'$'}GUEST_WORKSPACE" "${'$'}HOST_WORKSPACE" "${'$'}HOST_BRIDGE" "${'$'}HOST_RESP" "${'$'}PROOT_TMP_DIR" "${'$'}SHM_DIR" \
                 "${'$'}ROOTFS/nextcraft-bridge" "${'$'}ROOTFS/pocketdev-bridge" "${'$'}ROOTFS/pocket-bridge" "${'$'}ROOTFS/pocketdev-bridge-responses" "${'$'}ROOTFS/nextcraft-bridge-responses" \
                 "${'$'}ROOTFS/tmp" "${'$'}ROOTFS/dev" "${'$'}ROOTFS/proc" "${'$'}ROOTFS/sys"
+            chmod 1777 "${'$'}SHM_DIR" 2>/dev/null || true
 
             if [ ! -s "${'$'}ROOTFS/etc/resolv.conf" ]; then
                 mkdir -p "${'$'}ROOTFS/etc"
