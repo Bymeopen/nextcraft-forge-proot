@@ -21,12 +21,19 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** The integer after `key:` in /proc/<pid>/status text ("Threads:\t48" gives 48), or null when absent. */
+internal fun parseProcStatus(text: String, key: String): Int? =
+    text.lineSequence().firstOrNull { it.startsWith("$key:") }
+        ?.substringAfter(':')?.trim()?.substringBefore(' ')?.toIntOrNull()
+
 data class DiagnosticsState(
     val device: List<Pair<UiText, UiText>> = emptyList(),
     val runtime: List<Pair<UiText, UiText>> = emptyList(),
     val healthOutput: String = "",
     val healthRunning: Boolean = false,
     val healthSummary: String? = null,
+    /** Errors the app caught and carried on from, newest first (see [ErrorLog]). */
+    val swallowedErrors: String = "",
 )
 
 /** System diagnostics: device resources, runtime state and the chroot health check (chroot-health.sh). */
@@ -43,7 +50,7 @@ class DiagnosticsController(private val context: Context) {
         scope.launch {
             val device = withContext(Dispatchers.IO) { collectDevice() }
             val runtime = withContext(Dispatchers.IO) { collectRuntime() }
-            mutable.update { it.copy(device = device, runtime = runtime) }
+            mutable.update { it.copy(device = device, runtime = runtime, swallowedErrors = ErrorLog.asText()) }
         }
     }
 
@@ -81,6 +88,7 @@ class DiagnosticsController(private val context: Context) {
     private fun collectDevice(): List<Pair<UiText, UiText>> {
         val memory = ActivityManager.MemoryInfo()
         context.getSystemService(ActivityManager::class.java)?.getMemoryInfo(memory)
+        val hwProfile = runCatching { DeviceHardwareOptimizer.inspect(appContext, forceRefresh = true) }.getOrNull()
         val stat = runCatching { StatFs(appContext.filesDir.absolutePath) }.getOrNull()
         val battery = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -91,7 +99,38 @@ class DiagnosticsController(private val context: Context) {
             add(row(R.string.diag_device, UiText.Raw("${Build.MANUFACTURER} ${Build.MODEL}")))
             add(row(R.string.diag_android, UiText.Raw("${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")))
             add(row(R.string.diag_cpu, UiText.res(R.string.diag_cores, Build.SUPPORTED_ABIS.firstOrNull().orEmpty(), Runtime.getRuntime().availableProcessors())))
+            if (hwProfile != null) {
+                add(
+                    UiText.Raw("SoC / Core topology") to UiText.Raw(
+                        "${hwProfile.socVendor.displayName} (${hwProfile.socModel}) · ${hwProfile.topology.performanceCores}P+${hwProfile.topology.efficiencyCores}E · ${hwProfile.socTier.label}",
+                    ),
+                )
+            }
             add(row(R.string.diag_ram, UiText.res(R.string.diag_free_of, formatBytes(memory.availMem), formatBytes(memory.totalMem))))
+            if (hwProfile != null) {
+                val swapLabel = if (hwProfile.swap.hasActiveSwap) {
+                    val alg = hwProfile.swap.zramAlgorithm?.let { " ($it)" }.orEmpty()
+                    "${hwProfile.swap.swapFreeMb} MB free of ${hwProfile.swap.swapTotalMb} MB$alg"
+                } else {
+                    "Inactive (0 MB)"
+                }
+                add(UiText.Raw("RAM tier & SwapRAM / ZRAM") to UiText.Raw("${hwProfile.ramTier.label} class · Swap: $swapLabel"))
+                val prootCfg = ProotAndChrootOptimizer.buildConfig(hwProfile, hasRootAccess = false)
+                val pageKb = prootCfg.kernelProfile.pageSizeBytes / 1024
+                add(
+                    UiText.Raw("Android Kernel profile") to UiText.Raw(
+                        "${prootCfg.kernelProfile.rawRelease} · ${prootCfg.kernelProfile.family.shortBadge} · ${pageKb}KB pages",
+                    ),
+                )
+                add(
+                    UiText.Raw("Container / PRoot optimization") to UiText.Raw(
+                        "${prootCfg.backend.displayName} · /dev/shm ${prootCfg.shmSizeMb}M · /tmp ${prootCfg.tmpSizeMb}M · UV_THREADS=${prootCfg.uvThreadpoolSize}",
+                    ),
+                )
+            }
+            // What this app itself costs right now: the numbers to compare before and after an optimisation.
+            appMemoryMb()?.let { (pss, heap) -> add(row(R.string.diag_app_memory, UiText.res(R.string.diag_app_memory_value, pss, heap))) }
+            procStatusValue("Threads")?.let { add(row(R.string.diag_app_threads, UiText.Raw(it.toString()))) }
             if (stat != null) add(row(R.string.diag_storage, UiText.res(R.string.diag_free_of, formatBytes(stat.availableBytes), formatBytes(stat.totalBytes))))
             if (level >= 0 && scale > 0) {
                 val percent = UiText.Raw("${level * 100 / scale}%")
@@ -109,13 +148,13 @@ class DiagnosticsController(private val context: Context) {
             runCatching {
                 val unrestricted = BatteryOptimization.isUnrestricted(appContext)
                 add(UiText.Raw("Battery optimization") to UiText.Raw(if (unrestricted) "Unrestricted" else "Optimized (some ROMs stop background builds)"))
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DiagnosticsController", it) }
             add(row(R.string.diag_linux, UiText.res(if (installed) R.string.diag_installed else R.string.diag_not_installed)))
-            runCatching { File(rootfs, ".pocket-rootfs-version").takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
+            runCatching { RuntimeMarkers.read(File(rootfs, ".nextcraft-rootfs-version"))?.trim() }.getOrNull()
                 ?.takeIf { it.isNotBlank() }?.let { add(row(R.string.diag_rootfs, UiText.Raw(it))) }
             if (installed) {
                 // The marker REA's installer writes; the version says whether the Learn/firmware/plugin features are there.
-                val rea = runCatching { File(rootfs, "root/.pocket-rea-version").takeIf { it.isFile }?.readText()?.trim() }.getOrNull()?.takeIf { it.isNotBlank() }
+                val rea = runCatching { RuntimeMarkers.read(File(rootfs, "root/.nextcraft-rea-version"))?.trim() }.getOrNull()?.takeIf { it.isNotBlank() }
                 add(row(R.string.diag_rea, rea?.let { UiText.Raw("v$it") } ?: UiText.res(R.string.diag_not_installed)))
                 val stacks = runCatching { installer.installedStacks().joinToString { it.label } }.getOrDefault("")
                 add(row(R.string.diag_stacks, stacks.ifBlank { null }?.let(UiText::Raw) ?: UiText.res(R.string.diag_none)))
@@ -124,6 +163,17 @@ class DiagnosticsController(private val context: Context) {
             }
         }
     }
+
+    /** (proportional memory in MB as Android counts it, Java heap in use in MB) for this process. */
+    private fun appMemoryMb(): Pair<Long, Long>? = runCatching {
+        val info = context.getSystemService(ActivityManager::class.java)
+            ?.getProcessMemoryInfo(intArrayOf(android.os.Process.myPid()))?.firstOrNull() ?: return null
+        val heap = Runtime.getRuntime().let { (it.totalMemory() - it.freeMemory()) shr 20 }
+        (info.totalPss / 1024L) to heap
+    }.getOrNull()
+
+    private fun procStatusValue(key: String): Int? =
+        runCatching { parseProcStatus(File("/proc/self/status").readText(), key) }.getOrNull()
 
     private fun row(@androidx.annotation.StringRes label: Int, value: UiText): Pair<UiText, UiText> = UiText.res(label) to value
 

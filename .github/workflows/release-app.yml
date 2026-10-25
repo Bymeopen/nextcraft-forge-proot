@@ -60,7 +60,8 @@ jobs:
         run: |
           # Reject anything that is not a plain tag / version before it reaches shell and gh.
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]] || { echo "Bad tag: $TAG"; exit 1; }
-          [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "Bad version_code"; exit 1; }
+          # Gradle falls back to versionCode 100 for anything that is not an Int, which would publish a manifest no device accepts.
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$VERSION_CODE" -le 2147483647 ] || { echo "Bad version_code (1..2147483647)"; exit 1; }
           [[ "$VERSION_NAME" =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "Bad version_name"; exit 1; }
           apk="$(ls app/build/outputs/apk/release/*.apk | head -1)"
           # An unsigned APK would fail the signature check in the updater on every device.
@@ -76,5 +77,6 @@ jobs:
           VERSION_NAME: ${{ inputs.version_name }}
           NOTES: ${{ inputs.notes }}
         run: |
-          gh release create "$TAG" dist/*.apk dist/update-manifest.json \
+          # Tag the commit that was built, not whatever the default branch points to when run from another ref.
+          gh release create "$TAG" dist/*.apk dist/update-manifest.json --target "$GITHUB_SHA" \
             --title "NextCraft Forge PRoot $VERSION_NAME" --notes "$NOTES" --latest

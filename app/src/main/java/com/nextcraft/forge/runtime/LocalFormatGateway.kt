@@ -60,11 +60,11 @@ internal class LocalFormatGateway(
             runCatching {
                 socket.soTimeout = SOCKET_TIMEOUT_MS
                 socket.tcpNoDelay = true
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
             try {
                 workers.execute { runCatching { socket.use(::handle) } } // client disconnects must not escape as uncaught exceptions (crashes the app)
             } catch (_: java.util.concurrent.RejectedExecutionException) {
-                runCatching { socket.close() }
+                runCatching { socket.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
             }
         }
     }
@@ -158,7 +158,7 @@ internal class LocalFormatGateway(
                 output.eventStream -> writeStreamError(output, "api_error", message)
                 else -> Unit
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
     }
 
     private fun writeStreamError(output: BufferedOutputStream, type: String, message: String) {
@@ -915,7 +915,7 @@ internal class LocalFormatGateway(
 
     override fun close() {
         running.set(false)
-        runCatching { server.close() }
+        runCatching { server.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
         workers.shutdown()
         // shutdown() does not interrupt workers, and HttpURLConnection ignores interrupts anyway: a provider call of
         // up to 180 s would keep using the key and quota after the session ended. Disconnecting aborts it.

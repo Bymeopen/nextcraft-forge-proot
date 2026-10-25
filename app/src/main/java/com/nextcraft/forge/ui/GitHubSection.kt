@@ -126,7 +126,7 @@ fun GitHubSection(state: ForgeUiState, viewModel: MainViewModel) {
                                 text = stringResource(R.string.settings_copy_code_open_github),
                                 onClick = {
                                     clipboard.setText(AnnotatedString(dc.userCode))
-                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dc.verificationUri))) }
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dc.verificationUri))) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("GitHubSection", it) }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             )

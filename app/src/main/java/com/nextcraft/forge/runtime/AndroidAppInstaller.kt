@@ -56,7 +56,6 @@ object AndroidAppInstaller {
         }
         val appContext = context.applicationContext ?: context
         val pkgName = archivePackageName(appContext, apk)
-        val isSelfUpdate = pkgName == appContext.packageName
 
         Thread({
             val apkHash = runCatching { fingerprint(apk) }.getOrNull()
@@ -159,7 +158,7 @@ object AndroidAppInstaller {
                 session.commit(pending.intentSender)
             }
         } catch (error: Throwable) {
-            runCatching { installer.abandonSession(sessionId) }
+            runCatching { installer.abandonSession(sessionId) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAppInstaller", it) }
             throw error
         }
     }

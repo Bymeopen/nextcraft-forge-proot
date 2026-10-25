@@ -850,8 +850,8 @@ fun main() {
         check(File(composeProjDir, ".nextcraft/android-project.json").isFile) {
             "Expected .nextcraft/android-project.json to be generated"
         }
-        check(File(composeProjDir, ".pocketdev/android-project.json").isFile) {
-            "Expected .pocketdev/android-project.json to be generated"
+        check(File(composeProjDir, ".nextcraft/android-project.json").isFile) {
+            "Expected .nextcraft/android-project.json to be generated"
         }
         check(findAndroidProjectRoot(composeProjDir)?.canonicalFile == composeProjDir.canonicalFile) {
             "Expected generated Compose project to be detected by findAndroidProjectRoot"

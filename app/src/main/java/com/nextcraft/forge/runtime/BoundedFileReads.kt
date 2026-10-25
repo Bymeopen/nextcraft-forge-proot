@@ -122,7 +122,7 @@ internal class InotifyLogTailer(
             }
             observer.startWatching()
         } catch (t: Throwable) {
-            runCatching { raf.close() }
+            runCatching { raf.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
             throw t
         }
     }
@@ -184,9 +184,9 @@ internal class InotifyLogTailer(
     }
 
     override fun close() {
-        runCatching { observer.stopWatching() }
-        runCatching { channel.close() }
-        runCatching { raf.close() }
+        runCatching { observer.stopWatching() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
+        runCatching { channel.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
+        runCatching { raf.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
     }
 
     companion object {

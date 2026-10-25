@@ -5,6 +5,7 @@ package com.nextcraft.forge.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
@@ -150,7 +150,7 @@ internal val fullWidthTabs = setOf(ForgeTab.TERMINAL, ForgeTab.FILES, ForgeTab.P
 // Screens reachable from the Tools launcher keep the Tools tab highlighted.
 private val toolsGroup = setOf(
     ForgeTab.TOOLS, ForgeTab.FILES, ForgeTab.ANDROID, ForgeTab.PREVIEW,
-    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA,
+    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA, ForgeTab.BACKUP,
 )
 
 private fun ForgeTab.navIndex(): Int {
@@ -171,11 +171,16 @@ internal fun ForgeBottomBar(
     agentRunning: Boolean,
     terminalBusy: Boolean,
     onSelectTab: (ForgeTab) -> Unit,
+    /** Long-press on a tab (opens the command palette); null = no long-press action. */
+    onLongPressTab: (() -> Unit)? = null,
 ) {
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
     val reduceMotion = rememberReduceMotion()
     val haptics = LocalHapticFeedback.current
+    val tap = { tab: ForgeTab -> haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); onSelectTab(tab) }
+    val longPressLabel = onLongPressTab?.let { stringResource(R.string.palette_title) }
+    val onLongPress = onLongPressTab?.let { open -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); open() } }
     // Global entries collapse the Tools group onto Tools; the project bar matches its keys directly.
     val selectedIndex = entries.indexOfFirst { it.tab == selectedTab }.takeIf { it >= 0 } ?: selectedTab.navIndex()
     val pillOffset by animateFloatAsState(
@@ -249,7 +254,8 @@ internal fun ForgeBottomBar(
                                         brush = Brush.radialGradient(
                                             colors = listOf(scheme.primary.copy(alpha = 0.28f), Color.Transparent),
                                             center = center,
-                                            radius = size.maxDimension * 0.62f,
+                                            // Half the short side: the glow fades out inside the slot. A larger radius is cut off by the slot edge and shows as a faint rectangle.
+                                            radius = size.minDimension / 2f,
                                         ),
                                     )
                                 },
@@ -295,10 +301,13 @@ internal fun ForgeBottomBar(
                                 .weight(1f)
                                 .fillMaxHeight()
                                 .clip(pillShape)
-                                .clickable(role = Role.Tab, onClickLabel = label) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onSelectTab(entry.tab)
-                                }
+                                .combinedClickable(
+                                    role = Role.Tab,
+                                    onClickLabel = label,
+                                    onLongClick = onLongPress,
+                                    onLongClickLabel = longPressLabel,
+                                    onClick = { tap(entry.tab) },
+                                )
                                 .forgeSelected(selected),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,

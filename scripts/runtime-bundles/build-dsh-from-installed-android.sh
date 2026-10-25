@@ -8,7 +8,7 @@ set -euo pipefail
 ADB_SERIAL="${ADB_SERIAL:-}"
 PACKAGE="${NEXTCRAFT_PACKAGE:-com.nextcraft.forge}"
 VERSION="${NEXTCRAFT_DSH_BUNDLE_VERSION:-2026.09.1}"
-DSH_VERSION="${NEXTCRAFT_DSH_VERSION:-0.1.2-rc.1}"
+DSH_VERSION="${NEXTCRAFT_DSH_VERSION:-0.2.1-rc.2}"
 ARCHIVE="nextcraft-dsh-arm64-${VERSION}.tar.zst"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -36,7 +36,7 @@ adb_cmd shell "su -c 'tar -cf /data/local/tmp/nextcraft-dsh-export.tar -C ${APP_
 adb_cmd exec-out "su -c 'cat /data/local/tmp/nextcraft-dsh-export.tar'" > "$temp_dir/source.tar"
 tar -xf "$temp_dir/source.tar" -C "$temp_dir/payload"
 printf '%s\n' "$DSH_VERSION" > "$temp_dir/payload/.nextcraft-dsh-version"
-printf '%s\n' "$DSH_VERSION" > "$temp_dir/payload/.pocket-dsh-version"
+printf '%s\n' "$DSH_VERSION" > "$temp_dir/payload/.nextcraft-dsh-version"
 
 [[ -L "$temp_dir/payload/usr/local/bin/dsh" ]]
 [[ -f "$temp_dir/payload/usr/local/lib/dsh/node_modules/.bin/dsh" ]]
