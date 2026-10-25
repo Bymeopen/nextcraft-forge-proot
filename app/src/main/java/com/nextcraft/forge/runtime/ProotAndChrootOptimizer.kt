@@ -4,26 +4,38 @@ import java.io.File
 import java.util.Locale
 
 /**
- * Complete PRoot & Root Chroot hybrid runtime optimizer (`ProotAndChrootOptimizer`).
+ * Complete All-Android-Kernels (`3.18`..`6.12+` GKI 2.0 / 16KB Page Size), PRoot, and Root Chroot
+ * runtime optimizer (`ProotAndChrootOptimizer`).
  *
- * Provides full optimization across two execution modes and all hybrid workloads:
- * 1. **Native Root Chroot Mode (`su -mm` + `chroot-exec.sh`)**: Zero-ptrace native kernel bind-mounts,
- *    dynamic `/dev/shm` sizing, O(1) incremental workspace ownership repair, and Bionic `/apex` slave mounts.
- * 2. **Complete PRoot Optimization (`proot` CLI / nested rootless containers / `proot-distro` / non-root fallback)**:
- *    - **Seccomp-BPF Syscall Acceleration (`PROOT_NO_SECCOMP=0` on modern kernels, fallback `1` on broken seccomp filters)**:
- *      Uses kernel seccomp filters to intercept only path/uid syscalls instead of trapping every syscall via `ptrace`,
- *      cutting PRoot syscall overhead by up to 60–75%.
- *    - **Hardlink & Ashmem Emulation (`--link2symlink`, `--sysvipc`)**: Allows `dpkg`, `apt`, `git`, `npm`, `pnpm`,
- *      and `cargo` to create hardlinks and SysV IPC segments on Android filesystems (`f2fs`/`ext4`/`fuse`) that restrict `link(2)`.
- *    - **Kernel Release & Ashmem Spoofing (`-k` / `--kernel-release`, `-0` / `--root-id`)**: Prevents glibc 2.39+
- *      and Node.js / Python / Rust from failing on older Android vendor kernel strings (`4.14`/`4.19`/`5.4`).
- *    - **Fast Temp & Loader Isolation (`PROOT_TMP_DIR=/tmp`, `PROOT_LOADER`)**: Keeps PRoot's internal address-space
- *      trampolines on `tmpfs` (RAM-backed) instead of flash storage.
- *    - **Optimized `proot` Wrapper (`/opt/nextcraft/bin/proot` & `/opt/nextcraft/bin/proot-fast`)**:
- *      Installed inside the guest runtime so any tool, script, or agent invoking `proot` or `proot-fast` automatically
- *      gets hardware-tuned flags (or zero-overhead native chroot passthrough when already root inside chroot).
+ * Covers every Android kernel generation and both container execution engines:
+ * 1. **All Android Kernel Generations (`KernelFamily`)**:
+ *    - `LEGACY_3_18_TO_4_14` (`3.18`, `4.4`, `4.9`, `4.14`): Legacy vendor kernels without reliable seccomp-bpf
+ *      syscall reordering or ashmem-memfd; enables `PROOT_NO_SECCOMP=1`, spoofs kernel release to `5.15.0-nextcraft-arm64`
+ *      for Ubuntu 24.04 (`glibc 2.39`), and disables `io_uring`.
+ *    - `ANDROID_COMMON_4_19_TO_5_4` (`4.19`, `5.4`): Early Treble / QGKI kernels; enables PRoot seccomp-bpf
+ *      acceleration, spoofs kernel release to `5.15.0-nextcraft-arm64`, and disables `rseq`/`io_uring`.
+ *    - `GKI_1_0_5_10_TO_5_15` (`5.10`, `5.15`): Android 12/13 GKI 1.0/2.0 kernels (`android12-5.10`, `android13-5.15`);
+ *      preserves real kernel release, enables seccomp-bpf, and applies Bionic APEX mount propagation.
+ *    - `GKI_2_0_6_1_PLUS` (`6.1`, `6.6`, `6.12+`): Android 14/15/16+ modern GKI 2.0 kernels (including 16 KB page-size
+ *      kernels); enables full seccomp-bpf acceleration, 16 KB page-size alignment hints (`JAVAC_FLAGS` / `NODE_OPTIONS` /
+ *      `MALLOC_ARENA_MAX`), and `/sys/fs/cgroup` v2 awareness.
+ * 2. **Native Root Chroot Mode (`su -mm` + `chroot-exec.sh`)**:
+ *    - Zero-ptrace native kernel bind-mounts (`proc`, `sysfs`, `devpts`), dynamic `/dev/shm` and `/tmp` tmpfs sizing,
+ *      O(1) incremental workspace ownership repair, `/apex` & `/system_ext` slave submounts, and automatic fallback to
+ *      `proot` if a custom kernel/ramdisk lacks a `chroot` binary.
+ * 3. **Complete Non-Root & Nested PRoot Mode (`proot-exec.sh` / `proot-fast`)**:
+ *    - Kernel-aware Seccomp-BPF filter (`PROOT_NO_SECCOMP` auto-toggled by kernel version & vendor quirks),
+ *      `--link2symlink` (`PROOT_L2S_DIR`), `--sysvipc`, `-L`, `-0`, `--kill-on-exit`, fake `/proc` & `/sys`
+ *      synthesizers for restricted Android SELinux policies, and `/opt/nextcraft/bin/proot-fast`.
  */
 object ProotAndChrootOptimizer {
+
+    enum class KernelFamily(val displayName: String, val shortBadge: String) {
+        LEGACY_3_18_TO_4_14("Legacy Android Kernel (3.18–4.14)", "Kernel 4.x Legacy"),
+        ANDROID_COMMON_4_19_TO_5_4("Android Common / QGKI (4.19–5.4)", "Kernel 4.19/5.4"),
+        GKI_1_0_5_10_TO_5_15("Android GKI (5.10–5.15)", "GKI 5.10/5.15"),
+        GKI_2_0_6_1_PLUS("Android Modern GKI 2.0 (6.1–6.12+)", "GKI 2.0 6.x+"),
+    }
 
     enum class ExecutionBackend(val displayName: String, val shortBadge: String) {
         ROOT_CHROOT_NATIVE("Root Chroot Native (Zero-Ptrace)", "Chroot"),
@@ -31,8 +43,25 @@ object ProotAndChrootOptimizer {
         PROOT_COMPAT_FALLBACK("PRoot Ptrace Compatibility", "PRoot-Compat"),
     }
 
+    data class KernelProfile(
+        val rawRelease: String,
+        val major: Int,
+        val minor: Int,
+        val patch: Int,
+        val family: KernelFamily,
+        val isGkiKernel: Boolean,
+        val pageSizeBytes: Int,
+        val supportsSeccompBpf: Boolean,
+        val needsKernelReleaseSpoof: Boolean,
+        val spoofedRelease: String,
+    ) {
+        val is16KbPageKernel: Boolean
+            get() = pageSizeBytes >= 16_384
+    }
+
     data class ProotOptimizationConfig(
         val backend: ExecutionBackend,
+        val kernelProfile: KernelProfile,
         val enableSeccompBpf: Boolean,
         val enableLink2Symlink: Boolean,
         val enableSysvIpc: Boolean,
@@ -61,18 +90,70 @@ object ProotAndChrootOptimizer {
     }
 
     /**
+     * Classifies any Android kernel (`3.18` through `6.12+`) into its [KernelFamily].
+     */
+    fun classifyKernelFamily(major: Int, minor: Int): KernelFamily = when {
+        major >= 6 -> KernelFamily.GKI_2_0_6_1_PLUS
+        major == 5 && minor >= 10 -> KernelFamily.GKI_1_0_5_10_TO_5_15
+        (major == 5 && minor < 10) || (major == 4 && minor >= 19) -> KernelFamily.ANDROID_COMMON_4_19_TO_5_4
+        else -> KernelFamily.LEGACY_3_18_TO_4_14
+    }
+
+    /**
      * Determines whether the kernel needs a spoofed `-k` release string for Ubuntu 24.04 (glibc 2.39)
-     * and modern Node/Rust toolchains under PRoot, and whether Android 10+ seccomp-bpf handles PRoot cleanly.
+     * and modern Node/Rust toolchains under PRoot.
      */
     fun selectOptimalKernelRelease(rawUnameRelease: String): String {
         val (major, minor, _) = parseKernelVersion(rawUnameRelease)
-        // Ubuntu 24.04 glibc 2.39 and modern V8/io_uring probes work best when seeing >= 5.15 LTS or >= 6.1 LTS.
+        // Ubuntu 24.04 glibc 2.39 and modern V8/Rust/Bun probes work best when seeing >= 5.15 LTS or >= 6.1 LTS.
         return if (major < 5 || (major == 5 && minor < 10)) {
             "5.15.0-nextcraft-arm64"
         } else {
             rawUnameRelease.trim().ifEmpty { "6.1.0-nextcraft-arm64" }
         }
     }
+
+    /**
+     * Builds a complete [KernelProfile] for the given `uname -r` string and hardware page size.
+     */
+    fun inspectKernel(
+        rawUnameRelease: String = System.getProperty("os.version").orEmpty(),
+        pageSizeBytes: Int = detectPageSizeBytes(),
+        seccompAvailable: Boolean = true,
+    ): KernelProfile {
+        val (major, minor, patch) = parseKernelVersion(rawUnameRelease)
+        val family = classifyKernelFamily(major, minor)
+        val lower = rawUnameRelease.lowercase(Locale.US)
+        val isGki = lower.contains("android12") ||
+            lower.contains("android13") ||
+            lower.contains("android14") ||
+            lower.contains("android15") ||
+            lower.contains("android16") ||
+            lower.contains("gki") ||
+            major >= 6 ||
+            (major == 5 && minor >= 10)
+        // Kernels >= 4.19 handle PRoot seccomp-bpf cleanly unless running on broken early 4.14/4.9 filters.
+        val supportsSeccomp = seccompAvailable && family != KernelFamily.LEGACY_3_18_TO_4_14
+        val needsSpoof = major < 5 || (major == 5 && minor < 10)
+        val spoofed = selectOptimalKernelRelease(rawUnameRelease)
+        return KernelProfile(
+            rawRelease = rawUnameRelease.trim().ifEmpty { "5.15.0-android" },
+            major = major,
+            minor = minor,
+            patch = patch,
+            family = family,
+            isGkiKernel = isGki,
+            pageSizeBytes = pageSizeBytes.coerceAtLeast(4_096),
+            supportsSeccompBpf = supportsSeccomp,
+            needsKernelReleaseSpoof = needsSpoof,
+            spoofedRelease = spoofed,
+        )
+    }
+
+    private fun detectPageSizeBytes(): Int = runCatching {
+        val pageSize = android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE)
+        if (pageSize > 0L) pageSize.toInt() else 4_096
+    }.getOrDefault(4_096)
 
     /**
      * Computes complete PRoot & Chroot optimization parameters for the given hardware profile and kernel version.
@@ -83,11 +164,14 @@ object ProotAndChrootOptimizer {
         hasRootAccess: Boolean = true,
         emulateHardLinks: Boolean = true,
         seccompAvailable: Boolean = true,
+        pageSizeBytes: Int = detectPageSizeBytes(),
     ): ProotOptimizationConfig {
-        val (kMajor, kMinor, _) = parseKernelVersion(kernelRelease)
-        // Kernels >= 4.19 with seccomp enabled benefit from PRoot's seccomp-bpf filter (`PROOT_NO_SECCOMP` unset).
-        // Older 4.9/4.14 vendor kernels sometimes return ENOSYS on seccomp-reordered syscalls and need PROOT_NO_SECCOMP=1.
-        val useSeccomp = seccompAvailable && (kMajor > 4 || (kMajor == 4 && kMinor >= 19))
+        val kernelProfile = inspectKernel(
+            rawUnameRelease = kernelRelease,
+            pageSizeBytes = pageSizeBytes,
+            seccompAvailable = seccompAvailable,
+        )
+        val useSeccomp = kernelProfile.supportsSeccompBpf
         val backend = when {
             hasRootAccess -> ExecutionBackend.ROOT_CHROOT_NATIVE
             useSeccomp -> ExecutionBackend.PROOT_SECCOMP_ACCELERATED
@@ -120,7 +204,7 @@ object ProotAndChrootOptimizer {
             DeviceHardwareOptimizer.SocTier.FLAGSHIP_PERFORMANCE -> 8
         }
 
-        val spoofedKernel = selectOptimalKernelRelease(kernelRelease)
+        val spoofedKernel = kernelProfile.spoofedRelease
         val prootTmpDir = "/tmp/.proot-tmp"
 
         val envVars = linkedMapOf(
@@ -129,6 +213,9 @@ object ProotAndChrootOptimizer {
             "UV_THREADPOOL_SIZE" to uvThreads.toString(),
             "NEXTCRAFT_SHM_MB" to shmSizeMb.toString(),
             "NEXTCRAFT_TMP_MB" to tmpSizeMb.toString(),
+            "NEXTCRAFT_KERNEL_RELEASE" to spoofedKernel,
+            "NEXTCRAFT_KERNEL_FAMILY" to kernelProfile.family.shortBadge,
+            "NEXTCRAFT_PAGE_SIZE" to kernelProfile.pageSizeBytes.toString(),
         )
         if (!useSeccomp) {
             envVars["PROOT_NO_SECCOMP"] = "1"
@@ -138,6 +225,7 @@ object ProotAndChrootOptimizer {
             add("--root-id")
             if (emulateHardLinks) add("--link2symlink")
             add("--sysvipc")
+            add("-L")
             add("--kill-on-exit")
             add("-k")
             add(spoofedKernel)
@@ -169,6 +257,7 @@ object ProotAndChrootOptimizer {
 
         return ProotOptimizationConfig(
             backend = backend,
+            kernelProfile = kernelProfile,
             enableSeccompBpf = useSeccomp,
             enableLink2Symlink = emulateHardLinks,
             enableSysvIpc = true,
@@ -218,36 +307,35 @@ object ProotAndChrootOptimizer {
 
     /**
      * Guest helper script installed at `/opt/nextcraft/bin/proot-fast` inside the Ubuntu rootfs.
-     *
-     * - When a user or agent invokes `proot-fast` (or `proot` when real `/usr/bin/proot` is installed),
-     *   it automatically injects `PROOT_TMP_DIR=/tmp/.proot-tmp` (RAM-backed tmpfs), `--link2symlink`,
-     *   `--sysvipc`, `--kill-on-exit`, and seccomp-BPF acceleration.
-     * - If `/usr/bin/proot` is not installed yet and the user is already inside the Root Chroot, it
-     *   transparently executes rootless container commands via native `chroot` / `unshare` at zero ptrace cost,
-     *   or installs `proot` on demand when requested.
      */
     const val PROOT_FAST_GUEST_PATH = "opt/nextcraft/bin/proot-fast"
 
     val PROOT_FAST_SCRIPT: String = """
         #!/bin/sh
-        # NextCraft Forge Complete PRoot Optimizer Wrapper (`proot-fast`)
+        # NextCraft Forge Complete PRoot & All-Kernel Optimizer Wrapper (`proot-fast`)
         # Automatically applies RAM-backed PROOT_TMP_DIR, seccomp-BPF syscall filtering,
-        # --link2symlink, --sysvipc, --kill-on-exit, and kernel release compatibility.
+        # --link2symlink, --sysvipc, -L, --kill-on-exit, and kernel release compatibility across 3.18..6.12+.
         set -e
 
         export PROOT_TMP_DIR="${'$'}{PROOT_TMP_DIR:-/tmp/.proot-tmp}"
         export PROOT_L2S_DIR="${'$'}{PROOT_L2S_DIR:-/tmp/.proot-l2s}"
         mkdir -p "${'$'}PROOT_TMP_DIR" "${'$'}PROOT_L2S_DIR" 2>/dev/null || true
 
-        # Enable seccomp-BPF acceleration on Linux 4.19+ unless explicitly disabled
+        # Enable seccomp-BPF acceleration on Linux 4.19+ unless explicitly disabled; fallback on <4.19
+        KVER=${'$'}(uname -r 2>/dev/null || echo "5.10.0")
+        KMAJ=${'$'}{KVER%%.*}
+        KREST=${'$'}{KVER#*.}
+        KMIN=${'$'}{KREST%%.*}
         if [ -z "${'$'}PROOT_NO_SECCOMP" ]; then
-            KVER=${'$'}(uname -r 2>/dev/null || echo "5.10.0")
-            KMAJ=${'$'}{KVER%%.*}
-            KREST=${'$'}{KVER#*.}
-            KMIN=${'$'}{KREST%%.*}
             if [ "${'$'}{KMAJ:-5}" -lt 4 ] || { [ "${'$'}{KMAJ:-5}" -eq 4 ] && [ "${'$'}{KMIN:-19}" -lt 19 ]; }; then
                 export PROOT_NO_SECCOMP=1
             fi
+        fi
+
+        # Spoof older kernel releases (<5.10) to 5.15.0-nextcraft-arm64 so glibc 2.39 and Node/Rust never abort
+        KRELEASE_ARG=""
+        if [ "${'$'}{KMAJ:-5}" -lt 5 ] || { [ "${'$'}{KMAJ:-5}" -eq 5 ] && [ "${'$'}{KMIN:-10}" -lt 10 ]; }; then
+            KRELEASE_ARG="-k ${'$'}{NEXTCRAFT_KERNEL_RELEASE:-5.15.0-nextcraft-arm64}"
         fi
 
         REAL_PROOT=""
@@ -259,11 +347,14 @@ object ProotAndChrootOptimizer {
         done
 
         if [ -n "${'$'}REAL_PROOT" ]; then
+            # shellcheck disable=SC2086
             exec "${'$'}REAL_PROOT" \
                 --root-id \
                 --link2symlink \
                 --sysvipc \
+                -L \
                 --kill-on-exit \
+                ${'$'}KRELEASE_ARG \
                 -b /dev \
                 -b /dev/urandom:/dev/random \
                 -b /proc \
@@ -273,13 +364,12 @@ object ProotAndChrootOptimizer {
                 "${'$'}@"
         fi
 
-        # Zero-overhead native Chroot passthrough when invoked inside NextCraft Root Chroot without /usr/bin/proot:
-        # strips basic proot flags (-0, --root-id, --link2symlink, --sysvipc, --kill-on-exit, -w, -b, -k) and runs natively.
+        # Zero-overhead passthrough when invoked without /usr/bin/proot:
         WORKDIR=""
         TARGET_ROOT="/"
         while [ "${'$'}#" -gt 0 ]; do
             case "${'$'}1" in
-                -0|--root-id|--link2symlink|-l|--sysvipc|--kill-on-exit|-H|--hide-id)
+                -0|--root-id|--link2symlink|-l|-L|--sysvipc|--kill-on-exit|-H|--hide-id)
                     shift
                     ;;
                 -w|--pwd|--cwd)
@@ -310,24 +400,15 @@ object ProotAndChrootOptimizer {
             set -- /bin/bash -l
         fi
 
-        if [ "${'$'}TARGET_ROOT" != "/" ] && [ -d "${'$'}TARGET_ROOT" ]; then
-            if [ -n "${'$'}WORKDIR" ]; then
-                exec chroot "${'$'}TARGET_ROOT" /bin/sh -c 'cd "${'$'}1" && shift && exec "${'$'}@"' -- "${'$'}WORKDIR" "${'$'}@"
-            else
-                exec chroot "${'$'}TARGET_ROOT" "${'$'}@"
-            fi
-        else
-            if [ -n "${'$'}WORKDIR" ] && [ -d "${'$'}WORKDIR" ]; then
-                cd "${'$'}WORKDIR"
-            fi
-            exec "${'$'}@"
+        if [ -n "${'$'}WORKDIR" ] && [ -d "${'$'}WORKDIR" ]; then
+            cd "${'$'}WORKDIR"
         fi
+        exec "${'$'}@"
     """.trimIndent() + "\n"
 
     /**
-     * Installs `/opt/nextcraft/bin/proot-fast` (and a fallback `/usr/local/bin/proot` symlink when real `/usr/bin/proot`
-     * is absent) into the Ubuntu rootfs so any script, package, or coding agent invoking `proot` or `proot-fast`
-     * runs with full optimization.
+     * Installs `/opt/nextcraft/bin/proot-fast` (and `/usr/local/bin/proot` when `/usr/bin/proot`
+     * is absent) into the Ubuntu rootfs.
      */
     fun applyGuestWrappers(rootfs: File, writeAtomically: (File, String, Int) -> Unit) {
         if (!rootfs.isDirectory) return

@@ -3329,7 +3329,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             [ ! -e "${'$'}ROOTFS/dev/stdout" ] && ln -sf /proc/self/fd/1 "${'$'}ROOTFS/dev/stdout" 2>/dev/null || true
             [ ! -e "${'$'}ROOTFS/dev/stderr" ] && ln -sf /proc/self/fd/2 "${'$'}ROOTFS/dev/stderr" 2>/dev/null || true
 
-            for bionic_dir in /system /apex /vendor /product; do
+            for bionic_dir in /system /apex /vendor /product /system_ext /odm; do
                 if [ -d "${'$'}bionic_dir" ]; then
                     mount_bionic "${'$'}bionic_dir" "${'$'}ROOTFS${'$'}bionic_dir"
                 fi
@@ -3459,7 +3459,9 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             export MALLOC_ARENA_MAX="${'$'}{MALLOC_ARENA_MAX:-2}"
             export PROOT_TMP_DIR="${'$'}{PROOT_TMP_DIR:-/tmp/.proot-tmp}"
             export PROOT_L2S_DIR="${'$'}{PROOT_L2S_DIR:-/tmp/.proot-l2s}"
+            export UV_USE_IO_URING=0
             export UV_THREADPOOL_SIZE="${'$'}{UV_THREADPOOL_SIZE:-4}"
+            export GODEBUG="${'$'}{GODEBUG:-asyncpreemptoff=1}"
             export COREPACK_ENABLE_DOWNLOAD_PROMPT="0"
             export GLIBC_TUNABLES="glibc.pthread.rseq=0"
             export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"

@@ -155,6 +155,12 @@ class DiagnosticsController(private val context: Context) {
             runCatching {
                 val hw = DeviceHardwareOptimizer.inspect(appContext)
                 val prootCfg = ProotAndChrootOptimizer.buildConfig(hw, hasRootAccess = root)
+                val pageKb = prootCfg.kernelProfile.pageSizeBytes / 1024
+                add(
+                    UiText.Raw("Android Kernel profile") to UiText.Raw(
+                        "${prootCfg.kernelProfile.rawRelease} · ${prootCfg.kernelProfile.family.shortBadge} · ${pageKb}KB pages",
+                    ),
+                )
                 add(
                     UiText.Raw("Container / PRoot optimization") to UiText.Raw(
                         "${prootCfg.backend.displayName} · /dev/shm ${prootCfg.shmSizeMb}MB · /tmp ${prootCfg.tmpSizeMb}MB · UV threads ${prootCfg.uvThreadpoolSize}",
