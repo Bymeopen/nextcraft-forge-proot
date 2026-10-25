@@ -4,6 +4,12 @@ name: Screenshots
 # download them as an artifact. Not part of the normal CI: it needs the Robolectric SDK and takes longer.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "render = only draw the screens; compare = fail if a screen changed against the committed baselines; record = also produce new baselines (download the 'baselines' artifact and commit it)"
+        type: choice
+        options: [render, compare, record]
+        default: render
 
 permissions:
   contents: read
@@ -27,10 +33,23 @@ jobs:
         with:
           gradle-version: "9.8.2"
       - name: Render screenshots
-        run: gradle --no-daemon :app:testDebugUnitTest -PforgeScreenshots --tests "com.nextcraft.forge.ui.Shots*"
+        run: gradle --no-daemon :app:testDebugUnitTest -PforgeScreenshots -PforgeScreenshotMode=${{ inputs.mode || 'render' }} --tests "com.nextcraft.forge.ui.Shots*"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: screenshots
           path: app/build/screenshots/*.png
+          if-no-files-found: error
+      # Changed pixels in red, only present when compare mode found a difference.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && inputs.mode == 'compare'
+        with:
+          name: screenshot-diffs
+          path: app/build/screenshots/diff-*.png
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && inputs.mode == 'record'
+        with:
+          name: baselines
+          path: app/src/screenshotTest/baselines/*.png
           if-no-files-found: error

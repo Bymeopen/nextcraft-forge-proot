@@ -10,6 +10,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Android 11+ hides other apps' services: without this SpeechRecognizer.isRecognitionAvailable() is false even
+         with Google's speech service installed, and voice input reports "not available". -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
     <!-- Lets the user exempt the app from battery optimization so long builds/agent sessions are not stopped. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

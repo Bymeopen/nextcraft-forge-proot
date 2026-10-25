@@ -30,7 +30,7 @@ internal object AndroidToolchain {
     const val AAPT2_GUEST_PATH = "$BUILD_TOOLS_GUEST_DIR/aapt2"
     const val ANDROID_JAR_GUEST_PATH = "$SDK_GUEST_DIR/platforms/$PLATFORM/android.jar"
     const val MAVEN_GUEST_DIR = "/root/maven/localMvnRepository"
-    const val GRADLE_INIT_SCRIPT_GUEST_PATH = "/root/.gradle/init.d/pocketdev-android.gradle"
+    const val GRADLE_INIT_SCRIPT_GUEST_PATH = "/root/.gradle/init.d/nextcraft-android.gradle"
     const val GUEST_PATH_PREFIX = "$GRADLE_HOME_GUEST_DIR/bin:$BUILD_TOOLS_GUEST_DIR:$SDK_GUEST_DIR/cmdline-tools/latest/bin"
 
     /** Same paths relative to the rootfs directory on the host side. */
@@ -50,8 +50,13 @@ internal object AndroidToolchain {
     const val SUMMARY = "JDK $JDK_MAJOR, ARM64 Android SDK $COMPILE_SDK, Build Tools $BUILD_TOOLS_VERSION, " +
         "Gradle $GRADLE_VERSION, and an offline Maven cache"
 
-    /** `gradle` flags shared by the in-app build and the agent prompts. */
-    const val GRADLE_BASE_FLAGS = "-Dorg.gradle.jvmargs= --no-daemon --max-workers=2 " +
+    /**
+     * `gradle` flags shared by the in-app build and the agent prompts. No -Dorg.gradle.jvmargs here: an empty value
+     * dropped the device-sized heap/metaspace from ~/.gradle/gradle.properties (which already beats a project's own
+     * gradle.properties) and left builds on Gradle's 512 MB default. Daemon and workers also come from there, sized to
+     * the phone (RuntimeInstaller.gradleSpeedProperties).
+     */
+    const val GRADLE_BASE_FLAGS =
         "--init-script $GRADLE_INIT_SCRIPT_GUEST_PATH -Pandroid.aapt2FromMavenOverride=$AAPT2_GUEST_PATH"
 
     /** Guidance for agents on a runtime whose toolchain is installed. */
@@ -70,6 +75,8 @@ internal object AndroidToolchain {
             "Set android.useAndroidX=true for AndroidX or Compose projects.",
         "NextCraft Forge globally configures Gradle to use the SDK's ARM64 aapt2. Do not use the x86_64 Maven aapt2, " +
             "investigate its architecture, or add android.aapt2FromMavenOverride to the project.",
+        "Background jobs started from a tool call stop when the turn ends. For dev servers and long builds that must " +
+            "outlive the turn use `keep-running <logfile> <command> [args...]` (own session, no hangup) and read the log later.",
         "Use the installed `gradle` command for Android builds; do not ask the user to install Android Studio, an SDK, " +
             "Gradle, ADB, or Termux.",
     )
@@ -79,12 +86,14 @@ internal object AndroidToolchain {
         SDK_HOST_DIR,
         MAVEN_HOST_DIR.substringBefore('/') + "/maven",
         "root/.pocket-android-tools-version",
+        "root/.nextcraft-android-tools-version",
         "root/.gradle/caches",
         "root/.gradle/daemon",
         "root/.gradle/native",
         "root/.gradle/notifications",
         "root/.gradle/wrapper/dists",
         "root/.gradle/init.d/pocketdev-android.gradle",
+        "root/.gradle/init.d/nextcraft-android.gradle",
         GRADLE_HOST_DIR,
         JDK_HOST_DIR,
         "opt/jdk-$JDK_MAJOR",

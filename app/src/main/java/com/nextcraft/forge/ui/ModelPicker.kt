@@ -70,10 +70,9 @@ fun ModelPickerDialog(
     }
     val offerCustom = needle.isNotEmpty() && options.none { it.id.equals(needle, ignoreCase = true) }
 
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = LocalForgeThemeTokens.current.cardContainerColor,
     ) {
         Column(
             modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 16.dp),
@@ -137,12 +136,7 @@ fun ModelPickerDialog(
                 }
                 if (filtered.isEmpty() && !offerCustom) {
                     item(key = "empty") {
-                        Text(
-                            stringResource(R.string.model_picker_empty),
-                            fontSize = ForgeType.body,
-                            color = scheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 12.dp),
-                        )
+                        ForgeEmptyState(glyph = ForgeGlyph.SEARCH, title = stringResource(R.string.model_picker_empty))
                     }
                 }
             }
