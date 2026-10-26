@@ -1607,4 +1607,5 @@
     <string name="verify_now">فحص البناء الآن (بناء + اختبارات)</string>
     <string name="verify_auto_toggle">فحص البناء بعد تغييرات الوكيل</string>
     <string name="verify_autofix_toggle">السماح للوكيل بإصلاح أخطاء البناء</string>
+    <string name="msg_git_waiting_queue">في قائمة الانتظار: توجد عملية Git أخرى قيد التشغيل في هذا المستودع…</string>
 </resources>

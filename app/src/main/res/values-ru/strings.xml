@@ -1567,4 +1567,5 @@
     <string name="verify_now">Проверить сборку сейчас (сборка + тесты)</string>
     <string name="verify_auto_toggle">Проверять сборку после изменений агента</string>
     <string name="verify_autofix_toggle">Разрешить агенту исправлять ошибки сборки</string>
+    <string name="msg_git_waiting_queue">Ожидание в очереди: в этом репозитории выполняется другая операция Git…</string>
 </resources>

@@ -1547,4 +1547,5 @@
     <string name="verify_now">Comprobar compilación ahora (build + pruebas)</string>
     <string name="verify_auto_toggle">Comprobar compilación tras cambios del agente</string>
     <string name="verify_autofix_toggle">Dejar que el agente corrija errores de compilación</string>
+    <string name="msg_git_waiting_queue">Esperando en cola: otra operación de Git se está ejecutando en este repositorio…</string>
 </resources>

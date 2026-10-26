@@ -1507,4 +1507,5 @@
     <string name="verify_now">立即检查构建（构建 + 测试）</string>
     <string name="verify_auto_toggle">智能体修改后检查构建</string>
     <string name="verify_autofix_toggle">让智能体修复构建错误</string>
+    <string name="msg_git_waiting_queue">正在排队等待：此仓库中有另一个 Git 操作正在运行…</string>
 </resources>
