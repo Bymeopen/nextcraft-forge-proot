@@ -45,9 +45,9 @@ class CiCdController(
     context: Context,
     private val activeProject: () -> Project?,
     private val workspaceFor: (String) -> File,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val client = GitHubClient(appContext)
     private val vault = ApiKeyVault(appContext)
     private val mutable = MutableStateFlow(CiCdState())

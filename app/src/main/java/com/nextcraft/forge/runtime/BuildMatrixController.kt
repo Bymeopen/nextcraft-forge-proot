@@ -88,11 +88,11 @@ class BuildMatrixController(
     context: Context,
     private val activeProject: () -> Project?,
     private val workspaceFor: (String) -> File,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val onWorkspaceChanged: (String) -> Unit = {},
     private val onBuildSucceeded: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runner = ChrootRunner(appContext)
     private val prefs = appContext.getSharedPreferences("forge_tools", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(BuildMatrixState())

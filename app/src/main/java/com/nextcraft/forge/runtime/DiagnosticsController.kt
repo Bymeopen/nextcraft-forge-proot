@@ -37,9 +37,11 @@ data class DiagnosticsState(
 )
 
 /** System diagnostics: device resources, runtime state and the chroot health check (chroot-health.sh). */
-class DiagnosticsController(private val context: Context) {
+class DiagnosticsController(
+    private val context: Context,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+) {
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runner = ChrootRunner(appContext)
     private val installer = RuntimeInstaller(appContext)
     private val mutable = MutableStateFlow(DiagnosticsState())

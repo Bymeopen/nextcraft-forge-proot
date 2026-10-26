@@ -32,9 +32,11 @@ internal val ROM_DIRECTORY = Regex("[A-Za-z0-9_][A-Za-z0-9._-]{0,59}")
  * ROM Studio: orchestrates Google's `repo` tool (install, init, sync) in the chroot so a custom ROM source tree can be
  * fetched on the device. Syncing is network- and storage-heavy; the log shows what each step prints.
  */
-class RomStudioController(context: Context) {
+class RomStudioController(
+    context: Context,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+) {
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runner = ChrootRunner(appContext)
     private val prefs = appContext.getSharedPreferences("forge_tools", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(

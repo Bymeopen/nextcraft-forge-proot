@@ -53,10 +53,10 @@ data class ReaState(
  */
 class ReaController(
     context: Context,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val onProjectChanged: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runner = ChrootRunner(appContext)
     private val mutable = MutableStateFlow(ReaState())
     val state: StateFlow<ReaState> = mutable.asStateFlow()

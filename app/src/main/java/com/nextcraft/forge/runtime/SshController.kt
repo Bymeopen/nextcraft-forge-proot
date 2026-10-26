@@ -41,9 +41,11 @@ internal val SSH_FORWARD = Regex("\\d{1,5}:[A-Za-z0-9._-]{1,100}:\\d{1,5}")
  * SSH manager. The terminal in this app is not interactive, so sessions are key-based and non-interactive:
  * test a connection, run a remote command, or hold a port-forward tunnel open. The key pair lives in the chroot.
  */
-class SshController(context: Context) {
+class SshController(
+    context: Context,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+) {
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runner = ChrootRunner(appContext)
     private val prefs = appContext.getSharedPreferences("forge_tools", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(SshState(hosts = readHosts()))
@@ -196,6 +198,15 @@ class SshController(context: Context) {
 
     fun cancel() {
         job?.cancel()
+    }
+
+    fun stopAllTunnels() {
+        job?.cancel()
+        tunnelStarting.clear()
+        tunnelProcesses.keys.toList().forEach { id ->
+            tunnelProcesses.remove(id)?.let { runner.stop(it) }
+        }
+        mutable.update { it.copy(tunnels = emptySet(), busy = false) }
     }
 
     private fun append(current: String, text: String) = (current + text).takeLast(MAX_LOG_CHARS)

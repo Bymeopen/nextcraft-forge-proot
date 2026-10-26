@@ -30,10 +30,10 @@ class SnapshotsController(
     private val workspaceFor: (String) -> File,
     /** True while an agent turn, build or terminal command may be writing to the project. */
     private val projectBusy: () -> Boolean,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val onRestored: (String) -> Unit = {},
 ) {
     private val manager = SnapshotManager(context.applicationContext.filesDir)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutable = MutableStateFlow(SnapshotsState())
     val state: StateFlow<SnapshotsState> = mutable.asStateFlow()
     private var lastProjectId: String? = null

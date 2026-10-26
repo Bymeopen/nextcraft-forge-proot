@@ -293,8 +293,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     // Developer tools (Tools tab). Each owns its state flow and runs its commands in the chroot.
-    val diagnostics = DiagnosticsController(application)
-    val rea = com.nextcraft.forge.runtime.ReaController(application) { changedProjectId ->
+    val diagnostics = DiagnosticsController(application, viewModelScope)
+    val rea = com.nextcraft.forge.runtime.ReaController(application, viewModelScope) { changedProjectId ->
         viewModelScope.launch {
             if (_state.value.activeProjectId == changedProjectId) {
                 refreshWorkspaceFilesAndChanges(changedProjectId)
@@ -305,6 +305,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         application,
         { _state.value.activeProject },
         { checkpoints.ensureWorkspace(it) },
+        viewModelScope,
         onWorkspaceChanged = { changedProjectId ->
             viewModelScope.launch {
                 if (_state.value.activeProjectId == changedProjectId) {
@@ -318,15 +319,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         },
     )
-    val cicd = CiCdController(application, { _state.value.activeProject }, { checkpoints.ensureWorkspace(it) })
-    val ssh = SshController(application)
-    val rom = RomStudioController(application)
+    val cicd = CiCdController(application, { _state.value.activeProject }, { checkpoints.ensureWorkspace(it) }, viewModelScope)
+    val ssh = SshController(application, viewModelScope)
+    val rom = RomStudioController(application, viewModelScope)
     val backup = BackupController(application, viewModelScope)
     val snapshots = SnapshotsController(
         application,
         { _state.value.activeProject },
         { checkpoints.ensureWorkspace(it) },
         { isProjectBusy(_state.value.activeProjectId) },
+        viewModelScope,
         onRestored = { restoredProjectId ->
             checkpoints.acceptAll(restoredProjectId)
             viewModelScope.launch {
@@ -5665,6 +5667,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingDelete?.project?.let { project -> Thread { wipeProjectData(project) }.start() }
         pendingChatDelete?.let { pending -> Thread { wipeChatData(pending.project.id, pending.chat.id) }.start() }
         RuntimeTaskController.requestStop()
+        diagnostics.cancelHealthCheck()
+        rea.cancel()
+        buildMatrix.cancel()
+        rom.cancel()
+        ssh.stopAllTunnels()
         projectBuildHandles.values.forEach { stopChrootProcess(it.process) }
         activeLogcatProcess?.destroyForcibly()
         stopChrootProcess(activeTerminalProcess)
