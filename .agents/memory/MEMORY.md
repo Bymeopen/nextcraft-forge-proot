@@ -1,8 +1,8 @@
 # Long-Term Project & Architecture Memory (`nextcraft-forge`)
 
 ## 1. System & Toolchain Snapshot
-- **Target Platform**: Android (`arm64-v8a`, `minSdk 26`, `targetSdk 35`, `compileSdk 37` with `minorApiLevel = 2` / `android-37.2`).
-- **Build System**: Gradle `9.8.1`, AGP `9.4.1` (built-in Kotlin `2.4.21`, Compose plugin `org.jetbrains.kotlin.plugin.compose`, JDK `21` targeting Java `17` bytecode).
+- **Target Platform**: Android (`arm64-v8a`, `minSdk 26`, `targetSdk 35`, `compileSdk = 37` with `/root/android-sdk/platforms/android-37` & `android-37.2` both installed locally).
+- **Build System**: Gradle `9.8.1`, AGP `9.4.1` (built-in Kotlin `2.4.21`, Compose plugin `org.jetbrains.kotlin.plugin.compose`, JDK `21` targeting Java `17` bytecode). Keep `app/build.gradle.kts`, `build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`, and `.github/workflows/*` 100% identical to GitHub remote (`origin/main` / `proot/main`).
 - **Guest Runtime**: Ubuntu 24.04.5 LTS ARM64 Root Chroot & Non-Root PRoot fallback with `ProotAndChrootOptimizer` (kernels 3.18–6.12+ GKI/16KB page size) and `DeviceHardwareOptimizer` (Snapdragon/MediaTek/UNISOC/Exynos/Tensor, 6–16GB RAM + ZRAM/SwapRAM).
 
 ## 2. Key Architectural Decisions

@@ -7,18 +7,15 @@ plugins {
 
 android {
     namespace = "com.nextcraft.forge"
-    compileSdk {
-        version = release(37) { minorApiLevel = 2 }
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.nextcraft.forge"
         minSdk = 26
         targetSdk = 35
-        // The release workflow passes -PversionCode=... -PversionName=...; local builds use a default versionCode
-        // above the 1000..1099 CI series so a locally built APK can always update over installed CI builds.
-        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1760
-        versionName = (project.findProperty("versionName") as String?) ?: "1.0.1760-forge"
+        // The release workflow passes -PversionCode=... -PversionName=...; local builds keep the defaults.
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 100
+        versionName = (project.findProperty("versionName") as String?) ?: "1.0.0-forge"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -156,8 +153,8 @@ android {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.core:core-ktx:1.19.1")
-    implementation("androidx.work:work-runtime-ktx:2.12.0")
-    implementation("androidx.core:core-splashscreen:1.2.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("com.google.android.material:material:1.14.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
@@ -182,9 +179,9 @@ dependencies {
     implementation("com.github.luben:zstd-jni:1.5.7-24@aar")
     testImplementation("junit:junit:4.13.2")
     // The real org.json: the android.jar stubs do nothing in unit tests (used by the REA result parser test).
-    testImplementation("org.json:json:20260814")
+    testImplementation("org.json:json:20240303")
     if (project.hasProperty("forgeScreenshots")) {
-        testImplementation("org.robolectric:robolectric:4.17")
+        testImplementation("org.robolectric:robolectric:4.12.2")
         testImplementation("androidx.compose.ui:ui-test-junit4")
     }
     debugImplementation("androidx.compose.ui:ui-tooling")

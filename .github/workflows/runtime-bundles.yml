@@ -24,17 +24,17 @@ jobs:
   core:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y zstd
       - run: sudo -E NEXTCRAFT_CORE_VERSION="$VERSION" scripts/runtime-bundles/build-core-on-linux.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with: { name: nextcraft-core, path: out/*.tar.zst, compression-level: 0 }
 
   python-dsh:
     needs: core
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y zstd
       - uses: actions/download-artifact@v4
         with: { name: nextcraft-core, path: core }
@@ -42,26 +42,26 @@ jobs:
         run: sudo mkdir -p /opt/core && sudo tar --zstd -xf core/*.tar.zst -C /opt/core
       - run: sudo -E NEXTCRAFT_CORE_ROOTFS=/opt/core NEXTCRAFT_PYTHON_BUNDLE_VERSION="$VERSION" scripts/runtime-bundles/build-python-bundle.sh
       - run: sudo -E NEXTCRAFT_CORE_ROOTFS=/opt/core NEXTCRAFT_DSH_BUNDLE_VERSION="$VERSION" scripts/runtime-bundles/build-dsh-in-chroot.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with: { name: nextcraft-python-dsh, path: out/*.tar.zst, compression-level: 0 }
 
   agents:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - run: NEXTCRAFT_CLAUDE_BUNDLE_VERSION="$VERSION" scripts/runtime-bundles/build-claude-from-official.sh
       - run: NEXTCRAFT_AGY_BUNDLE_VERSION="$VERSION" scripts/runtime-bundles/build-agy-from-official.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with: { name: nextcraft-agents, path: out/*.tar.zst, compression-level: 0 }
 
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - run: NEXTCRAFT_ANDROID_BUNDLE_VERSION="$VERSION" scripts/runtime-bundles/build-android-bundle.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with: { name: nextcraft-android, path: out/*.tar.zst, compression-level: 0 }
 
   checksums:
@@ -75,5 +75,5 @@ jobs:
           cd all
           for f in *.tar.zst; do printf '%s  %s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(stat -c %s "$f")" "$f"; done | tee SHA256SUMS.txt
           cat SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with: { name: SHA256SUMS, path: all/SHA256SUMS.txt }
