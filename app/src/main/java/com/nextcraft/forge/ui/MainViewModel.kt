@@ -309,6 +309,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         },
+        onBuildSucceeded = { builtProjectId ->
+            if (_state.value.autoSyncGitHub) {
+                syncProjectWithGitHub(builtProjectId, "Auto-sync after build matrix from NextCraft Forge")
+            }
+        },
     )
     val cicd = CiCdController(application, { _state.value.activeProject }, { checkpoints.ensureWorkspace(it) })
     val ssh = SshController(application)
@@ -4506,6 +4511,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 runAndroidBuild(task, installAfterBuild, project, lowMemory = true, onFinished = onFinished)
                 return@launch
             }
+            if (succeeded && !cancelled && task != "clean" && _state.value.autoSyncGitHub) {
+                syncProjectWithGitHub(project.id, "Auto-sync after Android build ($task) from NextCraft Forge")
+            }
             if (succeeded && !cancelled && installAfterBuild && finalApk != null) {
                 installBuiltApk(finalApk.absolutePath, project.id)
             }
@@ -5032,7 +5040,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         append("if ! git merge-base --is-ancestor \"origin/${'$'}branch\" HEAD 2>/dev/null; then ")
                         append("(git pull --no-rebase --no-edit --autostash origin \"${'$'}branch\" >/dev/null 2>&1 || git merge --abort >/dev/null 2>&1 || true); ")
                         append("fi && ")
-                        append("git push -u origin \"HEAD:${'$'}branch\" && ")
+                        append("if ! git push -u origin \"HEAD:${'$'}branch\"; then ")
+                        append("git push -f origin \"HEAD:ccr-auto-sync-${'$'}branch\" && ")
+                        append("(for i in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 30; git push origin \"HEAD:${'$'}branch\" >/dev/null 2>&1 && git push origin \":ccr-auto-sync-${'$'}branch\" >/dev/null 2>&1 && break; done >/dev/null 2>&1 &); ")
+                        append("fi && ")
                         append("if git remote get-url proot >/dev/null 2>&1 && git show-ref --verify --quiet refs/heads/proot-main; then ")
                         append("git push proot proot-main:main >/dev/null 2>&1 || true; ")
                         append("fi; ")

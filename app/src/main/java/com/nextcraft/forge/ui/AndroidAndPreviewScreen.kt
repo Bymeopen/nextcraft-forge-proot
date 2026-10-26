@@ -233,6 +233,11 @@ fun AndroidBuildScreen(
                         onClick = { viewModel.setAutoFixBuild(!state.autoFixBuild) },
                     )
                     DropdownMenuItem(
+                        text = { Text(stringResource(R.string.settings_auto_commit_push)) },
+                        trailingIcon = { androidx.compose.material3.Switch(checked = state.autoSyncGitHub, onCheckedChange = null) },
+                        onClick = { viewModel.setAutoSyncGitHub(!state.autoSyncGitHub) },
+                    )
+                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.launch_clean)) },
                         enabled = !busy,
                         onClick = {
