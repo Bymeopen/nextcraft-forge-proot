@@ -1488,4 +1488,15 @@
     <string name="inspector_empty_hint">点击“扫描屏幕 UI”检查当前 Android 视图层次，点击任意元素即可让编码智能体修改。</string>
     <string name="inspector_edit_with_agent">用智能体编辑此元素</string>
     <string name="inspector_instruction_hint">描述智能体应如何修改此元素</string>
+    <string name="build_retry_low_memory">内存不足：正在用更轻量的 Gradle 设置重新构建…</string>
+    <string name="verify_running">正在检查构建（构建 + 单元测试）…</string>
+    <string name="verify_passed">构建检查通过 ✓</string>
+    <string name="verify_fixing">构建检查失败：智能体正在修复（第 %1$d / %2$d 轮）…</string>
+    <string name="verify_gave_up">经过 %1$d 轮修复后构建仍然失败。请查看“问题”标签页。</string>
+    <string name="verify_failed_memory">构建检查已停止：内存不足。请关闭其他应用后重试。</string>
+    <string name="verify_failed_dependency">构建检查失败：无法下载某个库。请联网后构建一次。</string>
+    <string name="verify_failed">构建检查失败。请查看“问题”和“日志”标签页。</string>
+    <string name="verify_now">立即检查构建（构建 + 测试）</string>
+    <string name="verify_auto_toggle">智能体修改后检查构建</string>
+    <string name="verify_autofix_toggle">让智能体修复构建错误</string>
 </resources>
