@@ -1515,4 +1515,12 @@
     <string name="verify_auto_toggle">Periksa build setelah agen mengubah file</string>
     <string name="verify_autofix_toggle">Biarkan agen memperbaiki error build</string>
     <string name="msg_git_waiting_queue">Menunggu giliran: proses Git lain sedang berjalan di repositori ini…</string>
+    <string name="projects_connect_figma">Hubungkan Figma</string>
+    <string name="projects_figma_subtitle">Impor desain UI/UX &amp; token dari Figma</string>
+    <string name="projects_figma_connected">Terhubung ke Figma MCP · siap impor desain</string>
+    <string name="projects_figma_description">Hubungkan Personal Access Token Figma Anda (figd_…) untuk mengaktifkan Figma MCP di semua agen AI, atau tempel tautan desain Figma untuk membuat kode UI.</string>
+    <string name="projects_figma_token_hint">Tempel Personal Access Token Figma (figd_…)</string>
+    <string name="projects_figma_open_settings">Buka pengaturan token Figma</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="projects_figma_import_url">Impor desain Figma ke proyek</string>
 </resources>

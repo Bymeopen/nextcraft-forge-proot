@@ -1548,4 +1548,12 @@
     <string name="verify_auto_toggle">Comprobar compilación tras cambios del agente</string>
     <string name="verify_autofix_toggle">Dejar que el agente corrija errores de compilación</string>
     <string name="msg_git_waiting_queue">Esperando en cola: otra operación de Git se está ejecutando en este repositorio…</string>
+    <string name="projects_connect_figma">Conectar Figma</string>
+    <string name="projects_figma_subtitle">Importar diseños UI/UX y tokens desde Figma</string>
+    <string name="projects_figma_connected">Conectado a Figma MCP · listo para importar diseños</string>
+    <string name="projects_figma_description">Conecta tu token de acceso personal de Figma (figd_…) para activar Figma MCP en todos los agentes, o pega un enlace de Figma para generar código UI.</string>
+    <string name="projects_figma_token_hint">Pegar token de acceso personal de Figma (figd_…)</string>
+    <string name="projects_figma_open_settings">Abrir ajustes de token de Figma</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="projects_figma_import_url">Importar diseño de Figma al proyecto</string>
 </resources>

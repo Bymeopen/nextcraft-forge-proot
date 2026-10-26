@@ -1528,4 +1528,12 @@
     <string name="verify_auto_toggle">एजेंट के बदलावों के बाद बिल्ड जाँचें</string>
     <string name="verify_autofix_toggle">एजेंट को बिल्ड त्रुटियाँ ठीक करने दें</string>
     <string name="msg_git_waiting_queue">कतार में प्रतीक्षा: इस रिपॉज़िटरी में एक अन्य Git कार्य चल रहा है…</string>
+    <string name="projects_connect_figma">Figma कनेक्ट करें</string>
+    <string name="projects_figma_subtitle">Figma से UI/UX डिज़ाइन और टोकन आयात करें</string>
+    <string name="projects_figma_connected">Figma MCP से कनेक्टेड · डिज़ाइन आयात करने के लिए तैयार</string>
+    <string name="projects_figma_description">सभी कोडिंग एजेंटों के लिए Figma MCP सक्रिय करने हेतु अपना Figma Personal Access Token (figd_…) जोड़ें, या UI कोड बनाने के लिए Figma लिंक पेस्ट करें।</string>
+    <string name="projects_figma_token_hint">Figma Personal Access Token पेस्ट करें (figd_…)</string>
+    <string name="projects_figma_open_settings">Figma टोकन सेटिंग्स खोलें</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="projects_figma_import_url">प्रोजेक्ट में Figma डिज़ाइन आयात करें</string>
 </resources>
