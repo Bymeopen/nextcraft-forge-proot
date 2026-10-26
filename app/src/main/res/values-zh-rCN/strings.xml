@@ -202,6 +202,7 @@
     <string name="shell_check_root">Root 权限（`su -mm` 挂载命名空间）</string>
     <string name="shell_root_granted">已授予 Magisk / KernelSU / APatch</string>
     <string name="shell_root_required">chroot 需要 Root 权限</string>
+    <string name="shell_proot_fallback">无 Root：使用内置 PRoot 引擎（构建较慢）</string>
     <string name="shell_check_rootfs">Ubuntu 24.04 Rootfs 与智能体工具链</string>
     <string name="shell_installed_ready">已安装并就绪</string>
     <string name="shell_resume_setup">继续设置</string>
@@ -613,6 +614,13 @@
     <string name="settings_appearance">外观</string>
     <string name="settings_language_system">跟随系统</string>
     <string name="settings_language">语言</string>
+    <string name="settings_runtime_engine">运行时引擎</string>
+    <string name="engine_auto">自动</string>
+    <string name="engine_auto_sub">获得授权时使用 Root Chroot，否则使用 PRoot</string>
+    <string name="engine_chroot">Root Chroot</string>
+    <string name="engine_chroot_sub">需要 Magisk / KernelSU / APatch；速度最快</string>
+    <string name="engine_proot">PRoot（无需 Root）</string>
+    <string name="engine_proot_sub">从不请求 Root；构建速度较慢</string>
     <string name="settings_agent_not_installed">未安装 %1$s</string>
     <string name="settings_agent_install_hint">安装其 %1$s 智能体包，即可用于现有项目。</string>
     <string name="settings_agent_install_named">安装 %1$s</string>

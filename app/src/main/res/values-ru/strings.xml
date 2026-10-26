@@ -202,6 +202,7 @@
     <string name="shell_check_root">Root-доступ (пространство имён монтирования `su -mm`)</string>
     <string name="shell_root_granted">Magisk / KernelSU / APatch: доступ выдан</string>
     <string name="shell_root_required">Для chroot нужны права root</string>
+    <string name="shell_proot_fallback">Без root: используется встроенный движок PRoot (сборка медленнее)</string>
     <string name="shell_check_rootfs">Ubuntu 24.04 Rootfs и инструменты агентов</string>
     <string name="shell_installed_ready">Установлено и готово</string>
     <string name="shell_resume_setup">Продолжить установку</string>
@@ -649,6 +650,13 @@
     <string name="settings_appearance">Оформление</string>
     <string name="settings_language_system">Как в системе</string>
     <string name="settings_language">Язык</string>
+    <string name="settings_runtime_engine">Движок выполнения</string>
+    <string name="engine_auto">Автоматически</string>
+    <string name="engine_auto_sub">Root chroot при наличии прав, иначе PRoot</string>
+    <string name="engine_chroot">Root chroot</string>
+    <string name="engine_chroot_sub">Требуется Magisk / KernelSU / APatch; самый быстрый</string>
+    <string name="engine_proot">PRoot (без root)</string>
+    <string name="engine_proot_sub">Никогда не запрашивает root; сборка медленнее</string>
     <string name="settings_agent_not_installed">%1$s не установлен</string>
     <string name="settings_agent_install_hint">Установите пакет агента %1$s, чтобы использовать его в существующих проектах.</string>
     <string name="settings_agent_install_named">Установить %1$s</string>

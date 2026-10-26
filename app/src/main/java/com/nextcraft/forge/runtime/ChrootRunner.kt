@@ -15,7 +15,7 @@ data class ChrootResult(val exitCode: Int, val output: String, val timedOut: Boo
 
 /**
  * Runs shell commands inside the Ubuntu chroot for the Tools screens (diagnostics, build matrix, SSH, ROM Studio).
- * Each command runs as `bash -lc` under `su -mm` with a workspace at /workspace/<slug>.
+ * Each command runs as `bash -lc` under the active engine (`su -mm` chroot, or PRoot) with a workspace at /workspace/<slug>.
  */
 class ChrootRunner(context: Context) {
     private val appContext = context.applicationContext
@@ -37,7 +37,7 @@ class ChrootRunner(context: Context) {
             guestCommand = listOf("/bin/bash", "-lc", command),
         )
         val process = try {
-            ProcessBuilder(SuCompat.argv(suCommand)).redirectErrorStream(true).start()
+            ProcessBuilder(installer.launchArgv(suCommand)).redirectErrorStream(true).start()
         } catch (error: Throwable) {
             envFile.delete()
             throw error

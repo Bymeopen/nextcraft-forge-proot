@@ -82,6 +82,7 @@ import com.nextcraft.forge.model.DevStack
 import com.nextcraft.forge.model.ProviderKind
 import com.nextcraft.forge.model.providersForAgent
 import com.nextcraft.forge.runtime.AntigravityAuthStatus
+import com.nextcraft.forge.runtime.RuntimeEngineChoice
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
 import kotlinx.coroutines.launch
 
@@ -169,6 +170,31 @@ fun SettingsScreenModern(
                             subtitle = lang.displayName,
                             selected = lang == activeLanguage,
                             onClick = { viewModel.setLanguageCode(lang.code) },
+                        )
+                    }
+                }
+            }
+            ThinDivider()
+
+            // Runtime engine (ADR-007): auto prefers root chroot and falls back to PRoot; the others force one.
+            val engineChoices = RuntimeEngineChoice.entries
+            val activeEngine = RuntimeEngineChoice.fromStored(state.runtimeEngineChoice)
+            var engineOpen by rememberSaveable { mutableStateOf(false) }
+            SettingsRow(
+                icon = ForgeGlyph.TERMINAL,
+                title = stringResource(R.string.settings_runtime_engine),
+                subtitle = stringResource(activeEngine.titleRes()),
+                onClick = { engineOpen = !engineOpen },
+                trailing = { Chevron(engineOpen) },
+            )
+            AnimatedVisibility(visible = engineOpen) {
+                Column(modifier = Modifier.padding(bottom = 6.dp)) {
+                    engineChoices.forEach { choice ->
+                        RadioRow(
+                            title = stringResource(choice.titleRes()),
+                            subtitle = stringResource(choice.subtitleRes()),
+                            selected = choice == activeEngine,
+                            onClick = { viewModel.setRuntimeEngineChoice(choice.id) },
                         )
                     }
                 }

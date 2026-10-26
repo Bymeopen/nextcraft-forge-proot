@@ -202,6 +202,7 @@
     <string name="shell_check_root">Root एक्सेस (`su -mm` Mount Namespace)</string>
     <string name="shell_root_granted">Magisk / KernelSU / APatch की अनुमति मिली</string>
     <string name="shell_root_required">chroot के लिए Root अधिकार ज़रूरी हैं</string>
+    <string name="shell_proot_fallback">रूट नहीं: अंतर्निहित PRoot इंजन पर चल रहा है (धीमी बिल्ड)</string>
     <string name="shell_check_rootfs">Ubuntu 24.04 Rootfs और Agent Toolchains</string>
     <string name="shell_installed_ready">Install हो चुका और तैयार</string>
     <string name="shell_resume_setup">सेटअप जारी रखें</string>
@@ -625,6 +626,13 @@
     <string name="settings_appearance">दिखावट</string>
     <string name="settings_language_system">सिस्टम डिफ़ॉल्ट</string>
     <string name="settings_language">भाषा</string>
+    <string name="settings_runtime_engine">रनटाइम इंजन</string>
+    <string name="engine_auto">स्वचालित</string>
+    <string name="engine_auto_sub">अनुमति मिलने पर Root chroot, अन्यथा PRoot</string>
+    <string name="engine_chroot">Root chroot</string>
+    <string name="engine_chroot_sub">Magisk / KernelSU / APatch ज़रूरी; सबसे तेज़</string>
+    <string name="engine_proot">PRoot (बिना Root)</string>
+    <string name="engine_proot_sub">कभी Root नहीं माँगता; बिल्ड धीमी होती है</string>
     <string name="settings_agent_not_installed">%1$s install नहीं है</string>
     <string name="settings_agent_install_hint">अपने मौजूदा projects के साथ उपयोग के लिए इसका %1$s agent पैकेज install करें।</string>
     <string name="settings_agent_install_named">%1$s install करें</string>

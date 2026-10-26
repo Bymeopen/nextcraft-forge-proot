@@ -203,6 +203,7 @@
     <string name="shell_check_root">Root Access (`su -mm` Mount Namespace)</string>
     <string name="shell_root_granted">Magisk / KernelSU / APatch granted</string>
     <string name="shell_root_required">Root privileges required for chroot</string>
+    <string name="shell_proot_fallback">No root: running on the built-in PRoot engine (slower builds)</string>
     <string name="shell_check_rootfs">Ubuntu 24.04 Rootfs &amp; Agent Toolchains</string>
     <string name="shell_installed_ready">Installed &amp; ready</string>
     <string name="shell_resume_setup">Resume Setup</string>
@@ -626,6 +627,13 @@
     <string name="settings_appearance">Appearance</string>
     <string name="settings_language_system">System default</string>
     <string name="settings_language">Language</string>
+    <string name="settings_runtime_engine">Runtime engine</string>
+    <string name="engine_auto">Automatic</string>
+    <string name="engine_auto_sub">Root chroot when granted, otherwise PRoot</string>
+    <string name="engine_chroot">Root chroot</string>
+    <string name="engine_chroot_sub">Requires Magisk / KernelSU / APatch; fastest</string>
+    <string name="engine_proot">PRoot (no root)</string>
+    <string name="engine_proot_sub">Never asks for root; builds run slower</string>
     <string name="settings_agent_not_installed">%1$s is not installed</string>
     <string name="settings_agent_install_hint">Install its %1$s agent package to use it with your existing projects.</string>
     <string name="settings_agent_install_named">Install %1$s</string>

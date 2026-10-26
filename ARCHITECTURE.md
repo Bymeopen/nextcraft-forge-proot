@@ -173,6 +173,13 @@ Berbeda dengan aplikasi SaaS yang menarik biaya langganan untuk mem-proxy API di
   - **Positif**: **100% aman dari kehilangan data host/workspace**, ekstraksi bundel 5x–10x lebih cepat dibanding loop `TarArchiveInputStream` di JVM, dan tahan terhadap kegagalan di tengah proses instalasi.
   - **Negatif**: Memerlukan verifikasi ketat terhadap `/proc/mounts` sebelum operasi penghapusan direktori apa pun diizinkan.
 
+#### ADR-007: Non-Root Fallback Engine (PRoot) di Samping Pure Root Chroot
+* **Status**: Accepted (merevisi ADR-002; Pure Root Chroot tetap mesin utama)
+* **Context**: ADR-002 menolak PRoot karena kinerja dan menolak dual-runtime karena kompleksitas. Dua hal berubah: bundle Android 2026.10.1 memakai `aapt2`/`zipalign` **statis** (tidak butuh bind `/system`/`/apex`/`linker64`, satu-satunya bagian runtime yang mustahil tanpa root), dan ada permintaan menjalankan runtime di perangkat tanpa root.
+* **Decision**: Tambahkan **satu** titik pemilihan mesin, `RuntimeEngines.detect()`: `su` tersedia → `CHROOT` (tidak berubah); tidak → `PROOT` bila APK membawa `libproot.so`; tidak keduanya → runtime tidak bisa dipasang. Kontrak supervisor dipertahankan: `proot-exec.sh` menerima argumen yang sama dengan `chroot-exec.sh` dan menghasilkan layout guest yang sama (`/workspace/<slug>`, `/pocketdev-bridge`, env Android). `prepareChrootShellCommand` hanya mengganti baris `exec`, dan ketiga peluncur (`NativeSpawnProcess`, `ChrootRunner`, `MainViewModel`) memakai `launchArgv()`. Operasi khusus root (`ensureUnmounted`, `reclaimOwnership`, `pm install` senyap, matikan phantom-process killer) menjadi *no-op*/fallback di `PROOT`, bukan cabang baru.
+* **Biner**: `proot` 5.5.0 + `talloc` 2.4.3 dibangun statis (glibc, ARM64) oleh `scripts/runtime-bundles/build-proot-static.sh`, dikemas sebagai `app/src/main/jniLibs/arm64-v8a/libproot.so` (`useLegacyPackaging = true`) karena Android hanya mengizinkan exec dari `nativeLibraryDir`.
+* **Consequences**: Build Gradle 2–4x lebih lambat di PRoot (ptrace); phantom-process killer tidak bisa dimatikan tanpa root; pemasangan APK hasil build memakai `PackageInstaller` biasa (ada dialog). Mode PRoot belum diuji di perangkat (sandbox CI tidak bisa menjalankan ptrace di bawah qemu-user). Rule Global nomor 2 direvisi.
+
 ---
 
 ### 2.2 System Architecture Diagram (C4 & Layered View)
@@ -2206,8 +2213,8 @@ Runbook operasional untuk menangani insiden P0–P3 yang spesifik terjadi pada a
 | **Crash-Free Session Rate** | $\ge 99.5\%$ | $98.2\%$ | **$99.8\%$** | Periksa `BoundedFileReads` (batas 256 KB) dan `safeUnmountAll()`. |
 
 **7 Aturan Eksekusi Global NextCraft Forge**:
-1. **Tidak ada keputusan arsitektur tanpa ADR** (`ADR-001` s/d `ADR-006`).
-2. **Murni 1 Mesin Runtime (Pure Root Chroot)**: Tidak boleh ada kode `libproot.so` atau percabangan *dual-runtime*.
+1. **Tidak ada keputusan arsitektur tanpa ADR** (`ADR-001` s/d `ADR-007`).
+2. **Pure Root Chroot adalah mesin utama; PRoot hanya fallback tanpa root** (`ADR-007`): satu kontrak supervisor (`chroot-exec.sh` / `proot-exec.sh`), satu titik pemilihan mesin (`RuntimeEngines`), tidak ada percabangan mesin di luar itu.
 3. **Tanpa Local LLM Engine & Tanpa Fine-Tuning**: Seluruh RAM perangkat didedikasikan untuk kontainer Ubuntu 24.04, CLI Agent (`claude`, `agy`, `dsh`), dan kompilasi proyek (`Gradle`/`Node`/`Python`).
 4. **Tidak ada operasi hapus Rootfs tanpa `safeUnmountAll()`** yang memverifikasi `/proc/mounts` bersih 100%.
 5. **Semua API Key untuk provider non-Anthropic selalu melewati `LocalFormatGateway` (`127.0.0.1`)** dan disimpan di `ApiKeyVault` (`AndroidKeyStore` `AES/GCM/NoPadding`).

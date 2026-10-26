@@ -10,7 +10,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "app/src/main/java/com/nextcraft/forge/runtime/RuntimeInstaller.kt"
-PAIRS = {"CHROOT_EXEC_SCRIPT": "chroot-exec.sh", "UNMOUNT_CHROOT_SCRIPT": "unmount-chroot.sh"}
+PAIRS = {
+    "CHROOT_EXEC_SCRIPT": "chroot-exec.sh",
+    "UNMOUNT_CHROOT_SCRIPT": "unmount-chroot.sh",
+    "PROOT_EXEC_SCRIPT": "proot-exec.sh",
+}
 
 
 def embedded(source: str, name: str) -> str:
