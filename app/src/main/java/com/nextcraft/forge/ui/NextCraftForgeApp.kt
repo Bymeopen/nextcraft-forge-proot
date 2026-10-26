@@ -97,6 +97,9 @@ import com.nextcraft.forge.model.AndroidTemplate
 import com.nextcraft.forge.model.DevStack
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
 import com.nextcraft.forge.R
 import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
@@ -222,8 +225,8 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                             ProjectPane.TERMINAL -> ForgeTab.TERMINAL
                             ProjectPane.PREVIEW -> ForgeTab.PREVIEW
                         },
-                        changedCount = state.changedItems.size,
-                        agentRunning = state.sessionRunning,
+                        changedCount = state.changedItems.count { it.accepted == null },
+                        agentRunning = state.runningChatIds.isNotEmpty(),
                         terminalBusy = state.terminalRunning,
                         onSelectTab = { tab ->
                             viewModel.selectProjectPane(
@@ -240,7 +243,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                     ForgeBottomBar(
                         entries = navEntries,
                         selectedTab = state.activeTab,
-                        changedCount = state.changedItems.size,
+                        changedCount = state.changedItems.count { it.accepted == null },
                         agentRunning = state.sessionRunning,
                         terminalBusy = state.terminalRunning,
                         onSelectTab = viewModel::selectTab,
@@ -333,16 +336,71 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                 }
             }
 
+            LiveActivityHud(
+                state = state,
+                onSelectRun = viewModel::openProjectChat,
+                onSelectBuild = viewModel::openProjectBuild,
+                onStopRun = viewModel::stopProjectChatRun,
+                onStopBuild = viewModel::stopAndroidBuild,
+            )
+
             // Screen host: inside Projects, going deeper (list → chats → conversation) pushes from the right and
-            // Back pops; tab and pane changes cross-fade. One key per visible screen.
+            // Back pops; pane switches inside a project also slide smoothly left/right.
             val depth = when (state.projectView) { ProjectView.LIST -> 0; ProjectView.CHATS -> 1; ProjectView.CONVERSATION -> 2 }
+            val paneOrder = state.projectPane.ordinal
             var lastDepth by remember { mutableStateOf(depth) }
-            val forward = depth >= lastDepth
-            val slide = state.activeTab == ForgeTab.PROJECTS && state.projectPane == ProjectPane.CHAT && depth != lastDepth
-            androidx.compose.runtime.SideEffect { lastDepth = depth }
+            var lastPaneOrder by remember { mutableStateOf(paneOrder) }
+            val depthChanged = depth != lastDepth
+            val paneChanged = !splitPane && state.activeTab == ForgeTab.PROJECTS && state.projectView != ProjectView.LIST && paneOrder != lastPaneOrder
+            val forward = if (depthChanged) depth >= lastDepth else paneOrder >= lastPaneOrder
+            val slide = state.activeTab == ForgeTab.PROJECTS && (depthChanged || paneChanged)
+            androidx.compose.runtime.SideEffect {
+                lastDepth = depth
+                lastPaneOrder = paneOrder
+            }
             // Single-pane screens stop at a readable width on wide displays; workspace screens use all of it.
             val capWidth = expanded && !splitPane && state.activeTab !in fullWidthTabs
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            val canSwipePanes = !splitPane && state.activeTab == ForgeTab.PROJECTS && state.projectView != ProjectView.LIST
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val panes = ProjectPane.entries
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .then(
+                        if (canSwipePanes) {
+                            Modifier.pointerInput(state.projectPane) {
+                                val edgePx = with(density) { 44.dp.toPx() }
+                                val thresholdPx = with(density) { 64.dp.toPx() }
+                                val headerPx = with(density) { 68.dp.toPx() }
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val nearLeftEdge = down.position.x <= edgePx
+                                    val nearRightEdge = down.position.x >= size.width - edgePx
+                                    val nearTopHeader = down.position.y <= headerPx
+                                    if (!nearLeftEdge && !nearRightEdge && !nearTopHeader) return@awaitEachGesture
+                                    var totalDx = 0f
+                                    var totalDy = 0f
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) break
+                                        totalDx += change.position.x - change.previousPosition.x
+                                        totalDy += change.position.y - change.previousPosition.y
+                                    }
+                                    if (kotlin.math.abs(totalDx) > thresholdPx && kotlin.math.abs(totalDx) > kotlin.math.abs(totalDy) * 1.4f) {
+                                        val curIdx = panes.indexOf(state.projectPane)
+                                        val nextIdx = if (totalDx < 0f) curIdx + 1 else curIdx - 1
+                                        if (nextIdx in panes.indices) {
+                                            viewModel.selectProjectPane(panes[nextIdx])
+                                        }
+                                    }
+                                }
+                            }
+                        } else Modifier,
+                    ),
+                contentAlignment = Alignment.TopCenter,
+            ) {
             ForgeScreenHost(
                 key = Triple(state.activeTab, state.projectView, if (splitPane) ProjectPane.CHAT else state.projectPane),
                 forward = forward,
@@ -446,4 +504,25 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
 }
 
 /** Banners that only confirm something; everything else (errors, blocked actions, offers) stays on screen. */
-private val transientBanners = setOf(R.string.msg_agents_up_to_date, R.string.msg_imported, R.string.msg_queue_discarded)
+private val transientBanners = setOf(
+    R.string.msg_agents_up_to_date,
+    R.string.msg_imported,
+    R.string.msg_queue_discarded,
+    R.string.msg_caches_cleared,
+    R.string.msg_parallel_queued,
+    R.string.branch_enabled,
+    R.string.branch_auto,
+    R.string.branch_merged,
+    R.string.branch_updated,
+    R.string.branch_committed,
+    R.string.repo_committed,
+    R.string.repo_branch_created,
+    R.string.repo_branch_switched,
+    R.string.repo_branch_deleted,
+    R.string.connector_saved,
+    R.string.skill_saved,
+    R.string.schedule_added,
+    R.string.schedule_cleared,
+    R.string.rt_snap_saved,
+    R.string.rt_snap_deleted,
+)

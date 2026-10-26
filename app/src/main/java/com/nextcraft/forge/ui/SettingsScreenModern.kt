@@ -348,6 +348,7 @@ fun SettingsScreenModern(
                 OutlinedButton(
                     shape = RoundedCornerShape(100),
                     onClick = { cachesOpen = true; viewModel.loadRuntimeCacheSizes() },
+                    enabled = !state.sessionRunning && state.buildingProjectIds.isEmpty(),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
                 ) {
                     ForgeIcon(glyph = ForgeGlyph.TRASH, tint = MaterialTheme.colorScheme.onSurface, size = 16.dp)
@@ -375,7 +376,7 @@ fun SettingsScreenModern(
                         confirmButton = {
                             TextButton(
                                 onClick = { cachesOpen = false; viewModel.clearRuntimeCaches() },
-                                enabled = sizes != null && sizes.values.sum() > 0,
+                                enabled = sizes != null && sizes.values.sum() > 0 && !state.sessionRunning && state.buildingProjectIds.isEmpty(),
                             ) { Text(stringResource(R.string.settings_clear_caches_confirm), color = tokens.dangerText) }
                         },
                         dismissButton = {

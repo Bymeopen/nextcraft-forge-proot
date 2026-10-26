@@ -38,10 +38,12 @@ internal object BackupCrypto {
 
     private fun key(password: CharArray, salt: ByteArray): SecretKeySpec {
         val spec = PBEKeySpec(password, salt, ITERATIONS, 256)
+        var raw: ByteArray? = null
         try {
-            val raw = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+            raw = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
             return SecretKeySpec(raw, "AES")
         } finally {
+            raw?.fill(0)
             spec.clearPassword()
         }
     }

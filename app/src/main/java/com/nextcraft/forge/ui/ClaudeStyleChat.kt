@@ -79,6 +79,7 @@ internal fun ChatTopBar(
     onBranch: () -> Unit,
     onEnableBranch: () -> Unit,
     onOpenRea: () -> Unit,
+    onOpenMemory: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     var menuOpen by rememberSaveable { mutableStateOf(false) }
@@ -106,8 +107,13 @@ internal fun ChatTopBar(
                     CircularProgressIndicator(modifier = Modifier.padding(start = 8.dp).size(14.dp), strokeWidth = 2.dp)
                 }
             }
+            val activeAgentLabel = primaryAgent(state).displayTitle()
+            val modeSuffix = if (state.routing.mode != com.nextcraft.forge.model.RouteMode.SINGLE) {
+                routeModeLabel(state.routing.mode)
+            } else null
+            val branchSuffix = if (activeChat?.isolated == true) stringResource(R.string.branch_title) else null
             Text(
-                text = listOfNotNull(state.activeProject?.name, state.agentKind.displayTitle()).joinToString(" · "),
+                text = listOfNotNull(state.activeProject?.name, activeAgentLabel, modeSuffix, branchSuffix).joinToString(" · "),
                 fontSize = ForgeType.secondary,
                 color = scheme.onSurfaceVariant,
                 maxLines = 1,
@@ -136,18 +142,17 @@ internal fun ChatTopBar(
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rename)) }, onClick = { menuOpen = false; onRename() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_memory)) }, onClick = { menuOpen = false; onOpenMemory() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_usage)) }, onClick = { menuOpen = false; onUsage() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_schedule)) }, onClick = { menuOpen = false; onSchedule() })
-                if (state.agentKind == AgentKind.CLAUDE_CODE) {
-                    if (activeChat?.isolated == true) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
-                    } else {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.branch_menu_enable)) },
-                            enabled = !state.activeChatRunning,
-                            onClick = { menuOpen = false; onEnableBranch() },
-                        )
-                    }
+                if (activeChat?.isolated == true) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
+                } else {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.branch_menu_enable)) },
+                        enabled = !state.activeChatRunning,
+                        onClick = { menuOpen = false; onEnableBranch() },
+                    )
                 }
                 DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rea)) }, onClick = { menuOpen = false; onOpenRea() })
                 DropdownMenuItem(
@@ -282,7 +287,12 @@ internal fun ChatUsageSheet(state: ForgeUiState, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
     val used = estimateContextTokens(state.messages)
-    val limit = contextWindowTokens(state.providerProfile.model)
+    val activeAgent = primaryAgent(state)
+    val activeModel = when (activeAgent) {
+        AgentKind.ANTIGRAVITY -> state.antigravityModel
+        else -> profileOf(state, activeAgent).model
+    }
+    val limit = contextWindowTokens(activeModel)
     val fraction = (used.toFloat() / limit).coerceIn(0f, 1f)
     ForgeModalSheet(
         onDismissRequest = onDismiss,
@@ -344,12 +354,35 @@ internal fun ChatModelSheet(state: ForgeUiState, viewModel: MainViewModel, onDis
     val agent = if (multi) sheetAgent else state.agentKind
     val profile = if (agent == state.agentKind) state.providerProfile else state.agentProfiles[agent] ?: state.providerProfile
     val discovered = if (agent == state.agentKind) state.discoveredModels else emptyList()
+    val activeAgentLabel = primaryAgent(state).displayTitle()
+    val discoveryAgent = if (multi) sheetAgent else state.agentKind
+    val discoveryProfile = if (discoveryAgent == state.agentKind) state.providerProfile else state.agentProfiles[discoveryAgent] ?: state.providerProfile
+    androidx.compose.runtime.LaunchedEffect(agent) {
+        if (agent == AgentKind.ANTIGRAVITY && state.antigravityModels.isEmpty() && !state.antigravityModelsLoading) {
+            viewModel.refreshAntigravityModels()
+        }
+    }
     ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.chat_model_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.chat_model_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                when {
+                    discoveryAgent == AgentKind.ANTIGRAVITY -> ForgeTextButton(
+                        onClick = viewModel::refreshAntigravityModels,
+                        enabled = !state.antigravityModelsLoading,
+                    ) { Text(stringResource(R.string.agent_sync)) }
+                    discoveryAgent == state.agentKind && discoveryProfile.kind != com.nextcraft.forge.model.ProviderKind.CLAUDE -> ForgeTextButton(
+                        onClick = viewModel::discoverProviderModels,
+                        enabled = !state.apiBusy,
+                    ) { Text(stringResource(R.string.settings_discover_models)) }
+                }
+            }
+            if (state.antigravityModelsLoading || (discoveryAgent == state.agentKind && state.apiBusy)) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
             if (multi) {
                 // One tab per provider: its own models and, for Claude and Antigravity, its own reasoning effort.
                 val agents = AgentKind.entries
@@ -419,8 +452,12 @@ private fun ModelList(options: List<ModelOption>, selectedId: String, onSelect: 
 internal fun estimateContextTokens(messages: List<ChatMessage>): Int =
     messages.sumOf { message -> message.text.length + message.workItems.sumOf { it.title.length + it.detail.length } } / 4
 
-/** The window assumed for a model id: the `[1m]` variants have one million tokens, everything else 200k. */
-internal fun contextWindowTokens(model: String): Int = if (model.contains("[1m]", ignoreCase = true)) 1_000_000 else 200_000
+/** The window assumed for a model id: the `[1m]` and Gemini Pro/Argon variants have one million tokens, everything else 200k. */
+internal fun contextWindowTokens(model: String): Int =
+    if (model.contains("[1m]", ignoreCase = true) ||
+        model.contains("gemini", ignoreCase = true) ||
+        model.contains("argon", ignoreCase = true)
+    ) 1_000_000 else 200_000
 
 /** "442.8k", "1M", "200k": compact token counts for the usage sheet. */
 internal fun formatTokenCount(tokens: Int): String = when {

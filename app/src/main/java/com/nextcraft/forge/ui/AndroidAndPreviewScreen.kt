@@ -154,12 +154,12 @@ fun AndroidBuildScreen(
     val clipboard = LocalClipboardManager.current
 
     // Stage events carry only the active stage, so remember the last real one to place success/failure.
-    var lastRow by remember { mutableStateOf(-1) }
-    LaunchedEffect(build.stage, build.phase) {
+    var lastRow by remember(state.activeProjectId) { mutableStateOf(-1) }
+    LaunchedEffect(state.activeProjectId, build.stage, build.phase) {
         val index = stageRowIndex(build.stage)
         if (build.phase == AndroidBuildPhase.IDLE) lastRow = -1 else if (index >= 0) lastRow = index
     }
-    LaunchedEffect(build.phase) {
+    LaunchedEffect(state.activeProjectId, build.phase) {
         if (build.phase == AndroidBuildPhase.FAILED && build.issues.isNotEmpty()) activeTab = 1
     }
 
@@ -241,6 +241,8 @@ fun AndroidBuildScreen(
             },
         )
 
+        LiveResourceMiniBar(onCleanIdleDaemons = viewModel::cleanIdleDaemons)
+
         // Status block
         val errorCount = build.issues.count { it.severity == AndroidIssueSeverity.ERROR }
         val warningCount = build.issues.count { it.severity == AndroidIssueSeverity.WARNING }
@@ -278,17 +280,32 @@ fun AndroidBuildScreen(
                     .height(3.dp),
             )
         }
-        if (build.phase == AndroidBuildPhase.FAILED && build.issues.isNotEmpty()) {
-            ForgePrimaryButton(
-                text = stringResource(R.string.launch_fix_with_agent),
-                onClick = {
-                    viewModel.sendPrompt(build.issues.joinToString("\n\n") { it.formatForAgentPrompt() })
-                    viewModel.openConversation()
-                },
+        if (build.phase == AndroidBuildPhase.FAILED && (build.issues.isNotEmpty() || build.log.isNotBlank())) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ForgePrimaryButton(
+                    text = stringResource(R.string.launch_fix_with_agent),
+                    onClick = { viewModel.fixBuildWithAgent(autoRebuild = false) },
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(
+                    onClick = { viewModel.fixBuildWithAgent(autoRebuild = true) },
+                    shape = RoundedCornerShape(100),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.launch_fix_auto_rebuild),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+            }
         } else if (build.phase == AndroidBuildPhase.SUCCEEDED && build.apkPath != null) {
             ForgePrimaryButton(
                 text = stringResource(R.string.launch_install_apk),
@@ -350,8 +367,7 @@ fun AndroidBuildScreen(
                     viewModel.openConversation()
                 },
                 onOpenFile = { path ->
-                    viewModel.openWorkspaceFile(path)
-                    viewModel.selectTab(ForgeTab.FILES)
+                    viewModel.openFilesTabForEditing(path)
                 },
                 modifier = Modifier.weight(1f),
             )
@@ -393,6 +409,7 @@ fun AndroidBuildScreen(
                 onClearLogcat = viewModel::clearProjectLogcat,
                 onSetMinLevel = viewModel::setLogcatMinimumLevel,
                 onSetQuery = viewModel::setLogcatQuery,
+                onFixCrashWithAgent = viewModel::fixLogcatCrashWithAgent,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -494,10 +511,14 @@ private fun LogcatPanel(
     onClearLogcat: () -> Unit,
     onSetMinLevel: (AndroidLogLevel) -> Unit,
     onSetQuery: (String) -> Unit,
+    onFixCrashWithAgent: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val logcat = state.androidLogcat
     val tokens = LocalForgeThemeTokens.current
+    val hasCrashOrError = remember(logcat.lines) {
+        logcat.lines.any { it.level == AndroidLogLevel.ERROR || it.level == AndroidLogLevel.FATAL }
+    }
     val filteredLines = remember(logcat.lines, logcat.minimumLevel, logcat.query) {
         val q = logcat.query.trim()
         logcat.lines.filter { line ->
@@ -545,6 +566,14 @@ private fun LogcatPanel(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (hasCrashOrError) {
+                Button(
+                    onClick = onFixCrashWithAgent,
+                    shape = RoundedCornerShape(100),
+                ) {
+                    Text(stringResource(R.string.logcat_fix_crash_with_agent), fontWeight = FontWeight.SemiBold)
+                }
+            }
             AndroidLogLevel.entries.forEach { level ->
                 FilterChip(
                     selected = logcat.minimumLevel == level,
@@ -658,6 +687,23 @@ fun WebPreviewScreen(
             )
         }
 
+        var previewMode by rememberSaveable { mutableStateOf(0) } // 0 = Web Preview, 1 = UI Inspector
+        ForgePillTabs(
+            items = listOf(
+                stringResource(R.string.inspector_tab_web),
+                stringResource(R.string.inspector_tab_ui),
+            ),
+            selectedIndex = previewMode,
+            onSelect = { previewMode = it },
+        )
+
+        if (previewMode == 1) {
+            UiInspectorPanel(
+                state = state,
+                viewModel = viewModel,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        } else {
         // Address bar: status dot, URL, go arrow; refresh sits outside the bar.
         var opened by rememberSaveable { mutableStateOf(false) }
         val serverUp = state.activeLocalPorts.isNotEmpty() || opened
@@ -810,6 +856,150 @@ fun WebPreviewScreen(
                 (view as? WebView)?.let { runCatching { it.stopLoading(); it.destroy() } }
             },
         )
+        }
+        }
+    }
+}
+
+@Composable
+private fun UiInspectorPanel(
+    state: ForgeUiState,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalForgeThemeTokens.current
+    var selectedNode by remember(state.uiInspectorNodes) { mutableStateOf<UiInspectorNode?>(null) }
+    var instruction by rememberSaveable { mutableStateOf("") }
+
+    Column(
+        modifier = modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(R.string.inspector_tab_ui),
+                fontSize = ForgeType.cardTitle,
+                fontWeight = FontWeight.SemiBold,
+            )
+            ForgePrimaryButton(
+                text = stringResource(R.string.inspector_scan_ui),
+                enabled = !state.uiInspectorBusy,
+                onClick = viewModel::captureUiInspectorHierarchy,
+            )
+        }
+
+        selectedNode?.let { node ->
+            ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = buildString {
+                            append(node.className)
+                            if (node.id.isNotBlank()) append(" #").append(node.id)
+                            append(" ").append(node.bounds)
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = ForgeType.caption,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tokens.accentText,
+                    )
+                    if (node.text.isNotBlank()) {
+                        Text(
+                            text = node.text,
+                            fontSize = ForgeType.secondary,
+                            maxLines = 2,
+                        )
+                    }
+                    ForgeTextField(
+                        kind = ForgeFieldKind.TEXT,
+                        imeAction = ImeAction.Done,
+                        value = instruction,
+                        onValueChange = { instruction = it },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.inspector_instruction_hint)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    ForgePrimaryButton(
+                        text = stringResource(R.string.inspector_edit_with_agent),
+                        enabled = instruction.isNotBlank(),
+                        onClick = {
+                            viewModel.editUiElementWithAgent(node, instruction)
+                            instruction = ""
+                            selectedNode = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+
+        if (state.uiInspectorNodes.isEmpty()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.inspector_empty_hint),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = ForgeType.secondary,
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(state.uiInspectorNodes) { node ->
+                    val isSelected = selectedNode == node
+                    ForgeThemedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.Button) { selectedNode = node },
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = buildString {
+                                        append(node.className)
+                                        if (node.id.isNotBlank()) append(" · #").append(node.id)
+                                    },
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = ForgeType.caption,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSelected) tokens.accentText else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = node.bounds,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = ForgeType.caption,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (node.text.isNotBlank()) {
+                                Text(
+                                    text = node.text,
+                                    fontSize = ForgeType.secondary,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

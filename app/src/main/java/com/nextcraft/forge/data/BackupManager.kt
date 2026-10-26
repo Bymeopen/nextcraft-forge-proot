@@ -79,7 +79,11 @@ class BackupManager(private val context: Context) {
             zip.closeEntry()
             if (options.settings) {
                 onProgress("settings")
-                if (prefsFile.isFile) addFile("prefs/$PREFS_NAME.xml", prefsFile)
+                val sharedPrefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
+                SETTINGS_PREFS_FILES.forEach { fileName ->
+                    val f = File(sharedPrefsDir, fileName)
+                    if (f.isFile) addFile("prefs/$fileName", f)
+                }
             }
             if (options.chats) {
                 onProgress("chats")
@@ -93,10 +97,11 @@ class BackupManager(private val context: Context) {
                 onProgress("keys")
                 val vault = ApiKeyVault(context)
                 val keys = JSONObject()
-                ProviderKind.entries.forEach { kind ->
-                    val creds = runCatching { vault.credentials(kind.name) }.getOrDefault(emptyList())
+                val keyIds = ProviderKind.entries.map { it.name } + EXTRA_VAULT_KEYS
+                keyIds.forEach { keyId ->
+                    val creds = runCatching { vault.credentials(keyId) }.getOrDefault(emptyList())
                     if (creds.isNotEmpty()) {
-                        keys.put(kind.name, JSONArray(creds.map { JSONObject().put("name", it.name).put("secret", it.secret).put("active", it.isActive) }))
+                        keys.put(keyId, JSONArray(creds.map { JSONObject().put("name", it.name).put("secret", it.secret).put("active", it.isActive) }))
                     }
                 }
                 zip.putNextEntry(ZipEntry(SECRETS))
@@ -161,10 +166,15 @@ class BackupManager(private val context: Context) {
                     if (item.isDirectory) replaceDir(item, dest) else item.copyTo(dest, overwrite = true)
                 }
             }
-            File(staging, "prefs/$PREFS_NAME.xml").takeIf { it.isFile }?.let { prefs ->
+            File(staging, "prefs").takeIf { it.isDirectory }?.let { prefsDir ->
                 onProgress("settings")
-                prefsFile.parentFile?.mkdirs()
-                prefs.copyTo(prefsFile, overwrite = true)
+                val destDir = File(context.applicationInfo.dataDir, "shared_prefs").apply { mkdirs() }
+                SETTINGS_PREFS_FILES.forEach { fileName ->
+                    val stagedFile = File(prefsDir, fileName)
+                    if (stagedFile.isFile) {
+                        stagedFile.copyTo(File(destDir, fileName), overwrite = true)
+                    }
+                }
             }
             File(staging, SECRETS).takeIf { it.isFile }?.let { secrets ->
                 onProgress("keys")
@@ -190,13 +200,39 @@ class BackupManager(private val context: Context) {
     }
 
     private fun replaceDir(source: File, dest: File) {
-        dest.deleteRecursively()
+        if (!source.exists()) {
+            dest.deleteRecursively()
+            return
+        }
         dest.parentFile?.mkdirs()
-        if (!source.renameTo(dest)) source.copyRecursively(dest, overwrite = true)
+        val backup = File(dest.parentFile, "${dest.name}.restore-bak-${System.nanoTime()}")
+        val hadExisting = dest.exists() && dest.renameTo(backup)
+        if (!hadExisting && dest.exists()) dest.deleteRecursively()
+        try {
+            if (!source.renameTo(dest)) {
+                source.copyRecursively(dest, overwrite = true)
+            }
+            if (hadExisting) backup.deleteRecursively()
+        } catch (error: Throwable) {
+            if (hadExisting) {
+                dest.deleteRecursively()
+                backup.renameTo(dest)
+            }
+            throw error
+        }
     }
 
     companion object {
         const val PREFS_NAME = "nextcraft_preferences"
+        private val SETTINGS_PREFS_FILES = listOf(
+            "$PREFS_NAME.xml",
+            "nextcraft_schedule.xml",
+            "forge_tools.xml",
+        )
+        private val EXTRA_VAULT_KEYS = listOf(
+            "GITHUB_TOKEN",
+            com.nextcraft.forge.network.GeminiImageModels.KEY_ID,
+        )
         private const val MANIFEST = "nextcraft-backup.json"
         private const val SECRETS = "api-keys.json"
 

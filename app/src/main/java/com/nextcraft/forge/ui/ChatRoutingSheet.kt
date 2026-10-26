@@ -108,8 +108,8 @@ internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onD
                         horizontalPadding = 0.dp,
                     )
                 }
-                if (state.sessionRunning) {
-                    // selectAgent refuses while a turn runs (it would desync the session that is still streaming).
+                if (state.activeChatRunning) {
+                    // selectAgent refuses while the open chat's turn runs; other chats and projects can keep running.
                     Text(stringResource(R.string.route_single_busy), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
                 }
             }

@@ -94,11 +94,33 @@ class DiagnosticsController(private val context: Context) {
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val charging = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
             ?.let { it == BatteryManager.BATTERY_STATUS_CHARGING || it == BatteryManager.BATTERY_STATUS_FULL } == true
+        val hwProfile = runCatching { DeviceHardwareOptimizer.inspect(appContext, forceRefresh = true) }.getOrNull()
         return buildList {
             add(row(R.string.diag_device, UiText.Raw("${Build.MANUFACTURER} ${Build.MODEL}")))
             add(row(R.string.diag_android, UiText.Raw("${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")))
-            add(row(R.string.diag_cpu, UiText.res(R.string.diag_cores, Build.SUPPORTED_ABIS.firstOrNull().orEmpty(), Runtime.getRuntime().availableProcessors())))
+            if (hwProfile != null) {
+                add(UiText.Raw("SoC / Profile") to UiText.Raw("${hwProfile.socVendor.displayName} (${hwProfile.socModel}) · ${hwProfile.socTier.label}"))
+                add(
+                    row(
+                        R.string.diag_cpu,
+                        UiText.Raw(
+                            "${Build.SUPPORTED_ABIS.firstOrNull().orEmpty()} · ${hwProfile.topology.totalCores} cores " +
+                                "(${hwProfile.topology.performanceCores}P+${hwProfile.topology.efficiencyCores}E)",
+                        ),
+                    ),
+                )
+            } else {
+                add(row(R.string.diag_cpu, UiText.res(R.string.diag_cores, Build.SUPPORTED_ABIS.firstOrNull().orEmpty(), Runtime.getRuntime().availableProcessors())))
+            }
             add(row(R.string.diag_ram, UiText.res(R.string.diag_free_of, formatBytes(memory.availMem), formatBytes(memory.totalMem))))
+            if (hwProfile != null && hwProfile.swap.hasActiveSwap) {
+                val algSuffix = hwProfile.swap.zramAlgorithm?.let { " ($it)" }.orEmpty()
+                add(
+                    UiText.Raw("SwapRAM / ZRAM") to UiText.Raw(
+                        "${formatBytes(hwProfile.swap.swapFreeMb * 1024L * 1024L)} free of ${formatBytes(hwProfile.swap.swapTotalMb * 1024L * 1024L)}$algSuffix",
+                    ),
+                )
+            }
             // What this app itself costs right now: the numbers to compare before and after an optimisation.
             appMemoryMb()?.let { (pss, heap) -> add(row(R.string.diag_app_memory, UiText.res(R.string.diag_app_memory_value, pss, heap))) }
             procStatusValue("Threads")?.let { add(row(R.string.diag_app_threads, UiText.Raw(it.toString()))) }
@@ -130,6 +152,21 @@ class DiagnosticsController(private val context: Context) {
             add(row(R.string.diag_linux, UiText.res(if (installed) R.string.diag_installed else R.string.diag_not_installed)))
             runCatching { RuntimeMarkers.read(File(rootfs, ".nextcraft-rootfs-version"))?.trim() }.getOrNull()
                 ?.takeIf { it.isNotBlank() }?.let { add(row(R.string.diag_rootfs, UiText.Raw(it))) }
+            runCatching {
+                val hw = DeviceHardwareOptimizer.inspect(appContext)
+                val prootCfg = ProotAndChrootOptimizer.buildConfig(hw, hasRootAccess = root)
+                val pageKb = prootCfg.kernelProfile.pageSizeBytes / 1024
+                add(
+                    UiText.Raw("Android Kernel profile") to UiText.Raw(
+                        "${prootCfg.kernelProfile.rawRelease} · ${prootCfg.kernelProfile.family.shortBadge} · ${pageKb}KB pages",
+                    ),
+                )
+                add(
+                    UiText.Raw("Container / PRoot optimization") to UiText.Raw(
+                        "${prootCfg.backend.displayName} · /dev/shm ${prootCfg.shmSizeMb}MB · /tmp ${prootCfg.tmpSizeMb}MB · UV threads ${prootCfg.uvThreadpoolSize}",
+                    ),
+                )
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DiagnosticsController", it) }
             if (installed) {
                 // The marker REA's installer writes; the version says whether the Learn/firmware/plugin features are there.
                 val rea = runCatching { RuntimeMarkers.read(File(rootfs, "root/.nextcraft-rea-version"))?.trim() }.getOrNull()?.takeIf { it.isNotBlank() }

@@ -167,6 +167,14 @@ data class ForgeUiState(
     val sessionRunning: Boolean = false,
     /** Chats of the active project whose agent turn is running right now. */
     val runningChatIds: Set<String> = emptySet(),
+    /** Active agent turn counts by project id across all projects. */
+    val runningProjectChatCounts: Map<String, Int> = emptyMap(),
+    /** Live snapshot of all currently running agent turns across all projects (for the Dynamic Live Activity HUD). */
+    val liveAgentRuns: List<LiveAgentRunInfo> = emptyList(),
+    /** Projects currently running an Android APK build. */
+    val buildingProjectIds: Set<String> = emptySet(),
+    /** Per-project Android build records so background project builds preserve their state. */
+    val projectBuilds: Map<String, AndroidBuildRecord> = emptyMap(),
     /** How chat messages pick an agent (single agent unless the user changed it in the chat). */
     val routing: RoutingConfig = RoutingConfig(),
     /** Agents that have credentials; refreshed when the routing sheet opens. */
@@ -223,8 +231,8 @@ data class ForgeUiState(
     val updateNotifications: Boolean = true,
     val autoInstallUpdates: Boolean = true,
     val autoBranchChats: Boolean = false,
-    val antigravityModel: String = "gemini-2.5-pro",
-    val antigravityEffort: String = "high",
+    val antigravityModel: String = "claude-sonnet-5-5-low",
+    val antigravityEffort: String = "low",
     val claudeEffort: String = "",
     /** Branch status of the chats that work in their own branch, by chat id. */
     val branchStatus: Map<String, BranchStatus> = emptyMap(),
@@ -257,6 +265,9 @@ data class ForgeUiState(
     val retryPrompts: Map<String, RetryPrompt> = emptyMap(),
     /** Set while a deleted project can still be restored; the UI shows a Snackbar with Undo. */
     val undoDelete: ProjectUndo? = null,
+    /** Parsed Android UI hierarchy nodes for the Visual UI Inspector & Tap-to-Edit mode in Preview. */
+    val uiInspectorNodes: List<UiInspectorNode> = emptyList(),
+    val uiInspectorBusy: Boolean = false,
 )
  {
     val activeProject: Project?
@@ -265,6 +276,18 @@ data class ForgeUiState(
     /** True while the open chat has its own agent turn running (drives its Stop button, status line and composer). */
     val activeChatRunning: Boolean get() = activeChatId in runningChatIds
 }
+
+/** One interactive/visible Android UI node dumped via uiautomator for Visual Tap-to-Edit with Agent. */
+data class UiInspectorNode(
+    val id: String,
+    val className: String,
+    val text: String,
+    val bounds: String,
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+)
 
 /** [chatId] keeps the offer in the chat where the failure happened. */
 data class RetryPrompt(val chatId: String, val prompt: QueuedPrompt)
@@ -292,3 +315,14 @@ data class QueuedPrompt(
 
 /** A project removed from the list whose files are kept until the undo window (UNDO_WINDOW_MS) passes. */
 data class ProjectUndo(val projectId: String, val name: String)
+
+/** Snapshot of one active agent turn across any project/chat, displayed in the Dynamic Multi-Agent Live HUD. */
+data class LiveAgentRunInfo(
+    val projectId: String,
+    val projectName: String,
+    val chatId: String,
+    val chatTitle: String,
+    val agent: AgentKind,
+    val statusLine: UiText?,
+    val waitingApproval: Boolean = false,
+)

@@ -1467,11 +1467,26 @@ class RuntimeInstaller(private val context: Context) {
         val gradleDir = File(runtimeRootfs, "root/.gradle").apply { mkdirs() }
         val properties = File(gradleDir, "gradle.properties")
         val existingLines = properties.readTextOrNull()?.lineSequence()?.toList().orEmpty()
+        val hwProfile = DeviceHardwareOptimizer.inspect(context)
         val managedLines = listOf(
             "$ANDROID_AAPT2_PROPERTY=$ANDROID_AAPT2_GUEST_PATH",
-            "$GRADLE_JVMARGS_PROPERTY=${gradleJvmArgs(deviceTotalMemoryMb())}",
+            "$GRADLE_JVMARGS_PROPERTY=${gradleJvmArgs(
+                totalMemoryMb = hwProfile.totalRamMb,
+                swapTotalMb = hwProfile.swap.swapTotalMb,
+                swapFreeMb = hwProfile.swap.swapFreeMb,
+                socVendor = hwProfile.socVendor,
+                socTier = hwProfile.socTier,
+                performanceCores = hwProfile.topology.performanceCores,
+            )}",
             "$KOTLIN_EXECUTION_PROPERTY=in-process",
-        ) + gradleSpeedProperties(deviceTotalMemoryMb()).map { (key, value) -> "$key=$value" }
+        ) + gradleSpeedProperties(
+            totalMemoryMb = hwProfile.totalRamMb,
+            swapTotalMb = hwProfile.swap.swapTotalMb,
+            swapFreeMb = hwProfile.swap.swapFreeMb,
+            socVendor = hwProfile.socVendor,
+            socTier = hwProfile.socTier,
+            performanceCores = hwProfile.topology.performanceCores,
+        ).map { (key, value) -> "$key=$value" }
         val updatedLines = existingLines.filterNot(::isManagedAndroidGradleProperty) + managedLines
         if (existingLines == updatedLines) return
 
@@ -2022,6 +2037,7 @@ class RuntimeInstaller(private val context: Context) {
         workspace.mkdirs()
         File(targetRootfs, guestWorkspacePath.removePrefix("/")).mkdirs()
         writeAndroidGradleConfiguration(targetRootfs)
+        AntigravityCustomizations.apply(targetRootfs, guestWorkspacePath) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         // ~/.claude.json belongs to Claude Code; other agents never read it, so they skip the parse + fsync per launch.
         if (trustClaudeWorkspace && guestWorkspacePath != "/root") {
             ensureWorkspaceTrust(guestWorkspacePath, environment, claudeMcpServers)
@@ -2030,6 +2046,11 @@ class RuntimeInstaller(private val context: Context) {
         File(context.filesDir, "runtime-bridge-responses").mkdirs()
         val appUid = AndroidProcess.myUid().toString()
 
+        val hwProfile = DeviceHardwareOptimizer.inspect(context)
+        val prootConfig = ProotAndChrootOptimizer.buildConfig(
+            hwProfile = hwProfile,
+            emulateHardLinks = true,
+        )
         val guestEnv = buildMap {
             put("HOME", "/root")
             put("USER", "root")
@@ -2049,6 +2070,7 @@ class RuntimeInstaller(private val context: Context) {
             put("LANG", "C.UTF-8")
             put("TERM", "xterm-256color")
             put("GLIBC_TUNABLES", "glibc.pthread.rseq=0")
+            putAll(prootConfig.environmentVars)
             putAll(environment)
         }
 
@@ -2229,6 +2251,8 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         )
         ensureSystemGitTrust()
         applyAndroidHostTools()
+        ProotAndChrootOptimizer.applyGuestWrappers(rootfs) { file, body, mode -> writeRootfsFileAtomically(file, body, mode = mode) }
+        AntigravityCustomizations.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         ensureWorkspaceTrust("/workspace")
     }
 
@@ -2368,7 +2392,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
      */
     internal fun ensureAppAccess() {
         val uid = AndroidProcess.myUid()
-        for (relative in listOf("root", "root/.claude", "root/.local", "root/.local/bin", "etc")) {
+        for (relative in listOf("root", "root/.claude", "root/.gemini", "root/.gemini/config", "root/.gemini/antigravity-cli", "root/.local", "root/.local/bin", "etc")) {
             val dir = File(rootfs, relative)
             if (dir.isDirectory && (!dir.canWrite() || !dir.canExecute())) {
                 RootfsRepair.reclaimOwnership(dir, uid, recursive = false)
@@ -2844,17 +2868,27 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
          *  - configuration cache (problems only warn, so incompatible builds still run) and the build cache;
          *  - workers: 4 / 3 / 2 and parallel project execution only on 10 GB+ (each worker adds memory).
          */
-        internal fun gradleSpeedProperties(totalMemoryMb: Long): List<Pair<String, String>> {
-            val (daemon, workers, parallel) = when {
-                totalMemoryMb >= 10_000 -> Triple(true, 4, true)
-                totalMemoryMb >= 7_000 -> Triple(true, 3, false)
-                else -> Triple(false, 2, false)
-            }
+        internal fun gradleSpeedProperties(
+            totalMemoryMb: Long,
+            swapTotalMb: Long = 0L,
+            swapFreeMb: Long = swapTotalMb,
+            socVendor: DeviceHardwareOptimizer.SocVendor = DeviceHardwareOptimizer.SocVendor.GENERIC_ARM64,
+            socTier: DeviceHardwareOptimizer.SocTier = DeviceHardwareOptimizer.SocTier.BALANCED_MID,
+            performanceCores: Int = 4,
+        ): List<Pair<String, String>> {
+            val tuning = DeviceHardwareOptimizer.computeGradleTuning(
+                totalMemoryMb = totalMemoryMb,
+                swapTotalMb = swapTotalMb,
+                swapFreeMb = swapFreeMb,
+                socVendor = socVendor,
+                socTier = socTier,
+                performanceCores = performanceCores,
+            )
             return listOf(
-                "org.gradle.daemon" to daemon.toString(),
-                "org.gradle.daemon.idletimeout" to "600000",
-                GRADLE_WORKERS_PROPERTY to workers.toString(),
-                GRADLE_PARALLEL_PROPERTY to parallel.toString(),
+                "org.gradle.daemon" to tuning.daemonEnabled.toString(),
+                "org.gradle.daemon.idletimeout" to tuning.daemonIdleTimeoutMs.toString(),
+                GRADLE_WORKERS_PROPERTY to tuning.maxWorkers.toString(),
+                GRADLE_PARALLEL_PROPERTY to tuning.parallelExecution.toString(),
                 "org.gradle.caching" to "true",
                 "org.gradle.configuration-cache" to "true",
                 "org.gradle.configuration-cache.problems" to "warn",
@@ -2862,20 +2896,30 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         }
 
         /**
-         * Gradle JVM options for builds inside the chroot, sized to the device so small phones are not pushed into the
-         * low-memory killer (exit 137) and large ones can build Room/KSP projects that need more:
-         *  - 10 GB or more reported (12 GB class phones): 3 GB heap, 1.5 GB metaspace;
-         *  - 7 GB or more (8 GB class): 2 GB heap, 1 GB metaspace;
-         *  - below that: an eighth of RAM for the heap (at least 768 MB), 512 MB metaspace.
-         * Android reports less than the marketed size (an "8 GB" phone shows about 7.3 GB), hence the thresholds.
+         * Gradle JVM options for builds inside the chroot, sized to the device's RAM tier (4/6/8/10/12/16 GB+),
+         * built-in phone SwapRAM / ZRAM, and SoC core topology so small phones are not pushed into the
+         * low-memory killer (exit 137) and large ones can build Room/KSP projects at full speed.
          */
-        internal fun gradleJvmArgs(totalMemoryMb: Long): String {
-            val (heapMb, metaspaceMb) = when {
-                totalMemoryMb >= 10_000 -> 3072L to 1536
-                totalMemoryMb >= 7_000 -> 2048L to 1024
-                else -> ((totalMemoryMb / 8).coerceIn(768L, 1024L) / 128) * 128 to 512
-            }
-            return "-Xmx${heapMb}m -XX:MaxMetaspaceSize=${metaspaceMb}m -Dfile.encoding=UTF-8"
+        internal fun gradleJvmArgs(
+            totalMemoryMb: Long,
+            swapTotalMb: Long = 0L,
+            swapFreeMb: Long = swapTotalMb,
+            socVendor: DeviceHardwareOptimizer.SocVendor = DeviceHardwareOptimizer.SocVendor.GENERIC_ARM64,
+            socTier: DeviceHardwareOptimizer.SocTier = DeviceHardwareOptimizer.SocTier.BALANCED_MID,
+            performanceCores: Int = 4,
+        ): String {
+            val tuning = DeviceHardwareOptimizer.computeGradleTuning(
+                totalMemoryMb = totalMemoryMb,
+                swapTotalMb = swapTotalMb,
+                swapFreeMb = swapFreeMb,
+                socVendor = socVendor,
+                socTier = socTier,
+                performanceCores = performanceCores,
+            )
+            return "-Xmx${tuning.heapMb}m -XX:MaxMetaspaceSize=${tuning.metaspaceMb}m " +
+                "-XX:+UseG1GC -XX:+UseStringDeduplication -XX:G1PeriodicGCInterval=15000 -XX:+G1PeriodicGCInvokesConcurrent " +
+                "-XX:G1HeapWastePercent=5 -XX:MaxHeapFreeRatio=40 -XX:MinHeapFreeRatio=15 " +
+                "-Dfile.encoding=UTF-8"
         }
 
         /** Top-level rootfs directories that chroot-exec.sh bind-mounts from Android or the app on every launch. */
@@ -3272,10 +3316,20 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             mount_once "/dev/pts" "${'$'}ROOTFS/dev/pts" "bind" "rw"
             mount_once "proc" "${'$'}ROOTFS/proc" "proc" "rw,nosuid,nodev,noexec"
             mount_once "sysfs" "${'$'}ROOTFS/sys" "sysfs" "rw,nosuid,nodev,noexec"
-            mount_once "tmpfs" "${'$'}ROOTFS/tmp" "tmpfs" "rw,nosuid,nodev,mode=1777"
-            mount_once "tmpfs" "${'$'}ROOTFS/dev/shm" "tmpfs" "rw,nosuid,nodev,mode=1777,size=256M"
+            TMP_MB="${'$'}{NEXTCRAFT_TMP_MB:-512}"
+            SHM_MB="${'$'}{NEXTCRAFT_SHM_MB:-256}"
+            mount_once "tmpfs" "${'$'}ROOTFS/tmp" "tmpfs" "rw,nosuid,nodev,mode=1777,size=${'$'}{TMP_MB}M"
+            mount_once "tmpfs" "${'$'}ROOTFS/dev/shm" "tmpfs" "rw,nosuid,nodev,mode=1777,size=${'$'}{SHM_MB}M"
+            mkdir -p "${'$'}ROOTFS/tmp/.proot-tmp" "${'$'}ROOTFS/tmp/.proot-l2s" 2>/dev/null || true
+            chmod 1777 "${'$'}ROOTFS/tmp/.proot-tmp" "${'$'}ROOTFS/tmp/.proot-l2s" 2>/dev/null || true
+            if [ ! -e "${'$'}ROOTFS/dev/fd" ]; then
+                ln -sf /proc/self/fd "${'$'}ROOTFS/dev/fd" 2>/dev/null || true
+            fi
+            [ ! -e "${'$'}ROOTFS/dev/stdin" ] && ln -sf /proc/self/fd/0 "${'$'}ROOTFS/dev/stdin" 2>/dev/null || true
+            [ ! -e "${'$'}ROOTFS/dev/stdout" ] && ln -sf /proc/self/fd/1 "${'$'}ROOTFS/dev/stdout" 2>/dev/null || true
+            [ ! -e "${'$'}ROOTFS/dev/stderr" ] && ln -sf /proc/self/fd/2 "${'$'}ROOTFS/dev/stderr" 2>/dev/null || true
 
-            for bionic_dir in /system /apex /vendor /product; do
+            for bionic_dir in /system /apex /vendor /product /system_ext /odm; do
                 if [ -d "${'$'}bionic_dir" ]; then
                     mount_bionic "${'$'}bionic_dir" "${'$'}ROOTFS${'$'}bionic_dir"
                 fi
@@ -3346,8 +3400,13 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                     "${'$'}ROOTFS"|"${'$'}ROOTFS"/*)
                         ;;
                     *)
-                        chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_WORKSPACE" 2>/dev/null || true
-                        chmod -R u+rwX,g+rwX "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                        if command -v find >/dev/null 2>&1 && command -v xargs >/dev/null 2>&1; then
+                            find "${'$'}HOST_WORKSPACE" \( ! -user "${'$'}APP_UID" -o ! -group "${'$'}APP_UID" \) -print0 2>/dev/null | xargs -0 -r chown -h "${'$'}APP_UID:${'$'}APP_UID" 2>/dev/null || chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                            find "${'$'}HOST_WORKSPACE" ! -perm -u+rw,g+rw -print0 2>/dev/null | xargs -0 -r chmod u+rwX,g+rwX 2>/dev/null || chmod -R u+rwX,g+rwX "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                        else
+                            chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                            chmod -R u+rwX,g+rwX "${'$'}HOST_WORKSPACE" 2>/dev/null || true
+                        fi
                         ;;
                 esac
                 chown -R -h "${'$'}APP_UID:${'$'}APP_UID" "${'$'}HOST_BRIDGE" 2>/dev/null || true
@@ -3376,7 +3435,33 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"
             export REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
             export GIT_SSL_CAINFO="/etc/ssl/certs/ca-certificates.crt"
-            export NODE_OPTIONS="${'$'}{NODE_OPTIONS:---dns-result-order=ipv4first}"
+            # Auto-size Node.js V8 heap (--max-old-space-size) and glibc arenas based on phone RAM (4/6/8/10/12/16GB+) and built-in SwapRAM/ZRAM
+            if [ -z "${'$'}NODE_OPTIONS" ]; then
+                MEM_KB=${'$'}(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 4194304)
+                SWAP_KB=${'$'}(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+                MEM_MB=${'$'}((MEM_KB / 1024))
+                SWAP_MB=${'$'}((SWAP_KB / 1024))
+                if [ "${'$'}MEM_MB" -ge 13500 ]; then
+                    NODE_HEAP_MB=4096
+                elif [ "${'$'}MEM_MB" -ge 10400 ]; then
+                    NODE_HEAP_MB=3072
+                elif [ "${'$'}MEM_MB" -ge 8800 ]; then
+                    NODE_HEAP_MB=2560
+                elif [ "${'$'}MEM_MB" -ge 6800 ]; then
+                    NODE_HEAP_MB=2048
+                elif [ "${'$'}MEM_MB" -ge 4500 ]; then
+                    if [ "${'$'}SWAP_MB" -ge 2048 ]; then NODE_HEAP_MB=1792; else NODE_HEAP_MB=1536; fi
+                else
+                    NODE_HEAP_MB=1024
+                fi
+                export NODE_OPTIONS="--dns-result-order=ipv4first --max-old-space-size=${'$'}NODE_HEAP_MB"
+            fi
+            export MALLOC_ARENA_MAX="${'$'}{MALLOC_ARENA_MAX:-2}"
+            export PROOT_TMP_DIR="${'$'}{PROOT_TMP_DIR:-/tmp/.proot-tmp}"
+            export PROOT_L2S_DIR="${'$'}{PROOT_L2S_DIR:-/tmp/.proot-l2s}"
+            export UV_USE_IO_URING=0
+            export UV_THREADPOOL_SIZE="${'$'}{UV_THREADPOOL_SIZE:-4}"
+            export GODEBUG="${'$'}{GODEBUG:-asyncpreemptoff=1}"
             export COREPACK_ENABLE_DOWNLOAD_PROMPT="0"
             export GLIBC_TUNABLES="glibc.pthread.rseq=0"
             export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
@@ -3389,6 +3474,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             esac
 
             CHROOT_BIN=""
+            PROOT_BIN=""
             for candidate in /system/bin/chroot /system/xbin/chroot /sbin/chroot /debug_ramdisk/chroot "${'$'}ROOTFS/usr/sbin/chroot"; do
                 if [ -x "${'$'}candidate" ]; then
                     CHROOT_BIN="${'$'}candidate"
@@ -3399,8 +3485,16 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 if command -v busybox >/dev/null 2>&1; then
                     CHROOT_BIN="busybox chroot"
                 else
-                    echo "chroot binary not found on host or guest rootfs" >&2
-                    exit 127
+                    for pcand in "${'$'}ROOTFS/usr/bin/proot" "${'$'}ROOTFS/usr/local/bin/proot" /system/bin/proot /data/data/com.termux/files/usr/bin/proot; do
+                        if [ -x "${'$'}pcand" ]; then
+                            PROOT_BIN="${'$'}pcand"
+                            break
+                        fi
+                    done
+                    if [ -z "${'$'}PROOT_BIN" ]; then
+                        echo "chroot or proot binary not found on host or guest rootfs" >&2
+                        exit 127
+                    fi
                 fi
             fi
 
@@ -3440,9 +3534,21 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             }
 
             exec 9>&-
-            ${'$'}SETSID ${'$'}CHROOT_BIN "${'$'}ROOTFS" /usr/bin/env \
-                GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" \
-                /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@" <&3 3<&- &
+            if [ -n "${'$'}CHROOT_BIN" ]; then
+                ${'$'}SETSID ${'$'}CHROOT_BIN "${'$'}ROOTFS" /usr/bin/env \
+                    GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" \
+                    /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@" <&3 3<&- &
+            else
+                ${'$'}SETSID "${'$'}PROOT_BIN" --root-id --link2symlink --sysvipc --kill-on-exit \
+                    -r "${'$'}ROOTFS" \
+                    -b /dev -b /dev/urandom:/dev/random -b /proc -b /proc/self/fd:/dev/fd -b /sys -b /system -b /apex -b /vendor -b /product \
+                    -b "${'$'}HOST_WORKSPACE:${'$'}GUEST_WORKSPACE" \
+                    -b "${'$'}HOST_BRIDGE:/nextcraft-bridge" \
+                    -b "${'$'}HOST_RESP:/nextcraft-bridge-responses" \
+                    -w "${'$'}GUEST_WORKSPACE" \
+                    /usr/bin/env GUEST_WORKSPACE="${'$'}GUEST_WORKSPACE" \
+                    /bin/sh -c 'cd "${'$'}GUEST_WORKSPACE" && exec "${'$'}@"' -- "${'$'}@" <&3 3<&- &
+            fi
             child=${'$'}!
             trap 'forward_signal INT' INT
             trap 'forward_signal TERM' TERM

@@ -218,7 +218,7 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
     var pendingRestore by remember { mutableStateOf<Uri?>(null) }
     var restoreEncrypted by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
-    val agentBusy = state.sessionRunning || state.terminalRunning
+    val agentBusy = state.sessionRunning || state.terminalRunning || state.buildingProjectIds.isNotEmpty()
     val encrypted = password.isNotEmpty()
     val passwordsMatch = password == confirm
     val canBackup = !backup.busy && (projects || chats || settings || apiKeys) && passwordsMatch && (!apiKeys || encrypted)

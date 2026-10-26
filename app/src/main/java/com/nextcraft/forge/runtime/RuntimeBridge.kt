@@ -196,6 +196,55 @@ internal fun localServerPlaceholderKey(profile: ProviderProfile): String =
 /** Effort levels Claude Code accepts in CLAUDE_CODE_EFFORT_LEVEL. */
 val CLAUDE_EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max")
 
+/**
+ * Shared factual-accuracy and anti-hallucination rules injected into every coding agent and AI provider prompt
+ * (Claude Code, Antigravity CLI, DeepSeek Harness, Anthropic API, OpenRouter, Kimi, OpenCode Zen, NVIDIA NIM, Custom API).
+ */
+internal val ANTI_HALLUCINATION_RULES: List<String> = listOf(
+    "Strict anti-hallucination & factual accuracy policy (applies to every AI provider and model):",
+    "- Never fabricate, guess, or hallucinate file paths, class/function/symbol names, APIs, library versions, command outputs, or test/build results.",
+    "- Always read and inspect the actual workspace files before referencing, editing, or explaining them.",
+    "- Never claim a build, test, command, or fix succeeded unless you actually executed it with a tool and verified its exit code and output.",
+    "- If a file, symbol, dependency, or tool is missing, or if an operation fails, report the exact factual state or error honestly instead of inventing a workaround or pretending it worked.",
+)
+
+internal fun buildAgentWorkspacePrompt(
+    currentPrompt: String,
+    /** Earlier messages the agent has not seen (see [unseenBy]), oldest first. */
+    priorMessages: List<ChatMessage>,
+    guestWorkspacePath: String,
+    projectKind: ProjectKind,
+    androidStackInstalled: Boolean,
+    maxHistoryChars: Int,
+    /** The agent resumes its own session and only needs the messages another agent answered since. */
+    resumed: Boolean = false,
+): String {
+    val recent = priorMessages.recentWithinCharacterBudget(maxHistoryChars)
+    val sb = StringBuilder()
+    sb.appendLine("<project_workspace>")
+    if (projectKind == ProjectKind.QUICK_PROJECT) {
+        sb.appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
+        sb.appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
+        sb.appendLine("Keep every file and command inside this project workspace.")
+    } else {
+        sb.appendLine("The current working directory $guestWorkspacePath is the project root.")
+        sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
+        sb.appendLine("When giving commands to the user, make them runnable from this project root.")
+    }
+    if (androidStackInstalled) {
+        AndroidToolchain.AGENT_PROMPT_LINES.forEach(sb::appendLine)
+    } else {
+        sb.appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
+    }
+    sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
+    ANTI_HALLUCINATION_RULES.forEach(sb::appendLine)
+    sb.appendLine("</project_workspace>")
+    sb.appendLine()
+    sb.appendConversationHistory(recent, guestWorkspacePath, resumed)
+    sb.appendLine(currentPrompt)
+    return sb.toString()
+}
+
 object RuntimeLaunchConfigBuilder {
     fun build(
         profile: ProviderProfile,

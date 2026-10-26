@@ -264,13 +264,20 @@ fun SshScreen(viewModel: MainViewModel) {
     }
 }
 
-/** CI/CD Pipeline: GitHub Actions workflows and runs of the active project's repository. */
+/** CI/CD Pipeline: GitHub Actions workflows, PR manager, and runs of the active project's repository. */
 @Composable
 fun CiCdScreen(viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
     val ci by viewModel.cicd.state.collectAsState()
+    val uiState by viewModel.state.collectAsState()
     val context = LocalContext.current
-    LaunchedEffect(Unit) { viewModel.cicd.refresh() }
+    val activeBranch = uiState.projectRepo?.branch.orEmpty()
+    var prTitle by rememberSaveable { mutableStateOf("") }
+    var prHead by rememberSaveable(activeBranch) {
+        mutableStateOf(if (activeBranch.isNotBlank() && activeBranch != "main") activeBranch else "")
+    }
+    var prBase by rememberSaveable { mutableStateOf("main") }
+    LaunchedEffect(uiState.activeProjectId) { viewModel.cicd.refresh() }
     ToolScaffold(
         title = stringResource(R.string.tools_cicd),
         subtitle = ci.repository ?: stringResource(R.string.tools_cicd_desc),
@@ -278,8 +285,69 @@ fun CiCdScreen(viewModel: MainViewModel) {
     ) {
         if (ci.loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         ci.message?.let { Text(it.asString(), fontSize = ForgeType.control, color = scheme.onSurfaceVariant) }
-        OutlinedButton(shape = RoundedCornerShape(100), onClick = viewModel.cicd::refresh, enabled = !ci.loading, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(shape = RoundedCornerShape(100), onClick = { viewModel.cicd.refresh() }, enabled = !ci.loading, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.tool_refresh))
+        }
+        if (ci.repository != null) {
+            ToolSectionLabel(stringResource(R.string.github_pr_manager_title))
+            ToolCard {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ForgeTextField(
+                        kind = ForgeFieldKind.TEXT, imeAction = ImeAction.Next,
+                        value = prTitle,
+                        onValueChange = { prTitle = it.take(120) },
+                        label = { Text(stringResource(R.string.github_pr_title_hint)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        ForgeTextField(
+                            kind = ForgeFieldKind.IDENTIFIER, imeAction = ImeAction.Next,
+                            value = prHead,
+                            onValueChange = { prHead = it.take(80) },
+                            label = { Text(stringResource(R.string.github_pr_head_branch)) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        ForgeTextField(
+                            kind = ForgeFieldKind.IDENTIFIER, imeAction = ImeAction.Done,
+                            value = prBase,
+                            onValueChange = { prBase = it.take(80) },
+                            label = { Text(stringResource(R.string.github_pr_base_branch)) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    ForgePrimaryButton(
+                        text = stringResource(R.string.github_pr_create_button),
+                        enabled = !ci.loading && prTitle.isNotBlank() && prHead.isNotBlank(),
+                        onClick = {
+                            viewModel.cicd.createPullRequest(prTitle, prHead, prBase)
+                            prTitle = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            ci.pullRequests.forEach { pr ->
+                ToolCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            val prHeader = "#${pr.number} · ${pr.title}"
+                            val prBranches = "${pr.headBranch} → ${pr.baseBranch}"
+                            Text(prHeader, fontSize = ForgeType.rowTitle, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(prBranches, fontSize = ForgeType.caption, fontFamily = FontFamily.Monospace, color = scheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(
+                            shape = RoundedCornerShape(100),
+                            onClick = { viewModel.cicd.mergePullRequest(pr.number) },
+                            enabled = !ci.loading,
+                        ) {
+                            Text(stringResource(R.string.repo_pr_merge))
+                        }
+                        ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pr.url))) } }) {
+                            Text(stringResource(R.string.tool_open))
+                        }
+                    }
+                }
+            }
         }
         if (ci.workflows.isNotEmpty()) {
             ToolSectionLabel(stringResource(R.string.tool_workflows))
@@ -308,21 +376,33 @@ fun CiCdScreen(viewModel: MainViewModel) {
             ToolSectionLabel(stringResource(R.string.tool_runs))
             ci.runs.forEach { run ->
                 val outcome = run.conclusion ?: run.status
+                val isFailed = run.conclusion != null && run.conclusion != "success" && run.conclusion != "skipped"
                 ToolCard(modifier = Modifier.padding(0.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(run.name, fontSize = ForgeType.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val runInfo = "${run.branch} · ${run.event} · ${run.createdAt.take(16).replace('T', ' ')}"
-                            Text(runInfo, fontSize = ForgeType.caption, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(run.name, fontSize = ForgeType.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                val runInfo = "${run.branch} · ${run.event} · ${run.createdAt.take(16).replace('T', ' ')}"
+                                Text(runInfo, fontSize = ForgeType.caption, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text(
+                                text = outcome,
+                                fontSize = ForgeType.secondary,
+                                fontWeight = FontWeight.Medium,
+                                color = if (run.conclusion == "success") scheme.primary else if (run.conclusion == null) scheme.onSurfaceVariant else scheme.error,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                            ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(run.url))) } }) { Text(stringResource(R.string.tool_open)) }
                         }
-                        Text(
-                            text = outcome,
-                            fontSize = ForgeType.secondary,
-                            fontWeight = FontWeight.Medium,
-                            color = if (run.conclusion == "success") scheme.primary else if (run.conclusion == null) scheme.onSurfaceVariant else scheme.error,
-                            modifier = Modifier.padding(horizontal = 8.dp),
-                        )
-                        ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(run.url))) } }) { Text(stringResource(R.string.tool_open)) }
+                        if (isFailed) {
+                            OutlinedButton(
+                                shape = RoundedCornerShape(100),
+                                onClick = { viewModel.fixCiFailureWithAgent(run.name, run.branch, run.url) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.github_fix_ci_with_agent), fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
             }

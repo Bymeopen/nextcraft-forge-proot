@@ -123,6 +123,7 @@ internal fun NewProjectDialog(
     var isAndroid by rememberSaveable { mutableStateOf(false) }
     var template by rememberSaveable { mutableStateOf(AndroidTemplate.COMPOSE) }
     var starter by rememberSaveable { mutableStateOf(StarterTemplate.EMPTY) }
+    val resolvedStarter = if (starter in starters) starter else StarterTemplate.EMPTY
 
     ForgeAlertDialog(
         modifier = Modifier.forgePopIn(),
@@ -164,7 +165,7 @@ internal fun NewProjectDialog(
                     // Non-Android starter: an empty workspace, or a Go app that builds for Windows and Linux.
                     ForgePillTabs(
                         items = starters.map { it.label },
-                        selectedIndex = starters.indexOf(starter).coerceAtLeast(0),
+                        selectedIndex = starters.indexOf(resolvedStarter).coerceAtLeast(0),
                         onSelect = { starter = starters[it] },
                         modifier = Modifier.padding(horizontal = 0.dp),
                     )
@@ -173,7 +174,7 @@ internal fun NewProjectDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onCreate(name, description, isAndroid, template, starter) },
+                onClick = { onCreate(name, description, isAndroid, template, resolvedStarter) },
                 enabled = name.isNotBlank(),
                 shape = RoundedCornerShape(100),
             ) { Text(stringResource(R.string.files_create), fontWeight = FontWeight.SemiBold) }

@@ -159,15 +159,15 @@ fun AgentScreen(
     // Every time the chat is opened (or another chat is picked) start at the newest message. rememberLazyListState
     // is saveable, so on return it restores the old position (often the top) and ignores its initial index;
     // this plain remember is reset on each entry and forces the jump once the messages are there.
-    var openedAtEnd by remember(state.activeChatId) { mutableStateOf(false) }
-    LaunchedEffect(state.activeChatId, state.messages.isNotEmpty()) {
+    var openedAtEnd by remember(state.activeProjectId, state.activeChatId) { mutableStateOf(false) }
+    LaunchedEffect(state.activeProjectId, state.activeChatId, state.messages.isNotEmpty()) {
         if (!openedAtEnd && state.messages.isNotEmpty()) {
             listState.scrollToItem(state.messages.lastIndex, Int.MAX_VALUE)
             openedAtEnd = true
         }
     }
 
-    var previousMessageCount by remember { mutableStateOf(state.messages.size) }
+    var previousMessageCount by remember(state.activeProjectId, state.activeChatId) { mutableStateOf(state.messages.size) }
     LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.text?.length) {
         if (state.messages.isNotEmpty()) {
             val lastIdx = state.messages.lastIndex
@@ -222,6 +222,7 @@ fun AgentScreen(
             },
             onEnableBranch = { viewModel.enableChatBranch(state.activeChatId) },
             onOpenRea = { viewModel.selectTab(ForgeTab.REA) },
+            onOpenMemory = viewModel::openProjectMemory,
         )
 
         if (state.agentKind == AgentKind.ANTIGRAVITY &&
@@ -326,10 +327,10 @@ fun AgentScreen(
                                 BranchSummaryCard(status = branchStatus, onOpen = { branchSheetOpen = true })
                             }
                             // Review right where the agent said it was done; the Files tab keeps the full diff view.
-                            if (message.id == lastAssistantId && pendingChanges.isNotEmpty() && !state.sessionRunning) {
+                            if (message.id == lastAssistantId && pendingChanges.isNotEmpty() && state.runningChatIds.isEmpty()) {
                                 ChangedFilesCard(
                                     changes = pendingChanges,
-                                    enabled = !state.sessionRunning,
+                                    enabled = state.runningChatIds.isEmpty(),
                                     onOpenFile = { path ->
                                         viewModel.openWorkspaceFile(path)
                                         viewModel.selectProjectPane(ProjectPane.FILES)
@@ -339,6 +340,8 @@ fun AgentScreen(
                                     onKeepAll = viewModel::keepAllChanges,
                                     onRevertAll = viewModel::revertAllChanges,
                                     onEditInTerminal = viewModel::editInTerminal,
+                                    onAcceptAndCommit = viewModel::acceptAndCommitChanges,
+                                    onRevertHunk = viewModel::revertDiffHunk,
                                 )
                             }
                         }
@@ -442,7 +445,9 @@ fun AgentScreen(
                 ForgeTextButton(onClick = viewModel::retryLastPrompt) { Text(stringResource(R.string.action_retry)) }
             }
         }
-        val chatQueue = state.queuedPrompts.filter { it.chatId == state.activeChatId }
+        val chatQueue = state.queuedPrompts.filter {
+            it.chatId == state.activeChatId && (it.projectId == null || it.projectId == state.activeProjectId)
+        }
         if (chatQueue.isNotEmpty()) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),
@@ -501,6 +506,7 @@ fun AgentScreen(
                     val changed = state.changedItems.count { it.accepted == null }
                     if (changed > 0) {
                         add(QuickChip(quantityStringResource(R.plurals.chip_review_changes, changed, changed), ForgeGlyph.FILE) { viewModel.selectProjectPane(ProjectPane.FILES) })
+                        add(QuickChip(stringResource(R.string.chip_review_2nd_agent), ForgeGlyph.SPARK) { viewModel.reviewChangesWithSecondAgent() })
                         add(QuickChip(stringResource(R.string.chip_explain_changes), ForgeGlyph.SPARK) { viewModel.sendPrompt(stringOf(R.string.prompt_explain_changes, cameraContext)) })
                     }
                     if (state.activeLocalPorts.isNotEmpty()) {
@@ -517,6 +523,7 @@ fun AgentScreen(
         }
         // Voice: words appear in the box while speaking; "stop", "clear" and a trailing "send now" act as commands.
         var voiceBase by remember { mutableStateOf("") }
+        var handsFreeSend by rememberSaveable { mutableStateOf(false) }
         var imageDialogOpen by rememberSaveable { mutableStateOf(false) }
         fun joinVoice(base: String, spoken: String) = listOf(base.trim(), spoken.trim()).filter { it.isNotEmpty() }.joinToString(" ")
         val voice = rememberVoiceController(
@@ -527,9 +534,10 @@ fun AgentScreen(
                 when (val command = VoiceCommands.parse(spoken)) {
                     VoiceCommand.Stop -> { promptInput = voiceBase; viewModel.stopActiveTask(); false }
                     VoiceCommand.Clear -> { promptInput = ""; voiceBase = ""; true }
+                    is VoiceCommand.QuickSlash -> { promptInput = ""; voiceBase = ""; viewModel.sendPrompt(command.slash); false }
                     is VoiceCommand.Dictate -> {
                         val text = joinVoice(voiceBase, command.text)
-                        if (command.send && (text.isNotEmpty() || state.pendingAttachments.isNotEmpty())) {
+                        if ((command.send || handsFreeSend) && (text.isNotEmpty() || state.pendingAttachments.isNotEmpty())) {
                             promptInput = ""
                             voiceBase = ""
                             viewModel.sendPrompt(text)
@@ -569,7 +577,17 @@ fun AgentScreen(
             },
             listening = voice.listening,
             micLevel = voice.level,
+            handsFreeSend = handsFreeSend,
+            onToggleHandsFree = { handsFreeSend = !handsFreeSend },
             onGenerateImage = { imageDialogOpen = true },
+            workspaceFiles = state.workspaceFiles,
+            readyAgents = state.readyAgents,
+            onExecuteSlashCommand = { cmd -> viewModel.sendPrompt(cmd) },
+            onSelectAgentTag = {
+                if (state.routing.mode == com.nextcraft.forge.model.RouteMode.SINGLE) {
+                    viewModel.setRouteMode(com.nextcraft.forge.model.RouteMode.MANUAL)
+                }
+            },
         )
         if (imageDialogOpen) ImageGenerationDialog(state = state, viewModel = viewModel, onDismiss = { imageDialogOpen = false })
     }
@@ -912,12 +930,22 @@ internal fun formatWorked(millis: Long): String {
     return if (m > 0) "${m}m ${sec}s" else "${sec}s"
 }
 
-/** One collapsed tool call: status glyph, "Title · detail" on one line, chevron; expands to the full detail. */
+/** One collapsed tool call: status glyph, "Title · detail" on one line, live rolling tail while running, chevron; expands to the full detail. */
 @Composable
 internal fun ToolCallRow(item: ActivityItem) {
     var open by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
+    val startedAtMillis = remember(item.title) { System.currentTimeMillis() }
+    var elapsedSec by remember(item.title) { androidx.compose.runtime.mutableIntStateOf(0) }
+    if (!item.isComplete) {
+        LaunchedEffect(item.title) {
+            while (true) {
+                kotlinx.coroutines.delay(1_000)
+                elapsedSec = ((System.currentTimeMillis() - startedAtMillis) / 1_000L).toInt().coerceAtLeast(0)
+            }
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -950,6 +978,16 @@ internal fun ToolCallRow(item: ActivityItem) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (!item.isComplete && elapsedSec > 0) {
+                val timerText = formatWorked(elapsedSec * 1_000L)
+                Text(
+                    text = timerText,
+                    fontSize = ForgeType.caption,
+                    color = tokens.warningText,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+            }
             val reduceMotion = rememberReduceMotion()
             val rotation by animateFloatAsState(
                 targetValue = if (open) 180f else 0f,
@@ -963,17 +1001,25 @@ internal fun ToolCallRow(item: ActivityItem) {
                 modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = rotation },
             )
         }
+        val showBody = (open || !item.isComplete) && item.detail.isNotBlank()
+        val displayDetail = if (open || item.isComplete) {
+            item.detail
+        } else {
+            item.detail.lineSequence().filter { it.isNotBlank() }.toList().takeLast(3).joinToString("\n").ifBlank { item.detail }
+        }
         AnimatedVisibility(
-            visible = open && item.detail.isNotBlank(),
+            visible = showBody,
             enter = expandVertically(tween(ForgeMotion.EXPAND_MS)) + fadeIn(tween(ForgeMotion.FADE_MS)),
             exit = shrinkVertically(tween(ForgeMotion.FADE_MS)) + fadeOut(tween(ForgeMotion.FADE_MS / 2)),
         ) {
             Text(
-                text = item.detail,
+                text = displayDetail,
                 fontSize = ForgeType.secondary,
                 lineHeight = 18.sp,
                 color = tokens.terminalText,
                 fontFamily = if (item.isCommand) FontFamily.Monospace else FontFamily.Default,
+                maxLines = if (open) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)

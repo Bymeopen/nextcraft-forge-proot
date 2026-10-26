@@ -48,6 +48,16 @@ data class GitHubWorkflowRun(
     val url: String,
 )
 
+data class GitHubPullRequest(
+    val number: Int,
+    val title: String,
+    val headBranch: String,
+    val baseBranch: String,
+    val state: String,
+    val url: String,
+    val mergeable: Boolean = true,
+)
+
 class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? = null) {
 
     fun requestDeviceCode(
@@ -279,6 +289,92 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
             token,
             JSONObject().put("ref", ref),
         )
+    }
+
+    fun pullRequests(token: String, owner: String, repo: String, state: String = "open", perPage: Int = 15): List<GitHubPullRequest> {
+        val json = getJson(
+            "https://api.github.com/repos/${segment(owner)}/${segment(repo)}/pulls?state=${URLEncoder.encode(state, "UTF-8")}&per_page=${perPage.coerceIn(1, 50)}",
+            token,
+        ) as? JSONArray ?: return emptyList()
+        return (0 until json.length()).mapNotNull { i ->
+            json.optJSONObject(i)?.let { item ->
+                val head = item.optJSONObject("head")?.optString("ref").orEmpty()
+                val base = item.optJSONObject("base")?.optString("ref").orEmpty().ifBlank { "main" }
+                val mergeableState = item.optString("mergeable_state", "")
+                val isMergeable = if (item.isNull("mergeable")) {
+                    mergeableState != "dirty" && mergeableState != "conflicting"
+                } else {
+                    item.optBoolean("mergeable", true)
+                }
+                GitHubPullRequest(
+                    number = item.optInt("number"),
+                    title = item.optString("title"),
+                    headBranch = head,
+                    baseBranch = base,
+                    state = item.optString("state", "open"),
+                    url = item.optString("html_url"),
+                    mergeable = isMergeable,
+                )
+            }
+        }.filter { it.number > 0 }
+    }
+
+    fun createPullRequest(
+        token: String,
+        owner: String,
+        repo: String,
+        title: String,
+        head: String,
+        base: String = "main",
+        body: String = "",
+    ): GitHubPullRequest {
+        val cleanHead = head.trim()
+        val cleanBase = base.trim().ifBlank { "main" }
+        require(cleanHead.isNotEmpty() && cleanHead != cleanBase) {
+            "Head branch ($cleanHead) must differ from base branch ($cleanBase)"
+        }
+        val payload = JSONObject()
+            .put("title", title.trim())
+            .put("head", cleanHead)
+            .put("base", cleanBase)
+            .put("body", body.trim())
+        val item = postJson(
+            "https://api.github.com/repos/${segment(owner)}/${segment(repo)}/pulls",
+            token,
+            payload,
+        ) as? JSONObject ?: error("Unexpected GitHub create PR response")
+        return GitHubPullRequest(
+            number = item.optInt("number"),
+            title = item.optString("title"),
+            headBranch = item.optJSONObject("head")?.optString("ref").orEmpty().ifBlank { head },
+            baseBranch = item.optJSONObject("base")?.optString("ref").orEmpty().ifBlank { base },
+            state = item.optString("state", "open"),
+            url = item.optString("html_url"),
+        )
+    }
+
+    fun mergePullRequest(token: String, owner: String, repo: String, number: Int, mergeMethod: String = "squash") {
+        require(number > 0) { "Invalid PR number" }
+        val payload = JSONObject().put("merge_method", mergeMethod)
+        val endpoint = "https://api.github.com/repos/${segment(owner)}/${segment(repo)}/pulls/$number/merge"
+        val body = payload.toString().toByteArray(Charsets.UTF_8)
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "PUT"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            setRequestProperty("User-Agent", USER_AGENT)
+        }
+        try {
+            connection.outputStream.use { it.write(body) }
+            readResponse(connection)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun segment(value: String): String {

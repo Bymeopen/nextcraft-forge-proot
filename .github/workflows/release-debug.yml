@@ -13,7 +13,7 @@ on:
         required: false
         default: ""
   push:
-    branches: [ccr-parallel-chats]
+    branches: [main, ccr-parallel-chats]
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]')
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'main' || contains(github.event.head_commit.message, '[release]')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

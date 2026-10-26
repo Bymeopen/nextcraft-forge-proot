@@ -30,20 +30,30 @@ class SnapshotsController(
     private val workspaceFor: (String) -> File,
     /** True while an agent turn, build or terminal command may be writing to the project. */
     private val projectBusy: () -> Boolean,
+    private val onRestored: (String) -> Unit = {},
 ) {
     private val manager = SnapshotManager(context.applicationContext.filesDir)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutable = MutableStateFlow(SnapshotsState())
     val state: StateFlow<SnapshotsState> = mutable.asStateFlow()
+    private var lastProjectId: String? = null
 
     fun refresh() {
         val project = activeProject() ?: run {
+            lastProjectId = null
             mutable.update { SnapshotsState(message = UiText.res(R.string.rt_open_project_first)) }
             return
         }
+        val projectChanged = project.id != lastProjectId
+        lastProjectId = project.id
+        if (projectChanged) {
+            mutable.update { SnapshotsState(projectName = project.name) }
+        }
         scope.launch {
             val list = withContext(Dispatchers.IO) { runCatching { manager.list(project.id) }.getOrDefault(emptyList()) }
-            mutable.update { it.copy(projectName = project.name, snapshots = list) }
+            if (activeProject()?.id == project.id) {
+                mutable.update { it.copy(projectName = project.name, snapshots = list) }
+            }
         }
     }
 
@@ -56,27 +66,41 @@ class SnapshotsController(
             mutable.update { it.copy(message = UiText.res(R.string.rt_snap_wait_running)) }
             return
         }
-        task(UiText.res(R.string.rt_snap_restored, snapshot.label)) { project ->
+        task(
+            success = UiText.res(R.string.rt_snap_restored, snapshot.label),
+            onSuccess = { project -> onRestored(project.id) },
+        ) { project ->
             manager.restore(project.id, workspaceFor(project.id), snapshot)
         }
     }
 
     fun delete(snapshot: WorkspaceSnapshot) = task(UiText.res(R.string.rt_snap_deleted)) { manager.delete(snapshot) }
 
-    private fun task(success: UiText, block: (Project) -> Unit) {
+    private fun task(
+        success: UiText,
+        onSuccess: (Project) -> Unit = {},
+        block: (Project) -> Unit,
+    ) {
         val project = activeProject() ?: return
         if (mutable.value.busy) return
         mutable.update { it.copy(busy = true, message = null) }
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { block(project) } }
             val list = withContext(Dispatchers.IO) { runCatching { manager.list(project.id) }.getOrDefault(emptyList()) }
-            mutable.update {
-                it.copy(
-                    busy = false,
-                    snapshots = list,
-                    projectName = project.name,
-                    message = result.fold({ success }, { e -> e.toUiText(R.string.rt_snap_failed) }),
-                )
+            if (result.isSuccess) {
+                runCatching { onSuccess(project) }
+            }
+            if (activeProject()?.id == project.id) {
+                mutable.update {
+                    it.copy(
+                        busy = false,
+                        snapshots = list,
+                        projectName = project.name,
+                        message = result.fold({ success }, { e -> e.toUiText(R.string.rt_snap_failed) }),
+                    )
+                }
+            } else {
+                mutable.update { it.copy(busy = false) }
             }
         }
     }

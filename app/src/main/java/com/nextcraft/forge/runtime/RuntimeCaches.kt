@@ -35,12 +35,22 @@ internal object RuntimeCaches {
 
     private fun runRoot(command: String, timeoutSeconds: Long): String? = runCatching {
         val proc = ProcessBuilder("su", "-c", command).redirectErrorStream(true).start()
-        val output = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
-            proc.destroyForcibly()
-            null
-        } else {
-            output
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+        val watchdog = Thread({
+            try {
+                if (!proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                    timedOut.set(true)
+                    proc.destroyForcibly()
+                }
+            } catch (_: InterruptedException) {
+            }
+        }, "forge-caches-watchdog").apply { isDaemon = true; start() }
+        val output = try {
+            proc.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            watchdog.interrupt()
+            if (proc.isAlive) proc.destroyForcibly()
         }
+        if (!timedOut.get() && proc.waitFor(1, TimeUnit.SECONDS)) output else null
     }.getOrNull()
 }

@@ -64,10 +64,21 @@ object SilentSelfUpdate {
 
     private fun rootRun(command: String, timeoutSeconds: Long): String? {
         val proc = ProcessBuilder("su", "-c", command).redirectErrorStream(true).start()
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+        val watchdog = Thread({
+            try {
+                if (!proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                    timedOut.set(true)
+                    proc.destroyForcibly()
+                }
+            } catch (_: InterruptedException) {
+            }
+        }, "forge-update-watchdog").apply { isDaemon = true; start() }
         return try {
-            val text = proc.inputStream.bufferedReader().readText()
-            if (proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)) text else null
+            val text = proc.inputStream.bufferedReader().use { it.readText() }
+            if (!timedOut.get() && proc.waitFor(1, TimeUnit.SECONDS)) text else null
         } finally {
+            watchdog.interrupt()
             if (proc.isAlive) proc.destroyForcibly()
         }
     }

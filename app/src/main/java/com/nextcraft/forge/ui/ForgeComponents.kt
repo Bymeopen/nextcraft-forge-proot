@@ -492,3 +492,67 @@ fun Modifier.forgeFadingEdges(scroll: androidx.compose.foundation.ScrollState, b
             )
         }
     }
+
+/** Compact live system resource bar (RAM free, App heap, Battery) with a 1-tap Clean Idle Daemons button. */
+@Composable
+fun LiveResourceMiniBar(
+    onCleanIdleDaemons: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val tokens = LocalForgeThemeTokens.current
+    val scheme = MaterialTheme.colorScheme
+    val stats = remember { mutableStateOf("") }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context, forceRefresh = true)
+            val mem = android.app.ActivityManager.MemoryInfo()
+            context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mem)
+            val freeGb = String.format(java.util.Locale.US, "%.1f", mem.availMem / (1024.0 * 1024.0 * 1024.0))
+            val totalGb = String.format(java.util.Locale.US, "%.1f GB", mem.totalMem / (1024.0 * 1024.0 * 1024.0))
+            val swapStr = if (hw.swap.hasActiveSwap) {
+                val swapUsedGb = String.format(java.util.Locale.US, "%.1f", hw.swap.swapUsedMb / 1024.0)
+                val swapTotalGb = String.format(java.util.Locale.US, "%.1f GB", hw.swap.swapTotalMb / 1024.0)
+                " · Swap $swapUsedGb/$swapTotalGb"
+            } else {
+                ""
+            }
+            val bat = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            val level = bat?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = bat?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val batStr = if (level >= 0 && scale > 0) " · ${level * 100 / scale}%" else ""
+            stats.value = "${hw.socVendor.shortBadge} · RAM $freeGb/$totalGb$swapStr$batStr"
+            kotlinx.coroutines.delay(5_000)
+        }
+    }
+    if (stats.value.isEmpty()) return
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = stats.value,
+            fontSize = ForgeType.caption,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            color = scheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = stringResource(R.string.resource_clean_daemons),
+            fontSize = ForgeType.caption,
+            fontWeight = FontWeight.SemiBold,
+            color = tokens.accentText,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(scheme.primary.copy(alpha = 0.12f))
+                .clickable(role = Role.Button, onClick = onCleanIdleDaemons)
+                .padding(horizontal = 10.dp, vertical = 3.dp),
+        )
+    }
+}

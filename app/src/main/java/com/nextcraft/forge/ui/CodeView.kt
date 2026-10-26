@@ -1,6 +1,7 @@
 package com.nextcraft.forge.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ internal fun codeSpanStyle(kind: CodeTokenKind, tokens: ForgeThemeTokens): SpanS
     CodeTokenKind.NUMBER -> SpanStyle(color = tokens.accentText)
     // Comments are italic and a step quieter; the colour alone is never the cue.
     CodeTokenKind.COMMENT -> SpanStyle(color = tokens.terminalText.copy(alpha = 0.78f), fontStyle = FontStyle.Italic)
+    CodeTokenKind.ANNOTATION -> SpanStyle(color = tokens.warningText, fontWeight = FontWeight.Medium)
 }
 
 internal fun highlightLine(text: String, language: CodeLanguage, tokens: ForgeThemeTokens): AnnotatedString {
@@ -74,6 +76,7 @@ internal fun DiffCodeView(
     modifier: Modifier = Modifier,
     previewLines: Int = 24,
     textStyle: TextStyle = ForgeCodeTextStyle,
+    onRevertHunk: ((Int) -> Unit)? = null,
 ) {
     val tokens = LocalForgeThemeTokens.current
     val language = remember(path) { CodeLanguage.forPath(path) }
@@ -84,6 +87,15 @@ internal fun DiffCodeView(
     val digits = remember(lines) { (lines.maxOfOrNull { maxOf(it.newLine ?: 0, it.oldLine ?: 0) } ?: 0).toString().length.coerceAtLeast(2) }
     // Long lines scroll sideways; the fading edge is the cue that there is more to the right.
     val sideScroll = rememberScrollState()
+    val firstChangedIndexPerHunk = remember(shown) {
+        val map = HashMap<Int, Int>()
+        shown.forEachIndexed { idx, l ->
+            if ((l.type == DiffLineType.ADDITION || l.type == DiffLineType.DELETION) && l.hunkIndex >= 0 && l.hunkIndex !in map) {
+                map[l.hunkIndex] = idx
+            }
+        }
+        map
+    }
     Column(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -94,7 +106,29 @@ internal fun DiffCodeView(
                 .horizontalScroll(sideScroll)
                 .padding(vertical = 6.dp),
         ) {
-            shown.forEach { line -> DiffRow(line, language, digits, textStyle, tokens) }
+            shown.forEachIndexed { idx, line ->
+                val isFirstChangeOfHunk = onRevertHunk != null && firstChangedIndexPerHunk[line.hunkIndex] == idx
+                if (isFirstChangeOfHunk) {
+                    Row(
+                        modifier = Modifier
+                            .background(tokens.terminalBackground)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.diff_revert_hunk),
+                            fontSize = ForgeType.caption,
+                            fontWeight = FontWeight.SemiBold,
+                            color = tokens.dangerText,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(tokens.dangerText.copy(alpha = 0.14f))
+                                .clickable(role = androidx.compose.ui.semantics.Role.Button) { onRevertHunk?.invoke(line.hunkIndex) }
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                DiffRow(line, language, digits, textStyle, tokens)
+            }
         }
         if (hidden > 0 && !showAll) {
             TextButton(onClick = { showAll = true }, modifier = Modifier.heightIn(min = ForgeSpace.minTouch)) {

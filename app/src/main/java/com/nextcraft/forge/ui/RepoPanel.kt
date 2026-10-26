@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,8 +52,12 @@ internal fun RepoSheet(
     var message by rememberSaveable { mutableStateOf("") }
     val branchChats = state.chats.filter { it.isolated }
     val anyRunInProject = state.runningChatIds.isNotEmpty()
+    val ci by viewModel.cicd.state.collectAsState()
 
-    LaunchedEffect(state.activeProjectId) { viewModel.refreshProjectRepo() }
+    LaunchedEffect(state.activeProjectId) {
+        viewModel.refreshProjectRepo()
+        viewModel.cicd.refresh()
+    }
 
     ForgeModalSheet(
         onDismissRequest = onDismiss,
@@ -172,7 +177,7 @@ internal fun RepoSheet(
                 item { Text(stringResource(R.string.repo_prs_empty), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant) }
             }
             items(pending, key = { it.id }) { chat ->
-                val st = state.branchStatus.getValue(chat.id)
+                val st = state.branchStatus[chat.id] ?: return@items
                 val busy = chat.id in state.branchBusy
                 val running = chat.id in state.runningChatIds
                 Surface(shape = RoundedCornerShape(16.dp), color = tokens.cardElevatedColor, border = tokens.cardBorderStroke, modifier = Modifier.fillMaxWidth()) {
@@ -204,6 +209,69 @@ internal fun RepoSheet(
                                 enabled = !busy && !running && st.conflicts.isEmpty(),
                                 modifier = Modifier.weight(1f),
                             )
+                        }
+                    }
+                }
+            }
+            if (ci.repository != null) {
+                item {
+                    Surface(shape = RoundedCornerShape(16.dp), color = tokens.cardElevatedColor, border = tokens.cardBorderStroke, modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = stringResource(R.string.github_pr_manager_title) + " · " + ci.repository,
+                                fontSize = ForgeType.rowTitle,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            val latestRun = ci.runs.firstOrNull()
+                            if (latestRun != null) {
+                                val outcome = latestRun.conclusion ?: latestRun.status
+                                val failed = latestRun.conclusion != null && latestRun.conclusion != "success" && latestRun.conclusion != "skipped"
+                                val latestRunLabel = "${latestRun.name} (${latestRun.branch}): $outcome"
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = latestRunLabel,
+                                        fontSize = ForgeType.secondary,
+                                        color = if (failed) scheme.error else if (latestRun.conclusion == "success") tokens.successText else scheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (failed) {
+                                        ForgeTextButton(onClick = {
+                                            onDismiss()
+                                            viewModel.fixCiFailureWithAgent(latestRun.name, latestRun.branch, latestRun.url)
+                                        }) {
+                                            Text(stringResource(R.string.github_fix_ci_with_agent), color = scheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                            ci.pullRequests.take(3).forEach { pr ->
+                                val prItemLabel = "#${pr.number} ${pr.title}"
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = prItemLabel,
+                                        fontSize = ForgeType.secondary,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    ForgeTextButton(onClick = { viewModel.cicd.mergePullRequest(pr.number) }, enabled = !ci.loading) {
+                                        Text(stringResource(R.string.repo_pr_merge))
+                                    }
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    onDismiss()
+                                    viewModel.selectTab(ForgeTab.CICD)
+                                },
+                                shape = RoundedCornerShape(100),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.tools_cicd))
+                            }
                         }
                     }
                 }

@@ -93,7 +93,7 @@ fun FilesAndDiffScreen(
     /** Set when this is one workspace opened from the global file manager: Back then returns to the workspace list. */
     onBackToWorkspaces: (() -> Unit)? = null,
 ) {
-    var mode by rememberSaveable { mutableStateOf(if (state.selectedFilePath != null) "editor" else "files") } // "files" | "editor" | "diff"
+    var mode by rememberSaveable(state.activeProjectId) { mutableStateOf(if (state.selectedFilePath != null) "editor" else "files") } // "files" | "editor" | "diff"
     var showNewFileDialog by rememberSaveable { mutableStateOf(false) }
     var newFileBaseDir by rememberSaveable { mutableStateOf("") }
     var newFolderBaseDir by rememberSaveable { mutableStateOf<String?>(null) }
@@ -297,6 +297,7 @@ fun FilesAndDiffScreen(
                     mode = "editor"
                 },
                 onRevertFile = viewModel::revertSingleFile,
+                onRevertHunk = viewModel::revertDiffHunk,
                 onRevertAll = viewModel::revertAllChanges,
                 onKeepFile = viewModel::keepSingleFile,
                 onKeepAll = viewModel::keepAllChanges,
@@ -886,6 +887,7 @@ private fun WorkspaceDiffReviewList(
     sessionRunning: Boolean,
     onOpenFile: (String) -> Unit,
     onRevertFile: (String) -> Unit,
+    onRevertHunk: (String, Int) -> Unit,
     onRevertAll: () -> Unit,
     onKeepFile: (String) -> Unit,
     onKeepAll: () -> Unit,
@@ -996,7 +998,12 @@ private fun WorkspaceDiffReviewList(
                             }
                         }
 
-                        DiffCodeView(lines = item.diffLines, path = item.path, previewLines = 200)
+                        DiffCodeView(
+                            lines = item.diffLines,
+                            path = item.path,
+                            previewLines = 200,
+                            onRevertHunk = if (!sessionRunning) ({ idx -> onRevertHunk(item.path, idx) }) else null,
+                        )
                     }
                 }
             }

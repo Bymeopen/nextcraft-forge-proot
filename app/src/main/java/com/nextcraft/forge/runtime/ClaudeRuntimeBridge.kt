@@ -181,6 +181,8 @@ class ClaudeRuntimeBridge(
             }
             eventBus.emit(RuntimeEvent.SessionFailed(sessionId, message))
             activeSessionId = null
+            liveSessions.remove(sessionId)
+            foreground.clearStart()
             return@withContext sessionId
         }
 
@@ -310,7 +312,7 @@ class ClaudeRuntimeBridge(
                 }
                 InotifyLogTailer(nativeProcess.outputFile).use { tailer ->
                     while (process.isAlive || tailer.hasUnreadBytes()) {
-                        for (line in tailer.readLines(timeoutMs = 50L)) {
+                        for (line in tailer.readLines(timeoutMs = 250L)) {
                             processClaudeLine(line)
                         }
                         // A steering message that Claude folded into the turn that just ended brings no new turn.
@@ -777,8 +779,9 @@ class ClaudeRuntimeBridge(
     fun steer(text: String): Boolean = synchronized(this) {
         val input = steerInput ?: return false
         if (activeProcess?.isAlive != true || text.isBlank()) return false
+        val guarded = "$text\n\n[Reminder: ${ANTI_HALLUCINATION_RULES.first()} ${ANTI_HALLUCINATION_RULES[1]} ${ANTI_HALLUCINATION_RULES[3]}]"
         runCatching {
-            input.write(streamJsonUserMessage(text))
+            input.write(streamJsonUserMessage(guarded))
             input.flush()
         }.onFailure { return false }
         steersPending++
@@ -848,7 +851,12 @@ class ClaudeRuntimeBridge(
     private suspend fun emitCompletedOnce(sessionId: String) {
         if (finishedSessions.add(sessionId)) {
             eventBus.emit(RuntimeEvent.SessionCompleted(sessionId))
-            finishForegroundRuntimeRes(true, activeProjectSlug ?: "Project", com.nextcraft.forge.R.string.notif_agent_finished, "Claude Code")
+            val slug = activeProjectSlug?.takeIf { it.isNotBlank() }
+            if (slug != null) {
+                finishForegroundRuntimeRes(true, slug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Claude Code", slug)
+            } else {
+                finishForegroundRuntimeRes(true, "Project", com.nextcraft.forge.R.string.notif_agent_finished, "Claude Code")
+            }
         }
     }
 
@@ -884,31 +892,15 @@ class ClaudeRuntimeBridge(
         guestWorkspacePath: String,
         projectKind: ProjectKind,
         resumed: Boolean = false,
-    ): String {
-        val recent = priorMessages.recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
-        val sb = StringBuilder()
-        sb.appendLine("<project_workspace>")
-        if (projectKind == ProjectKind.QUICK_PROJECT) {
-            sb.appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
-            sb.appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
-            sb.appendLine("Keep every file and command inside this project workspace.")
-        } else {
-            sb.appendLine("The current working directory $guestWorkspacePath is the project root.")
-            sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
-            sb.appendLine("When giving commands to the user, make them runnable from this project root.")
-        }
-        if (installer.isStackInstalled(DevStack.ANDROID)) {
-            AndroidToolchain.AGENT_PROMPT_LINES.forEach(sb::appendLine)
-        } else {
-            sb.appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
-        }
-        sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
-        sb.appendLine("</project_workspace>")
-        sb.appendLine()
-        sb.appendConversationHistory(recent, guestWorkspacePath, resumed)
-        sb.appendLine(currentPrompt)
-        return sb.toString()
-    }
+    ): String = buildAgentWorkspacePrompt(
+        currentPrompt = currentPrompt,
+        priorMessages = priorMessages,
+        guestWorkspacePath = guestWorkspacePath,
+        projectKind = projectKind,
+        androidStackInstalled = installer.isStackInstalled(DevStack.ANDROID),
+        maxHistoryChars = MAX_CONVERSATION_HISTORY_CHARACTERS,
+        resumed = resumed,
+    )
 
     fun configureProjectRoot(projectId: String, rootPath: String) {
         checkpoints.configureProjectRoot(projectId, rootPath)

@@ -51,7 +51,10 @@ data class ReaState(
  * runs `rea doctor --json`. Same pattern as the other Tools controllers: a [ChrootRunner] run per command, output
  * streamed into a log, results parsed from the one JSON line the command prints last.
  */
-class ReaController(context: Context) {
+class ReaController(
+    context: Context,
+    private val onProjectChanged: (String) -> Unit = {},
+) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runner = ChrootRunner(appContext)
@@ -192,6 +195,7 @@ class ReaController(context: Context) {
             if (text != null) it.copy(reportPath = written, reportMarkdown = text, message = UiText.res(R.string.rea_report_saved, written))
             else it.copy(message = failureMessage(response))
         }
+        if (text != null) onProjectChanged(project.id)
     }
 
     private suspend fun runInProject(project: Project, command: String): ReaResponse? {

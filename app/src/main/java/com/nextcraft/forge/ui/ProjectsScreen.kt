@@ -110,11 +110,6 @@ fun ProjectsScreen(
     val quick = state.projects
         .filter { it.kind == ProjectKind.QUICK_PROJECT }
         .sortedByDescending { it.updatedAtMillis }
-    val busy = state.sessionRunning ||
-        state.androidBuild.phase == com.nextcraft.forge.runtime.AndroidBuildPhase.BUILDING ||
-        state.terminalRunning
-    // Mirrors MainViewModel.deleteProject, which refuses while a task runs (any project can be deleted, even the last).
-    val canDelete = !busy
     var pendingDeleteProject by remember { mutableStateOf<Project?>(null) }
     var pendingRenameProject by remember { mutableStateOf<Project?>(null) }
     var showCloneDialog by rememberSaveable { mutableStateOf(false) }
@@ -157,14 +152,18 @@ fun ProjectsScreen(
             if (regular.isNotEmpty()) {
                 if (quick.isNotEmpty()) item(key = "header-recent") { SectionLabel(stringResource(R.string.projects_recent)) }
                 items(regular, key = { it.id }) { project ->
+                    val runningChats = state.runningProjectChatCounts[project.id] ?: 0
+                    val isBuilding = project.id in state.buildingProjectIds
+                    val projectBusy = runningChats > 0 || isBuilding
                     ProjectRow(
                         project = project,
                         active = project.id == state.activeProjectId,
                         changedCount = if (project.id == state.activeProjectId) state.changedItems.count { it.accepted == null } else 0,
-                        running = state.sessionRunning && project.id == state.activeProjectId,
-                        // MainViewModel.selectProject ignores switches while active tasks run.
-                        locked = busy && project.id != state.activeProjectId,
-                        canDelete = canDelete,
+                        running = projectBusy,
+                        runningChatCount = runningChats,
+                        building = isBuilding,
+                        locked = false,
+                        canDelete = !projectBusy,
                         onOpen = { onOpenProject(project.id) },
                         onDelete = { pendingDeleteProject = project },
                         onRename = { pendingRenameProject = project },
@@ -174,13 +173,18 @@ fun ProjectsScreen(
             if (quick.isNotEmpty()) {
                 item(key = "header-quick") { SectionLabel(stringResource(R.string.projects_quick)) }
                 items(quick, key = { it.id }) { project ->
+                    val runningChats = state.runningProjectChatCounts[project.id] ?: 0
+                    val isBuilding = project.id in state.buildingProjectIds
+                    val projectBusy = runningChats > 0 || isBuilding
                     ProjectRow(
                         project = project,
                         active = project.id == state.activeProjectId,
                         changedCount = if (project.id == state.activeProjectId) state.changedItems.count { it.accepted == null } else 0,
-                        running = state.sessionRunning && project.id == state.activeProjectId,
-                        locked = busy && project.id != state.activeProjectId,
-                        canDelete = canDelete,
+                        running = projectBusy,
+                        runningChatCount = runningChats,
+                        building = isBuilding,
+                        locked = false,
+                        canDelete = !projectBusy,
                         onOpen = { onOpenProject(project.id) },
                         onDelete = { pendingDeleteProject = project },
                         onRename = { pendingRenameProject = project },
@@ -519,6 +523,8 @@ internal fun ProjectRow(
     onRename: () -> Unit,
     changedCount: Int = 0,
     running: Boolean = false,
+    runningChatCount: Int = 0,
+    building: Boolean = false,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
@@ -584,16 +590,24 @@ internal fun ProjectRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // Live state for the open project: the agent is working, or edits wait for review.
-                if (running || changedCount > 0) {
+                // Live state for the project: chats working, APK building, or edits waiting for review.
+                if (running || building || changedCount > 0) {
                     Spacer(modifier = Modifier.height(8.dp))
                     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        if (running) {
-                            ProjectStatusPill(stringResource(R.string.projects_status_working), ForgeGlyph.SPARK, LocalForgeThemeTokens.current.warningText)
+                        if (runningChatCount > 0 || (running && !building)) {
+                            val label = if (runningChatCount > 1) {
+                                "${stringResource(R.string.projects_status_working)} ($runningChatCount)"
+                            } else {
+                                stringResource(R.string.projects_status_working)
+                            }
+                            ProjectStatusPill(label, ForgeGlyph.SPARK, LocalForgeThemeTokens.current.warningText)
+                        }
+                        if (building) {
+                            ProjectStatusPill(stringResource(R.string.notif_building_apk), ForgeGlyph.BUILD, LocalForgeThemeTokens.current.warningText)
                         }
                         if (changedCount > 0) {
                             ProjectStatusPill(quantityStringResource(R.plurals.chat_files_changed, changedCount, changedCount), ForgeGlyph.FILE, scheme.primary)

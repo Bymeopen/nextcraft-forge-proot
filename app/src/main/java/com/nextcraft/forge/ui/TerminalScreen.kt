@@ -131,9 +131,15 @@ fun TerminalScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         val inProject = state.activeTab == ForgeTab.PROJECTS
+        val activeProject = state.activeProject
+        val headerSubtitle = if (chatId != null && activeProject != null) {
+            viewModel.terminalProjectDir(chatId) ?: "/workspace/${activeProject.slug}"
+        } else {
+            stringResource(R.string.terminal_general_subtitle)
+        }
         ForgeProjectHeader(
             title = stringResource(R.string.terminal_project_terminal),
-            subtitle = stringResource(R.string.terminal_general_subtitle),
+            subtitle = headerSubtitle,
             onBack = if (inProject) ({ viewModel.projectBack() }) else null,
             actions = {
                 ForgePillIcon(
@@ -169,6 +175,8 @@ fun TerminalScreen(
                 }
             },
         )
+
+        LiveResourceMiniBar(onCleanIdleDaemons = viewModel::cleanIdleDaemons)
 
         // The emulator fills the space; the shell is resized to it (and to the keyboard) automatically.
         Box(

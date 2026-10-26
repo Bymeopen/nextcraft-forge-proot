@@ -248,6 +248,34 @@ class AntigravityRuntimeBridge(
         }.apply { isDaemon = true }.start()
     }
 
+    /**
+     * Reaps orphaned `/root/.local/bin/agy --input-format stream-json` processes whose parent died (PPID == 1) and
+     * trims CLI logs older than 3 days.
+     */
+    private fun reapOrphanedAgyProcessesAndOldLogs() {
+        Thread({
+            runCatching {
+                val script = "for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do " +
+                    "ppid=\$(awk '/^PPid:/{print \$2}' /proc/\$p/status 2>/dev/null); " +
+                    "[ \"\$ppid\" = \"1\" ] && kill -9 \$p 2>/dev/null; done; true"
+                val proc = ProcessBuilder("su", "-c", script)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
+                    .start()
+                if (!proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) proc.destroyForcibly()
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+            runCatching {
+                val cutoff = System.currentTimeMillis() - 3L * 24 * 60 * 60 * 1_000L
+                val logDir = File(installer.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
+                logDir.listFiles()?.forEach { file ->
+                    if (file.isFile && file.name.startsWith("cli-") && file.lastModified() < cutoff) {
+                        file.delete()
+                    }
+                }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+        }, "forge-agy-orphan-reaper").apply { isDaemon = true }.start()
+    }
+
     /** An idle warm agy holds memory in the chroot; let it go after a while without messages. */
     private fun scheduleWarmExpiry(entry: WarmAgy) {
         val generation = ++warmGeneration
@@ -395,6 +423,8 @@ class AntigravityRuntimeBridge(
         if (!installer.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
             emitFailure(sessionId, "Antigravity CLI is not installed. Open Settings → Coding agent to install it.")
             activeSessionId = null
+            activeProjectSlug = ""
+            foreground.clearStart()
             return@withContext sessionId
         }
 
@@ -417,7 +447,7 @@ class AntigravityRuntimeBridge(
                     }.apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register(RuntimeTaskController.AGENT, it) }
+            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
             startForegroundRuntime(projectSlug)
             pushForegroundProgress("Starting Antigravity…")
             val installed = installer.installedRuntime()
@@ -448,7 +478,10 @@ class AntigravityRuntimeBridge(
                 warmSupported == true && it.process.isAlive && it.projectId == projectId &&
                     it.model == currentModel && it.effort == currentEffort && it.conversationId == currentConversation
             }
-            if (reuse == null) closeWarm(previous)
+            if (reuse == null) {
+                closeWarm(previous)
+                reapOrphanedAgyProcessesAndOldLogs()
+            }
             val process: Process
             val tailer: InotifyLogTailer
             if (reuse != null) {
@@ -541,7 +574,7 @@ class AntigravityRuntimeBridge(
             }
             run {
                 outputLoop@ while (process.isAlive || tailer.hasUnreadBytes()) {
-                    val lines = tailer.readLines(timeoutMs = 50L)
+                    val lines = tailer.readLines(timeoutMs = 250L)
                     if (lines.isEmpty()) {
                         val now = System.currentTimeMillis()
                         if (stdinOpen && !eventSeen && now - promptSentAtMillis >= WARM_PROBE_MS) {
@@ -846,8 +879,8 @@ private const val WARM_REUSE_QUIET_MS = 90_000L
 /** Upper bound for a kept-alive agy that shows no event at all, however active its log looks. */
 private const val WARM_REUSE_MAX_WAIT_MS = 10 * 60_000L
 
-/** A kept-alive agy is stopped after this long without a message. */
-private const val WARM_IDLE_MS = 10 * 60_000L
+/** A kept-alive agy is stopped after this long without a message (3 min balances warm reuse vs ~400 MB RSS). */
+private const val WARM_IDLE_MS = 3 * 60_000L
 
 private const val ANTIGRAVITY_GENERIC_FAILURE = "Antigravity could not complete the task."
 
@@ -917,6 +950,8 @@ internal fun antigravityWorkspacePrompt(projectSlug: String, prompt: String): St
       `timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`
     NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.
     Start the optimized Android build with `run_command` normally inside the Root Chroot workspace. If Antigravity moves the command into a managed task, immediately use `manage_task` to check its status and obtain its log path. Poll that managed task and tail its log with short commands about every 10 seconds so the user receives progress, then read the final output and exit status. Never wait silently on a long foreground command.
+    Operate with the precision, speed, and surgical execution style of Claude Code: target under 10 seconds per turn, combine related operations into a single tool step whenever possible, and deliver concise, high-signal responses.
+    ${ANTI_HALLUCINATION_RULES.joinToString("\n    ")}
     </nextcraft_workspace>
 
     $prompt

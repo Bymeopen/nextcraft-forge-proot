@@ -152,13 +152,14 @@ class SshController(context: Context) {
 
     fun stopTunnel(id: String) {
         val process = tunnelProcesses.remove(id) ?: return
-        process.destroyForcibly()
+        runner.stop(process)
         // Killing the su wrapper does not always reach the ssh client inside the chroot; stop it there as well.
         val forward = mutable.value.hosts.firstOrNull { it.id == id }?.forward.orEmpty()
         if (forward.isNotEmpty()) {
             scope.launch {
                 // "[s]sh" keeps pkill from matching this very shell command line.
-                runCatching { runner.run(workspace(), SLUG, "pkill -f ${ChrootRunner.quote("[s]sh .* -N .*-L $forward ")} || true", timeoutMillis = 15_000L) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SshController", it) }
+                val escapedForward = Regex.escape(forward)
+                runCatching { runner.run(workspace(), SLUG, "pkill -f ${ChrootRunner.quote("[s]sh .* -N .*-L $escapedForward ")} || true", timeoutMillis = 15_000L) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SshController", it) }
             }
         }
     }

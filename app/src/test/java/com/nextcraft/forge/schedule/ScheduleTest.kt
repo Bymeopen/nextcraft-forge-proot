@@ -58,10 +58,11 @@ class ScheduleTest {
         tasks = ScheduleLogic.applyDirectives(tasks, listOf(ScheduleDirective.Schedule(60, "p0")), "p", "c", 0)
         assertEquals(60, tasks.first { it.prompt == "p0" }.intervalMinutes)
         assertEquals(ScheduleRules.MAX_AGENT_TASKS_PER_CHAT, tasks.size)
-        // Unschedule removes only the agent's tasks in that chat.
+        // Unschedule removes only the agent's tasks in that chat and project (even when another project shares chatId="main").
         val user = ScheduledTask(projectId = "p", chatId = "c", prompt = "mine", intervalMinutes = 10, nextRunAtMillis = 0)
         val other = ScheduledTask(projectId = "p", chatId = "d", prompt = "other", intervalMinutes = 10, nextRunAtMillis = 0, byAgent = true)
-        val after = ScheduleLogic.applyDirectives(tasks + user + other, listOf(ScheduleDirective.Unschedule), "p", "c", 0)
-        assertEquals(setOf("mine", "other"), after.map { it.prompt }.toSet())
+        val otherProjectSameChat = ScheduledTask(projectId = "p2", chatId = "c", prompt = "otherProject", intervalMinutes = 10, nextRunAtMillis = 0, byAgent = true)
+        val after = ScheduleLogic.applyDirectives(tasks + user + other + otherProjectSameChat, listOf(ScheduleDirective.Unschedule), "p", "c", 0)
+        assertEquals(setOf("mine", "other", "otherProject"), after.map { it.prompt }.toSet())
     }
 }

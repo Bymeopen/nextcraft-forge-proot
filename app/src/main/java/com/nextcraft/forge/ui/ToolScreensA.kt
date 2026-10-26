@@ -216,7 +216,8 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
     var label by rememberSaveable { mutableStateOf("") }
     var pendingRestore by remember { mutableStateOf<WorkspaceSnapshot?>(null) }
     LaunchedEffect(state.activeProjectId) { viewModel.snapshots.refresh() }
-    val busy = state.sessionRunning || state.terminalRunning
+    val busy = state.sessionRunning || state.terminalRunning || state.buildingProjectIds.isNotEmpty()
+    val pendingChangesCount = state.changedItems.count { it.accepted == null }
     ToolScaffold(
         title = stringResource(R.string.tools_checkpoints),
         subtitle = snaps.projectName.ifBlank { stringResource(R.string.tools_checkpoints_desc) },
@@ -225,11 +226,11 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
         ToolSectionLabel(stringResource(R.string.tool_agent_changes))
         ToolCard {
             Text(
-                text = if (state.changedItems.isEmpty()) stringResource(R.string.tool_no_pending_changes)
-                else quantityStringResource(R.plurals.tool_pending_changes, state.changedItems.size, state.changedItems.size),
+                text = if (pendingChangesCount == 0) stringResource(R.string.tool_no_pending_changes)
+                else quantityStringResource(R.plurals.tool_pending_changes, pendingChangesCount, pendingChangesCount),
                 fontSize = ForgeType.control,
             )
-            if (state.changedItems.isNotEmpty()) {
+            if (pendingChangesCount > 0) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     ForgePrimaryButton(text = stringResource(R.string.tool_keep_all), onClick = viewModel::keepAllChanges, enabled = !busy, modifier = Modifier.weight(1f))
                     OutlinedButton(shape = RoundedCornerShape(100), onClick = viewModel::revertAllChanges, enabled = !busy, modifier = Modifier.weight(1f)) {

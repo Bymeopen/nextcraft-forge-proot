@@ -90,12 +90,22 @@ internal object FileBrowser {
 
     private fun runRoot(command: String): ByteArray? = runCatching {
         val process = ProcessBuilder("su", "-c", command).redirectError(ProcessBuilder.Redirect.to(File("/dev/null"))).start()
-        // Read before waiting: a full pipe would block the child until the timeout.
-        val output = process.inputStream.readBytes()
-        if (!process.waitFor(ROOT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            return@runCatching null
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+        val watchdog = Thread({
+            try {
+                if (!process.waitFor(ROOT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    timedOut.set(true)
+                    process.destroyForcibly()
+                }
+            } catch (_: InterruptedException) {
+            }
+        }, "forge-filebrowser-watchdog").apply { isDaemon = true; start() }
+        val output = try {
+            process.inputStream.use { it.readBytes() }
+        } finally {
+            watchdog.interrupt()
+            if (process.isAlive) process.destroyForcibly()
         }
-        if (process.exitValue() == 0) output else null
+        if (!timedOut.get() && process.waitFor(1, TimeUnit.SECONDS) && process.exitValue() == 0) output else null
     }.getOrNull()
 }

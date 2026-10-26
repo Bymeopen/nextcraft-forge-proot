@@ -181,10 +181,20 @@ mount_once "/dev" "$ROOTFS/dev" "bind" "rw"
 mount_once "/dev/pts" "$ROOTFS/dev/pts" "bind" "rw"
 mount_once "proc" "$ROOTFS/proc" "proc" "rw,nosuid,nodev,noexec"
 mount_once "sysfs" "$ROOTFS/sys" "sysfs" "rw,nosuid,nodev,noexec"
-mount_once "tmpfs" "$ROOTFS/tmp" "tmpfs" "rw,nosuid,nodev,mode=1777"
-mount_once "tmpfs" "$ROOTFS/dev/shm" "tmpfs" "rw,nosuid,nodev,mode=1777,size=256M"
+TMP_MB="${NEXTCRAFT_TMP_MB:-512}"
+SHM_MB="${NEXTCRAFT_SHM_MB:-256}"
+mount_once "tmpfs" "$ROOTFS/tmp" "tmpfs" "rw,nosuid,nodev,mode=1777,size=${TMP_MB}M"
+mount_once "tmpfs" "$ROOTFS/dev/shm" "tmpfs" "rw,nosuid,nodev,mode=1777,size=${SHM_MB}M"
+mkdir -p "$ROOTFS/tmp/.proot-tmp" "$ROOTFS/tmp/.proot-l2s" 2>/dev/null || true
+chmod 1777 "$ROOTFS/tmp/.proot-tmp" "$ROOTFS/tmp/.proot-l2s" 2>/dev/null || true
+if [ ! -e "$ROOTFS/dev/fd" ]; then
+    ln -sf /proc/self/fd "$ROOTFS/dev/fd" 2>/dev/null || true
+fi
+[ ! -e "$ROOTFS/dev/stdin" ] && ln -sf /proc/self/fd/0 "$ROOTFS/dev/stdin" 2>/dev/null || true
+[ ! -e "$ROOTFS/dev/stdout" ] && ln -sf /proc/self/fd/1 "$ROOTFS/dev/stdout" 2>/dev/null || true
+[ ! -e "$ROOTFS/dev/stderr" ] && ln -sf /proc/self/fd/2 "$ROOTFS/dev/stderr" 2>/dev/null || true
 
-for bionic_dir in /system /apex /vendor /product; do
+for bionic_dir in /system /apex /vendor /product /system_ext /odm; do
     if [ -d "$bionic_dir" ]; then
         mount_bionic "$bionic_dir" "$ROOTFS$bionic_dir"
     fi
@@ -255,8 +265,13 @@ fix_workspace_ownership() {
         "$ROOTFS"|"$ROOTFS"/*)
             ;;
         *)
-            chown -R -h "$APP_UID:$APP_UID" "$HOST_WORKSPACE" 2>/dev/null || true
-            chmod -R u+rwX,g+rwX "$HOST_WORKSPACE" 2>/dev/null || true
+            if command -v find >/dev/null 2>&1 && command -v xargs >/dev/null 2>&1; then
+                find "$HOST_WORKSPACE" \( ! -user "$APP_UID" -o ! -group "$APP_UID" \) -print0 2>/dev/null | xargs -0 -r chown -h "$APP_UID:$APP_UID" 2>/dev/null || chown -R -h "$APP_UID:$APP_UID" "$HOST_WORKSPACE" 2>/dev/null || true
+                find "$HOST_WORKSPACE" ! -perm -u+rw,g+rw -print0 2>/dev/null | xargs -0 -r chmod u+rwX,g+rwX 2>/dev/null || chmod -R u+rwX,g+rwX "$HOST_WORKSPACE" 2>/dev/null || true
+            else
+                chown -R -h "$APP_UID:$APP_UID" "$HOST_WORKSPACE" 2>/dev/null || true
+                chmod -R u+rwX,g+rwX "$HOST_WORKSPACE" 2>/dev/null || true
+            fi
             ;;
     esac
     chown -R -h "$APP_UID:$APP_UID" "$HOST_BRIDGE" 2>/dev/null || true
@@ -285,7 +300,33 @@ export CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"
 export REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 export GIT_SSL_CAINFO="/etc/ssl/certs/ca-certificates.crt"
-export NODE_OPTIONS="${NODE_OPTIONS:---dns-result-order=ipv4first}"
+# Auto-size Node.js V8 heap (--max-old-space-size) and glibc arenas based on phone RAM (4/6/8/10/12/16GB+) and built-in SwapRAM/ZRAM
+if [ -z "$NODE_OPTIONS" ]; then
+    MEM_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 4194304)
+    SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    MEM_MB=$((MEM_KB / 1024))
+    SWAP_MB=$((SWAP_KB / 1024))
+    if [ "$MEM_MB" -ge 13500 ]; then
+        NODE_HEAP_MB=4096
+    elif [ "$MEM_MB" -ge 10400 ]; then
+        NODE_HEAP_MB=3072
+    elif [ "$MEM_MB" -ge 8800 ]; then
+        NODE_HEAP_MB=2560
+    elif [ "$MEM_MB" -ge 6800 ]; then
+        NODE_HEAP_MB=2048
+    elif [ "$MEM_MB" -ge 4500 ]; then
+        if [ "$SWAP_MB" -ge 2048 ]; then NODE_HEAP_MB=1792; else NODE_HEAP_MB=1536; fi
+    else
+        NODE_HEAP_MB=1024
+    fi
+    export NODE_OPTIONS="--dns-result-order=ipv4first --max-old-space-size=$NODE_HEAP_MB"
+fi
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
+export PROOT_TMP_DIR="${PROOT_TMP_DIR:-/tmp/.proot-tmp}"
+export PROOT_L2S_DIR="${PROOT_L2S_DIR:-/tmp/.proot-l2s}"
+export UV_USE_IO_URING=0
+export UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-4}"
+export GODEBUG="${GODEBUG:-asyncpreemptoff=1}"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT="0"
 export GLIBC_TUNABLES="glibc.pthread.rseq=0"
 export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
@@ -298,6 +339,7 @@ case ":$PATH:" in
 esac
 
 CHROOT_BIN=""
+PROOT_BIN=""
 for candidate in /system/bin/chroot /system/xbin/chroot /sbin/chroot /debug_ramdisk/chroot "$ROOTFS/usr/sbin/chroot"; do
     if [ -x "$candidate" ]; then
         CHROOT_BIN="$candidate"
@@ -308,8 +350,16 @@ if [ -z "$CHROOT_BIN" ]; then
     if command -v busybox >/dev/null 2>&1; then
         CHROOT_BIN="busybox chroot"
     else
-        echo "chroot binary not found on host or guest rootfs" >&2
-        exit 127
+        for pcand in "$ROOTFS/usr/bin/proot" "$ROOTFS/usr/local/bin/proot" /system/bin/proot /data/data/com.termux/files/usr/bin/proot; do
+            if [ -x "$pcand" ]; then
+                PROOT_BIN="$pcand"
+                break
+            fi
+        done
+        if [ -z "$PROOT_BIN" ]; then
+            echo "chroot or proot binary not found on host or guest rootfs" >&2
+            exit 127
+        fi
     fi
 fi
 
@@ -349,9 +399,21 @@ reap_group() {
 }
 
 exec 9>&-
-$SETSID $CHROOT_BIN "$ROOTFS" /usr/bin/env \
-    GUEST_WORKSPACE="$GUEST_WORKSPACE" \
-    /bin/sh -c 'cd "$GUEST_WORKSPACE" && exec "$@"' -- "$@" <&3 3<&- &
+if [ -n "$CHROOT_BIN" ]; then
+    $SETSID $CHROOT_BIN "$ROOTFS" /usr/bin/env \
+        GUEST_WORKSPACE="$GUEST_WORKSPACE" \
+        /bin/sh -c 'cd "$GUEST_WORKSPACE" && exec "$@"' -- "$@" <&3 3<&- &
+else
+    $SETSID "$PROOT_BIN" --root-id --link2symlink --sysvipc --kill-on-exit \
+        -r "$ROOTFS" \
+        -b /dev -b /dev/urandom:/dev/random -b /proc -b /proc/self/fd:/dev/fd -b /sys -b /system -b /apex -b /vendor -b /product \
+        -b "$HOST_WORKSPACE:$GUEST_WORKSPACE" \
+        -b "$HOST_BRIDGE:/nextcraft-bridge" \
+        -b "$HOST_RESP:/nextcraft-bridge-responses" \
+        -w "$GUEST_WORKSPACE" \
+        /usr/bin/env GUEST_WORKSPACE="$GUEST_WORKSPACE" \
+        /bin/sh -c 'cd "$GUEST_WORKSPACE" && exec "$@"' -- "$@" <&3 3<&- &
+fi
 child=$!
 trap 'forward_signal INT' INT
 trap 'forward_signal TERM' TERM

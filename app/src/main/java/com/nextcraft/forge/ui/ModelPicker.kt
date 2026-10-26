@@ -63,9 +63,14 @@ fun ModelPickerDialog(
     val scheme = MaterialTheme.colorScheme
     var query by remember { mutableStateOf("") }
     val needle = query.trim()
-    val filtered = remember(options, needle) {
+    val resolvedLabels = options.associate { option ->
+        option.id to (option.labelRes?.let { stringResource(it) } ?: option.label)
+    }
+    val filtered = remember(options, needle, resolvedLabels) {
         if (needle.isEmpty()) options else options.filter {
-            it.id.contains(needle, ignoreCase = true) || it.label.contains(needle, ignoreCase = true)
+            it.id.contains(needle, ignoreCase = true) ||
+                it.label.contains(needle, ignoreCase = true) ||
+                resolvedLabels[it.id].orEmpty().contains(needle, ignoreCase = true)
         }
     }
     val offerCustom = needle.isNotEmpty() && options.none { it.id.equals(needle, ignoreCase = true) }

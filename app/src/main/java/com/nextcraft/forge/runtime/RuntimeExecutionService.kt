@@ -265,7 +265,7 @@ class RuntimeExecutionService : Service() {
         private const val RESULT_CHANNEL_ID = "task-results"
         private const val RUNNING_NOTIFICATION_ID = 41
         private const val RESULT_NOTIFICATION_ID = 42
-        private const val MAX_WAKE_LOCK_MS = 90 * 60 * 1_000L
+        private const val MAX_WAKE_LOCK_MS = 35 * 60 * 1_000L
 
         fun ensureNotificationChannels(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return

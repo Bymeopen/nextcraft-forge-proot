@@ -1,7 +1,7 @@
 package com.nextcraft.forge.ui
 
 /** What a run of characters is, for colouring. Pure data so the tokenizer is unit-tested without Android. */
-internal enum class CodeTokenKind { KEYWORD, STRING, NUMBER, COMMENT }
+internal enum class CodeTokenKind { KEYWORD, STRING, NUMBER, COMMENT, ANNOTATION }
 
 internal data class CodeToken(val start: Int, val end: Int, val kind: CodeTokenKind)
 
@@ -85,6 +85,11 @@ internal object CodeSyntax {
                     var end = i + 1
                     while (end < line.length && (line[end].isLetterOrDigit() || line[end] == '.' || line[end] == '_')) end++
                     out += CodeToken(i, end, CodeTokenKind.NUMBER); i = end
+                }
+                c == '@' && (i == 0 || !isIdentifierPart(line[i - 1])) && i + 1 < line.length && isIdentifierStart(line[i + 1]) -> {
+                    var end = i + 2
+                    while (end < line.length && (isIdentifierPart(line[end]) || line[end] == '.')) end++
+                    out += CodeToken(i, end, CodeTokenKind.ANNOTATION); i = end
                 }
                 isIdentifierStart(c) -> {
                     var end = i + 1

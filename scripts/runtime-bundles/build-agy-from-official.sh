@@ -34,7 +34,47 @@ actual_sha512="$(shasum -a 512 "$temp_dir/agy.tar.gz" | cut -d' ' -f1)"
 tar -xzf "$temp_dir/agy.tar.gz" -C "$temp_dir" antigravity
 install -m 0755 "$temp_dir/antigravity" "$temp_dir/payload/root/.local/bin/agy"
 printf '%s\n' "$VERSION" > "$temp_dir/payload/.nextcraft-agy-version"
-printf '%s\n' "$VERSION" > "$temp_dir/payload/.nextcraft-agy-version"
+mkdir -p "$temp_dir/payload/root/.gemini/config/skills" "$temp_dir/payload/root/.gemini/antigravity-cli/cache"
+cp "$ROOT_DIR/GEMINI.md" "$temp_dir/payload/root/.gemini/config/GEMINI.md"
+cp -r "$ROOT_DIR/.agents/skills/"* "$temp_dir/payload/root/.gemini/config/skills/"
+cat <<'EOF' > "$temp_dir/payload/root/.gemini/antigravity-cli/settings.json"
+{
+  "trustedWorkspaces": [
+    "/workspace",
+    "/workspace/hello",
+    "/workspace/antigravity-auth",
+    "/workspace/antigravity-models",
+    "/root"
+  ]
+}
+EOF
+cat <<'EOF' > "$temp_dir/payload/root/.gemini/antigravity-cli/cache/onboarding.json"
+{
+  "consumerOnboardingComplete": true,
+  "enterpriseOnboardingComplete": false,
+  "onboardingComplete": true
+}
+EOF
+cat <<'EOF' > "$temp_dir/payload/root/.gemini/antigravity-cli/jetski_state.pbtxt"
+post_onboarding: {
+  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+  completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+  completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+}
+migrations: {
+  key: 3
+  value: MIGRATION_STATUS_COMPLETED
+}
+migrations: {
+  key: 4
+  value: MIGRATION_STATUS_COMPLETED
+}
+migrations: {
+  key: 5
+  value: MIGRATION_STATUS_COMPLETED
+}
+EOF
 
 python3 "$SCRIPT_DIR/create_deterministic_tar.py" "$temp_dir/payload" "$temp_dir/payload.tar"
 zstd -19 -T0 -f "$temp_dir/payload.tar" -o "$OUT_DIR/$ARCHIVE"

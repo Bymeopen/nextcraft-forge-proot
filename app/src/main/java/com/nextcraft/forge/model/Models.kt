@@ -393,6 +393,7 @@ data class DiffLine(
     val text: String,
     val oldLine: Int? = null,
     val newLine: Int? = null,
+    val hunkIndex: Int = 0,
 )
 
 data class ChangeItem(

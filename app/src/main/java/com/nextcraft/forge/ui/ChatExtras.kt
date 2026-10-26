@@ -166,6 +166,8 @@ internal fun ChangedFilesCard(
     onRevertAll: () -> Unit,
     modifier: Modifier = Modifier,
     onEditInTerminal: (String) -> Unit = {},
+    onAcceptAndCommit: (() -> Unit)? = null,
+    onRevertHunk: ((String, Int) -> Unit)? = null,
 ) {
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
@@ -194,7 +196,7 @@ internal fun ChangedFilesCard(
                 DiffCounts(adds, dels)
             }
             changes.forEach { change ->
-                ChangedFileRow(change, enabled, onOpenFile, onKeepFile, onRevertFile, onEditInTerminal)
+                ChangedFileRow(change, enabled, onOpenFile, onKeepFile, onRevertFile, onEditInTerminal, onRevertHunk)
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -212,6 +214,24 @@ internal fun ChangedFilesCard(
                     shape = RoundedCornerShape(100),
                     modifier = Modifier.weight(1f).heightIn(min = ForgeSpace.minTouch + 4.dp),
                 ) { Text(stringResource(R.string.chat_keep_all), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
+            if (onAcceptAndCommit != null) {
+                OutlinedButton(
+                    onClick = onAcceptAndCommit,
+                    enabled = enabled,
+                    shape = RoundedCornerShape(100),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, top = 6.dp)
+                        .heightIn(min = ForgeSpace.minTouch),
+                ) {
+                    Text(
+                        stringResource(R.string.diff_accept_and_commit),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -236,6 +256,7 @@ private fun ChangedFileRow(
     onKeepFile: (String) -> Unit,
     onRevertFile: (String) -> Unit,
     onEditInTerminal: (String) -> Unit,
+    onRevertHunk: ((String, Int) -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
@@ -306,7 +327,12 @@ private fun ChangedFileRow(
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
                     )
                 } else {
-                    DiffCodeView(lines = change.diffLines, path = change.path, previewLines = DIFF_PREVIEW_LINES)
+                    DiffCodeView(
+                        lines = change.diffLines,
+                        path = change.path,
+                        previewLines = DIFF_PREVIEW_LINES,
+                        onRevertHunk = if (enabled && onRevertHunk != null) ({ idx -> onRevertHunk(change.path, idx) }) else null,
+                    )
                 }
                 // Two fixed rows instead of one wrapping row, so no button is ever orphaned: ways to look at the file on top,
                 // the decision (revert / keep) below with the primary action on the right.
@@ -470,7 +496,7 @@ internal fun ToolApprovalContent(request: ToolRequest, onApprove: () -> Unit, on
     }
 }
 
-/** The one-line composer capsule: attach menu, message field, and a round send/stop button. */
+/** The one-line composer capsule: attach menu, message field, and a round send/stop button, plus inline @/slash autocomplete. */
 @Composable
 internal fun ChatComposer(
     promptInput: String,
@@ -495,12 +521,77 @@ internal fun ChatComposer(
     listening: Boolean = false,
     /** 0..1 loudness while [listening]; the mic pulses with it. */
     micLevel: Float = 0f,
+    /** When true, voice dictation automatically sends the prompt as soon as the user finishes speaking. */
+    handsFreeSend: Boolean = false,
+    onToggleHandsFree: (() -> Unit)? = null,
     /** "Create image" entry of the attach menu (Nano Banana); null hides it. */
     onGenerateImage: (() -> Unit)? = null,
+    /** Workspace files and ready agents for inline `@file`, `@agent`, and `/slash` autocomplete popover. */
+    workspaceFiles: List<com.nextcraft.forge.model.WorkspaceEntry> = emptyList(),
+    readyAgents: Set<com.nextcraft.forge.model.AgentKind> = emptySet(),
+    onExecuteSlashCommand: ((String) -> Unit)? = null,
+    onSelectAgentTag: (() -> Unit)? = null,
 ) {
     val tokens = LocalForgeThemeTokens.current
     var attachMenuOpen by remember { mutableStateOf(false) }
     val composerLabel = stringResource(R.string.agent_message_placeholder, agentName)
+    Column(modifier = Modifier.fillMaxWidth()) {
+    AnimatedVisibility(visible = listening) {
+        Surface(
+            shape = RoundedCornerShape(100),
+            color = tokens.cardElevatedColor,
+            border = tokens.cardBorderStroke,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 2.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.error),
+                )
+                Text(
+                    text = stringResource(R.string.voice_handsfree_hint),
+                    fontSize = ForgeType.caption,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (onToggleHandsFree != null) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (handsFreeSend) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable(role = Role.Button, onClick = onToggleHandsFree),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.voice_auto_send_toggle),
+                            fontSize = ForgeType.caption,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (handsFreeSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+    ComposerAutocompletePopover(
+        promptInput = promptInput,
+        workspaceFiles = workspaceFiles,
+        readyAgents = readyAgents,
+        onReplacePrompt = onPromptChange,
+        onExecuteSlash = onExecuteSlashCommand,
+        onSelectAgentTag = onSelectAgentTag,
+    )
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = tokens.cardContainerColor,
@@ -527,7 +618,12 @@ internal fun ChatComposer(
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = composerLabel },
             maxLines = 5,
             // Enter stays a newline (messages are multi-line); send is the round button.
-            keyboardOptions = ForgeFieldKind.TEXT.keyboardOptions(ImeAction.Default),
+            // Disable IME autocorrect when typing a slash command (`/`) so Gboard/IME never duplicates `/compact/compact`.
+            keyboardOptions = if (promptInput.startsWith("/")) {
+                ForgeFieldKind.IDENTIFIER.keyboardOptions(ImeAction.Default)
+            } else {
+                ForgeFieldKind.TEXT.keyboardOptions(ImeAction.Default)
+            },
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = Color.Transparent,
                 unfocusedContainerColor = Color.Transparent,
@@ -671,6 +767,428 @@ internal fun ChatComposer(
                 )
             }
         }
+        }
+    }
+    }
+}
+
+private data class ComposerSuggestion(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val glyph: ForgeGlyph,
+    val badge: String? = null,
+    val insertText: String,
+    val executeImmediately: Boolean = false,
+)
+
+/**
+ * Floating glass popover right above the composer when the user types `@` (agents + workspace files) or `/` (slash commands).
+ */
+@Composable
+private fun ComposerAutocompletePopover(
+    promptInput: String,
+    workspaceFiles: List<com.nextcraft.forge.model.WorkspaceEntry>,
+    readyAgents: Set<com.nextcraft.forge.model.AgentKind>,
+    onReplacePrompt: (String) -> Unit,
+    onExecuteSlash: ((String) -> Unit)?,
+    onSelectAgentTag: (() -> Unit)? = null,
+) {
+    val tokens = LocalForgeThemeTokens.current
+    val scheme = MaterialTheme.colorScheme
+
+    val slashMatch = remember(promptInput) {
+        if (promptInput.startsWith("/") && !promptInput.contains('\n') && promptInput.indexOf(' ') < 0) {
+            promptInput.substring(1).lowercase()
+        } else null
+    }
+
+    val atMatch = remember(promptInput) {
+        if (slashMatch != null) null
+        else {
+            val lastAt = promptInput.lastIndexOf('@')
+            if (lastAt >= 0 && (lastAt == 0 || promptInput[lastAt - 1].isWhitespace())) {
+                val after = promptInput.substring(lastAt + 1)
+                if (after.none { it.isWhitespace() } && after.length <= 48) {
+                    lastAt to after.lowercase()
+                } else null
+            } else null
+        }
+    }
+
+    val suggestions = remember(slashMatch, atMatch, workspaceFiles, readyAgents) {
+        when {
+            slashMatch != null -> {
+                val commands = listOf(
+                    ComposerSuggestion("cmd-build", "/build", "Build & install debug APK", ForgeGlyph.BUILD, "Action", "/build", executeImmediately = true),
+                    ComposerSuggestion("cmd-review", "/review", "Audit uncommitted changes with 2nd agent", ForgeGlyph.SPARK, "Swarm", "/review", executeImmediately = true),
+                    ComposerSuggestion("cmd-memory", "/memory", "Open persistent project memory (.forge/memory.md)", ForgeGlyph.FILE, "Memory", "/memory", executeImmediately = true),
+                    ComposerSuggestion("cmd-compact", "/compact", "Compact conversation history into a concise summary", ForgeGlyph.SPARK, "Context", "/compact", executeImmediately = true),
+                    ComposerSuggestion("cmd-diff", "/diff", "Open workspace diff & changed files", ForgeGlyph.CODE, "Pane", "/diff", executeImmediately = true),
+                    ComposerSuggestion("cmd-branch", "/branch", "Isolate this chat in its own Git branch", ForgeGlyph.SPARK, "Git", "/branch", executeImmediately = true),
+                    ComposerSuggestion("cmd-loop", "/loop 30m ", "Repeat a prompt on a schedule (5m–7d)", ForgeGlyph.SPARK, "Timer", "/loop 30m "),
+                    ComposerSuggestion("cmd-loop-off", "/loop off", "Clear all scheduled timers in this chat", ForgeGlyph.TRASH, "Timer", "/loop off", executeImmediately = true),
+                    ComposerSuggestion("cmd-terminal", "/terminal", "Switch to project Ubuntu Root Terminal", ForgeGlyph.TERMINAL, "Pane", "/terminal", executeImmediately = true),
+                    ComposerSuggestion("cmd-clear", "/clear", "Clear conversation history in this chat", ForgeGlyph.TRASH, "Chat", "/clear", executeImmediately = true),
+                )
+                commands.filter { it.title.removePrefix("/").startsWith(slashMatch) || it.subtitle.lowercase().contains(slashMatch) }
+            }
+            atMatch != null -> {
+                val (atIndex, query) = atMatch
+                val list = mutableListOf<ComposerSuggestion>()
+                if (atIndex == 0) {
+                    val agentEntries = listOf(
+                        Triple("claude", com.nextcraft.forge.model.AgentKind.CLAUDE_CODE, "Claude Code CLI in Root Chroot"),
+                        Triple("agy", com.nextcraft.forge.model.AgentKind.ANTIGRAVITY, "Google Antigravity CLI (agy)"),
+                        Triple("deepseek", com.nextcraft.forge.model.AgentKind.DEEPSEEK_HARNESS, "DeepSeek Harness JSON-RPC"),
+                    )
+                    for ((tag, kind, desc) in agentEntries) {
+                        if (tag.startsWith(query) || kind.title.lowercase().contains(query)) {
+                            val isReady = readyAgents.isEmpty() || kind in readyAgents
+                            list += ComposerSuggestion(
+                                id = "agent-$tag",
+                                title = "@$tag",
+                                subtitle = desc,
+                                glyph = ForgeGlyph.SPARK,
+                                badge = if (isReady) "Agent" else "Setup",
+                                insertText = "@$tag ",
+                            )
+                        }
+                    }
+                }
+                val matchingFiles = workspaceFiles
+                    .asSequence()
+                    .filter { !it.isDirectory }
+                    .filter { query.isEmpty() || it.name.lowercase().contains(query) || it.path.lowercase().contains(query) }
+                    .take(6)
+                    .map { file ->
+                        ComposerSuggestion(
+                            id = "file-${file.path}",
+                            title = file.name,
+                            subtitle = file.path,
+                            glyph = ForgeGlyph.FILE,
+                            badge = "File",
+                            insertText = "${file.path} ",
+                        )
+                    }
+                list.addAll(matchingFiles)
+                list.take(7)
+            }
+            else -> emptyList()
+        }
+    }
+
+    AnimatedVisibility(
+        visible = suggestions.isNotEmpty(),
+        enter = expandVertically(tween(ForgeMotion.EXPAND_MS)) + fadeIn(tween(ForgeMotion.FADE_MS)),
+        exit = shrinkVertically(tween(ForgeMotion.FADE_MS)) + fadeOut(tween(ForgeMotion.FADE_MS / 2)),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = tokens.cardElevatedColor,
+            contentColor = scheme.onSurface,
+            border = tokens.cardBorderStroke,
+            shadowElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 2.dp),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                suggestions.forEach { item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.Button) {
+                                if (item.executeImmediately && onExecuteSlash != null) {
+                                    onReplacePrompt("")
+                                    onExecuteSlash(item.insertText)
+                                } else if (slashMatch != null) {
+                                    onReplacePrompt(item.insertText)
+                                } else if (atMatch != null) {
+                                    val (atIdx, _) = atMatch
+                                    val prefix = promptInput.substring(0, atIdx)
+                                    val replacement = if (item.id.startsWith("agent-")) {
+                                        onSelectAgentTag?.invoke()
+                                        item.insertText
+                                    } else "@${item.insertText}"
+                                    onReplacePrompt(prefix + replacement)
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ForgeIcon(
+                            glyph = item.glyph,
+                            tint = if (item.id.startsWith("agent-") || item.id.startsWith("cmd-")) scheme.primary else scheme.onSurfaceVariant,
+                            size = 18.dp,
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.title,
+                                fontSize = ForgeType.control,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = item.subtitle,
+                                fontSize = ForgeType.caption,
+                                color = scheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (item.badge != null) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = scheme.primary.copy(alpha = 0.12f),
+                            ) {
+                                Text(
+                                    text = item.badge,
+                                    fontSize = ForgeType.caption,
+                                    fontWeight = FontWeight.Medium,
+                                    color = scheme.primary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Dynamic Island-style Multi-Agent & Multi-Build Live Activity HUD.
+ * Shows live counts of running agents across all projects and active APK builds; tapping opens a quick switcher sheet.
+ */
+@Composable
+internal fun LiveActivityHud(
+    state: ForgeUiState,
+    onSelectRun: (projectId: String, chatId: String) -> Unit,
+    onSelectBuild: (projectId: String) -> Unit,
+    onStopRun: (projectId: String, chatId: String) -> Unit,
+    onStopBuild: (projectId: String) -> Unit = {},
+) {
+    val inActiveChatScreen = state.activeTab == ForgeTab.PROJECTS &&
+        state.projectView == ProjectView.CONVERSATION &&
+        state.projectPane == ProjectPane.CHAT
+
+    // Show the HUD whenever any background agent or APK build is running outside the currently visible chat,
+    // or when multiple chats/builds are running concurrently.
+    val backgroundRuns = if (inActiveChatScreen) {
+        state.liveAgentRuns.filterNot { it.projectId == state.activeProjectId && it.chatId == state.activeChatId }
+    } else {
+        state.liveAgentRuns
+    }
+    val activeBuilds = state.buildingProjectIds
+    val showHud = backgroundRuns.isNotEmpty() || activeBuilds.isNotEmpty() || state.liveAgentRuns.size > 1
+
+    var sheetOpen by remember { mutableStateOf(false) }
+    val tokens = LocalForgeThemeTokens.current
+    val scheme = MaterialTheme.colorScheme
+
+    AnimatedVisibility(
+        visible = showHud,
+        enter = expandVertically(tween(ForgeMotion.EXPAND_MS)) + fadeIn(tween(ForgeMotion.FADE_MS)),
+        exit = shrinkVertically(tween(ForgeMotion.FADE_MS)) + fadeOut(tween(ForgeMotion.FADE_MS / 2)),
+    ) {
+        val totalAgents = state.liveAgentRuns.size
+        val totalBuilds = activeBuilds.size
+        val anyWaitingApproval = state.liveAgentRuns.any { it.waitingApproval }
+        val leadRun = backgroundRuns.firstOrNull() ?: state.liveAgentRuns.firstOrNull()
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                shape = RoundedCornerShape(100),
+                color = tokens.cardElevatedColor,
+                contentColor = scheme.onSurface,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (anyWaitingApproval) tokens.warningText.copy(alpha = 0.65f) else scheme.primary.copy(alpha = 0.45f),
+                ),
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(100))
+                    .clickable(role = Role.Button) { sheetOpen = true },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (anyWaitingApproval) tokens.warningText else scheme.primary),
+                    )
+                    val summaryParts = buildList {
+                        if (totalAgents > 0) {
+                            add(if (totalAgents == 1) "1 Agent live" else "$totalAgents Agents live")
+                        }
+                        if (totalBuilds > 0) {
+                            add(if (totalBuilds == 1) "1 APK build" else "$totalBuilds APK builds")
+                        }
+                    }
+                    Text(
+                        text = summaryParts.joinToString(" · "),
+                        fontSize = ForgeType.caption,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (anyWaitingApproval) tokens.warningText else scheme.primary,
+                    )
+                    if (leadRun != null) {
+                        val leadLabel = listOf(leadRun.projectName, leadRun.chatTitle).joinToString(" · ")
+                        Text(
+                            text = leadLabel,
+                            fontSize = ForgeType.caption,
+                            color = scheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 180.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (sheetOpen) {
+        ForgeModalSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = ForgeSpace.card)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.hud_live_title),
+                    fontSize = ForgeType.screenTitle,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (state.liveAgentRuns.isEmpty() && activeBuilds.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.hud_live_empty),
+                        fontSize = ForgeType.body,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+                state.liveAgentRuns.forEach { run ->
+                    val isCurrent = run.projectId == state.activeProjectId &&
+                        run.chatId == state.activeChatId &&
+                        inActiveChatScreen
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = tokens.cardElevatedColor,
+                        border = if (isCurrent) {
+                            androidx.compose.foundation.BorderStroke(1.dp, scheme.primary.copy(alpha = 0.6f))
+                        } else tokens.cardBorderStroke,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable(role = Role.Button) {
+                                sheetOpen = false
+                                onSelectRun(run.projectId, run.chatId)
+                            },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ForgeIcon(
+                                glyph = ForgeGlyph.SPARK,
+                                tint = if (run.waitingApproval) tokens.warningText else scheme.primary,
+                                size = 20.dp,
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                val runTitle = listOf(run.projectName, run.chatTitle).joinToString(" · ")
+                                Text(
+                                    text = runTitle,
+                                    fontSize = ForgeType.rowTitle,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = listOfNotNull(
+                                        run.agent.displayTitle(),
+                                        run.statusLine?.asString(),
+                                    ).joinToString(" · "),
+                                    fontSize = ForgeType.caption,
+                                    color = if (run.waitingApproval) tokens.warningText else scheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            TextButton(
+                                onClick = { onStopRun(run.projectId, run.chatId) },
+                            ) {
+                                Text(stringResource(R.string.agent_stop), color = scheme.error, fontSize = ForgeType.caption)
+                            }
+                        }
+                    }
+                }
+                activeBuilds.forEach { projectId ->
+                    val proj = state.projects.firstOrNull { it.id == projectId }
+                    val record = state.projectBuilds[projectId]
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = tokens.cardElevatedColor,
+                        border = tokens.cardBorderStroke,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable(role = Role.Button) {
+                                sheetOpen = false
+                                onSelectBuild(projectId)
+                            },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ForgeIcon(glyph = ForgeGlyph.BUILD, tint = tokens.warningText, size = 20.dp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                val buildTitle = listOfNotNull(proj?.name, stringResource(R.string.notif_building_apk)).joinToString(" · ")
+                                Text(
+                                    text = buildTitle,
+                                    fontSize = ForgeType.rowTitle,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = record?.message ?: stringResource(R.string.notif_building_apk),
+                                    fontSize = ForgeType.caption,
+                                    color = scheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            TextButton(
+                                onClick = { onStopBuild(projectId) },
+                            ) {
+                                Text(stringResource(R.string.agent_stop), color = scheme.error, fontSize = ForgeType.caption)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

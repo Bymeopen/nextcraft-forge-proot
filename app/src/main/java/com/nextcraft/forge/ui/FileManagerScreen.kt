@@ -33,8 +33,7 @@ fun FileManagerScreen(state: ForgeUiState, viewModel: MainViewModel) {
         WorkspaceListPage(
             state = state,
             onOpen = { id ->
-                viewModel.selectProject(id)
-                openedId = id
+                viewModel.openWorkspaceInFileManager(id) { openedId = id }
             },
             onBack = { viewModel.selectTab(ForgeTab.TOOLS) },
         )

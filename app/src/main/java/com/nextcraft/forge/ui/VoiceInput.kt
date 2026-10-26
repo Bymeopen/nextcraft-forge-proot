@@ -34,10 +34,11 @@ internal sealed interface VoiceCommand {
     data class Dictate(val text: String, val send: Boolean) : VoiceCommand
     data object Stop : VoiceCommand
     data object Clear : VoiceCommand
+    data class QuickSlash(val slash: String) : VoiceCommand
 }
 
 /**
- * Turns a recognised sentence into a [VoiceCommand]. Whole-sentence commands (stop, clear, send) are matched exactly
+ * Turns a recognised sentence into a [VoiceCommand]. Whole-sentence commands (stop, clear, send, slash actions) are matched exactly
  * so that dictating a normal sentence never triggers them; sending after dictation needs the phrase "send now".
  */
 internal object VoiceCommands {
@@ -45,6 +46,9 @@ internal object VoiceCommands {
     private val clearPhrases = setOf("clear", "clear text", "hapus teks", "bersihkan", "bersihkan teks")
     private val sendOnly = setOf("send", "send message", "kirim", "kirim pesan")
     private val sendSuffixes = listOf("send now", "kirim sekarang")
+    private val buildPhrases = setOf("build apk", "build app", "bangun apk", "build sekarang")
+    private val reviewPhrases = setOf("review changes", "review code", "tinjau perubahan", "review sekarang")
+    private val compactPhrases = setOf("compact chat", "ringkas chat", "kompak chat")
 
     fun parse(raw: String): VoiceCommand {
         val text = raw.trim()
@@ -52,6 +56,9 @@ internal object VoiceCommands {
         return when {
             key in stopPhrases -> VoiceCommand.Stop
             key in clearPhrases -> VoiceCommand.Clear
+            key in buildPhrases -> VoiceCommand.QuickSlash("/build")
+            key in reviewPhrases -> VoiceCommand.QuickSlash("/review")
+            key in compactPhrases -> VoiceCommand.QuickSlash("/compact")
             key in sendOnly -> VoiceCommand.Dictate("", send = true)
             else -> {
                 val suffix = sendSuffixes.firstOrNull { key == it || key.endsWith(" $it") }
