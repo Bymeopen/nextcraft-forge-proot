@@ -116,13 +116,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
         var envName by rememberSaveable { mutableStateOf("") }
         // The secret uses plain remember: rememberSaveable would write it into the saved-instance Bundle.
         var secret by remember { mutableStateOf("") }
+        val activeProject = state.activeProject
+        val projectHints = "${activeProject?.name.orEmpty()} ${activeProject?.description.orEmpty()} ${activeProject?.language.orEmpty()}".lowercase()
+        val isMobileTarget = activeProject?.type == com.nextcraft.forge.model.ProjectType.ANDROID ||
+            listOf("android", "mobile", "ios", "flutter", "react native", "kotlin").any { it in projectHints }
+        val isGameTarget = listOf("game", "unity", "godot", "libgdx", "pygame", "phaser").any { it in projectHints }
+        val orderedPresets = remember(isMobileTarget, isGameTarget) {
+            McpConnector.presetsForProject(isMobileTarget = isMobileTarget, isGameTarget = isGameTarget)
+        }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                McpConnector.OPEN_SOURCE_PRESETS.forEach { preset ->
+                orderedPresets.forEach { preset ->
                     OutlinedButton(
                         onClick = {
                             name = preset.name

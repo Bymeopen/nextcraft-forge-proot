@@ -9,11 +9,14 @@ import org.json.JSONObject
 
 enum class McpTransport { HTTP, COMMAND }
 
+enum class McpTargetScope { ALL, MOBILE, GAME }
+
 data class McpPreset(
     val name: String,
     val transport: McpTransport,
     val target: String,
     val secretName: String = "",
+    val scope: McpTargetScope = McpTargetScope.ALL,
 )
 
 /**
@@ -80,7 +83,35 @@ data class McpConnector(
                 transport = McpTransport.COMMAND,
                 target = "uvx mcp-server-fetch",
             ),
+            McpPreset(
+                name = "Mobile MCP",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @mobilenext/mobile-mcp@latest",
+                scope = McpTargetScope.MOBILE,
+            ),
+            McpPreset(
+                name = "Unity-Godot MCP",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @coding-solo/godot-mcp",
+                scope = McpTargetScope.GAME,
+            ),
         )
+
+        /**
+         * Returns open-source MCP presets ordered and tailored for the active project target
+         * (prioritizes [McpTargetScope.MOBILE] for mobile/Android projects and [McpTargetScope.GAME] for game projects).
+         */
+        fun presetsForProject(
+            isMobileTarget: Boolean = false,
+            isGameTarget: Boolean = false,
+        ): List<McpPreset> = OPEN_SOURCE_PRESETS.sortedBy { preset ->
+            when {
+                isMobileTarget && preset.scope == McpTargetScope.MOBILE -> 0
+                isGameTarget && preset.scope == McpTargetScope.GAME -> 0
+                preset.scope == McpTargetScope.ALL -> 1
+                else -> 2
+            }
+        }
     }
 }
 

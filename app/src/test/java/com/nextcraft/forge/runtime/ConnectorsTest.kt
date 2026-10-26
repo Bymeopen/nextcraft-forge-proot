@@ -34,6 +34,10 @@ class ConnectorsTest {
         val presets = McpConnector.OPEN_SOURCE_PRESETS
         assertTrue(presets.any { it.name == "Figma" && it.secretName == "FIGMA_API_KEY" })
         assertTrue(presets.any { it.name == "Context7" && it.transport == McpTransport.HTTP })
+        assertTrue(presets.any { it.name == "Mobile MCP" && it.scope == McpTargetScope.MOBILE })
+        assertTrue(presets.any { it.name == "Unity-Godot MCP" && it.scope == McpTargetScope.GAME })
+        assertEquals("Mobile MCP", McpConnector.presetsForProject(isMobileTarget = true).first().name)
+        assertEquals("Unity-Godot MCP", McpConnector.presetsForProject(isGameTarget = true).first().name)
         assertTrue(presets.all { McpNames.id(it.name) != null })
         assertTrue(presets.filter { it.secretName.isNotEmpty() }.all { McpNames.isEnvName(it.secretName) })
 
