@@ -98,6 +98,9 @@ class ClaudeRuntimeBridge(
     private val claudeEffort: () -> String = {
         runCatching { com.nextcraft.forge.data.AppPreferences(context).claudeEffort }.getOrDefault("")
     },
+    /** The chat's saved Claude Code session ([SavedConversation.encode]), resumed so tool results stay in context. */
+    private val savedConversation: () -> String? = { null },
+    private val saveConversation: (String?) -> Unit = {},
     private val interactiveHighRiskApprovals: () -> Boolean = {
         runCatching { com.nextcraft.forge.data.AppPreferences(context).interactiveHighRiskApprovals }.getOrDefault(true)
     },
@@ -130,6 +133,8 @@ class ClaudeRuntimeBridge(
     private val foreground = ForegroundSession(context, "ClaudeBridge")
 
     @Volatile private var activeProjectSlug: String? = null
+    private var claudeConversationId = ""
+    private var resumedConversation = false
     private val streamedText = StringBuilder()
     private val streamedThinking = StringBuilder()
     private var lastReasoningTokens = 0
@@ -228,7 +233,15 @@ class ClaudeRuntimeBridge(
             Log.d("ClaudeBridge", "Launch environment keys: ${launch.environment.keys}")
 
             val guestWorkspacePath = "/workspace/$projectSlug"
-            val contextPrompt = buildContextPrompt(prompt, conversationHistory, guestWorkspacePath, projectKind)
+            // Resume the chat's own Claude Code session (it keeps tool results and compacts itself when full); only a
+            // session made with the same provider in the same workspace, since another API may reject its history.
+            val conversationTag = "${provider.kind.name}:$guestWorkspacePath"
+            val saved = SavedConversation.decode(savedConversation())?.takeIf { it.tag == conversationTag }
+            resumedConversation = saved != null
+            claudeConversationId = saved?.id ?: UUID.randomUUID().toString()
+            val contextPrompt = buildContextPrompt(
+                prompt, conversationHistory.unseenBy(saved), guestWorkspacePath, projectKind, resumed = saved != null,
+            )
 
             val command = buildList {
                 add(launch.executable)
@@ -247,6 +260,7 @@ class ClaudeRuntimeBridge(
                 add(launch.environment["ANTHROPIC_MODEL"] ?: provider.model)
                 add("--max-turns")
                 add("25")
+                if (saved != null) addAll(listOf("--resume", saved.id)) else addAll(listOf("--session-id", claudeConversationId))
             }
             Log.d("ClaudeBridge", "Launching Claude Code (${command.size} args, prompt=${contextPrompt.length} chars)")
             val process = installer.process(
@@ -330,10 +344,17 @@ class ClaudeRuntimeBridge(
                     acceptLastChanges(projectId)
                 }
                 if (exit == 0 || (turnCompletedFromStream && !userStopRequested)) {
+                    // The chat now holds the history plus this answer, all of which the session has seen.
+                    saveConversation(SavedConversation(claudeConversationId, conversationHistory.size + 1, conversationTag).encode())
                     emitCompletedOnce(sessionId)
                     finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Claude Code", projectSlug)
                 } else {
                     if (userStopRequested) throw ProviderSessionException("Stopped by user")
+                    if (resumedConversation && lastDiagnostic.contains("No conversation found", ignoreCase = true)) {
+                        // Gone (runtime reinstalled, workspace moved): the retry sends the chat history instead.
+                        saveConversation(null)
+                        throw ProviderSessionException(SESSION_LOST_MESSAGE)
+                    }
                     error(lastDiagnostic.ifBlank { "Claude Code stopped with exit code $exit" })
                 }
             }
@@ -859,20 +880,12 @@ class ClaudeRuntimeBridge(
 
     private fun buildContextPrompt(
         currentPrompt: String,
-        history: List<ChatMessage>,
+        priorMessages: List<ChatMessage>,
         guestWorkspacePath: String,
         projectKind: ProjectKind,
+        resumed: Boolean = false,
     ): String {
-        val priorMessages = history
-            .filter { msg ->
-                (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
-                    !msg.text.startsWith("Failed to") &&
-                    !msg.text.startsWith("Error:") &&
-                    !msg.text.contains("API Error")
-            }
-            .dropLast(1)
-            .recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
-
+        val recent = priorMessages.recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
         val sb = StringBuilder()
         sb.appendLine("<project_workspace>")
         if (projectKind == ProjectKind.QUICK_PROJECT) {
@@ -892,27 +905,7 @@ class ClaudeRuntimeBridge(
         sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
         sb.appendLine("</project_workspace>")
         sb.appendLine()
-        if (priorMessages.isEmpty()) {
-            sb.appendLine(currentPrompt)
-            return sb.toString()
-        }
-        sb.appendLine("<conversation_history>")
-        sb.appendLine("The following is our prior conversation in this project. Continue naturally from where we left off.")
-        sb.appendLine()
-        for (msg in priorMessages) {
-            val role = if (msg.fromUser) "User" else "Assistant"
-            sb.appendLine("$role: ${msg.text}")
-            if (msg.attachments.isNotEmpty()) {
-                sb.appendLine("Attached files:")
-                msg.attachments.forEach { attachment ->
-                    sb.appendLine("- ${attachment.displayName}: $guestWorkspacePath/${attachment.relativePath} (${attachment.mimeType})")
-                }
-            }
-            sb.appendLine()
-        }
-        sb.appendLine("</conversation_history>")
-        sb.appendLine()
-        sb.appendLine("Now, respond to this new message from the user:")
+        sb.appendConversationHistory(recent, guestWorkspacePath, resumed)
         sb.appendLine(currentPrompt)
         return sb.toString()
     }
@@ -993,6 +986,7 @@ class ClaudeRuntimeBridge(
         private const val HIGH_RISK_APPROVAL_TIMEOUT_MS = 40_000L
         private const val STALE_RESPONSE_MS = 600_000L
         private const val MAX_CONVERSATION_HISTORY_CHARACTERS = 160_000
+        const val SESSION_LOST_MESSAGE = "The saved agent session was not found; continuing from the chat history."
     }
 }
 

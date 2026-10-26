@@ -130,7 +130,7 @@ class DshRuntimeBridge(
             if (route.keyEnv != FALLBACK_KEY_ENV) environment.remove(FALLBACK_KEY_ENV)
 
             val guestWorkspacePath = "/workspace/$projectSlug"
-            val contextPrompt = buildContextPrompt(prompt, conversationHistory, guestWorkspacePath, projectKind)
+            val contextPrompt = buildContextPrompt(prompt, conversationHistory.unseenBy(null), guestWorkspacePath, projectKind)
             val command = listOf("/usr/local/bin/dsh", "--profile", "sdk")
             Log.d("DshBridge", "Route: ${route.name}, Model: ${provider.model}")
             val process = installer.process(
@@ -514,20 +514,12 @@ class DshRuntimeBridge(
 
     private fun buildContextPrompt(
         currentPrompt: String,
-        history: List<ChatMessage>,
+        priorMessages: List<ChatMessage>,
         guestWorkspacePath: String,
         projectKind: ProjectKind,
+        resumed: Boolean = false,
     ): String {
-        val priorMessages = history
-            .filter { msg ->
-                (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
-                    !msg.text.startsWith("Failed to") &&
-                    !msg.text.startsWith("Error:") &&
-                    !msg.text.contains("API Error")
-            }
-            .dropLast(1)
-            .recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
-
+        val recent = priorMessages.recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
         val sb = StringBuilder()
         sb.appendLine("<project_workspace>")
         if (projectKind == ProjectKind.QUICK_PROJECT) {
@@ -547,27 +539,7 @@ class DshRuntimeBridge(
         sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
         sb.appendLine("</project_workspace>")
         sb.appendLine()
-        if (priorMessages.isEmpty()) {
-            sb.appendLine(currentPrompt)
-            return sb.toString()
-        }
-        sb.appendLine("<conversation_history>")
-        sb.appendLine("The following is our prior conversation in this project. Continue naturally from where we left off.")
-        sb.appendLine()
-        for (msg in priorMessages) {
-            val role = if (msg.fromUser) "User" else "Assistant"
-            sb.appendLine("$role: ${msg.text}")
-            if (msg.attachments.isNotEmpty()) {
-                sb.appendLine("Attached files:")
-                msg.attachments.forEach { attachment ->
-                    sb.appendLine("- ${attachment.displayName}: $guestWorkspacePath/${attachment.relativePath} (${attachment.mimeType})")
-                }
-            }
-            sb.appendLine()
-        }
-        sb.appendLine("</conversation_history>")
-        sb.appendLine()
-        sb.appendLine("Now, respond to this new message from the user:")
+        sb.appendConversationHistory(recent, guestWorkspacePath, resumed)
         sb.appendLine(currentPrompt)
         return sb.toString()
     }

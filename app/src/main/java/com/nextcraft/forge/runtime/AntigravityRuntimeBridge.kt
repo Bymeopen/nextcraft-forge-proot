@@ -181,8 +181,9 @@ class AntigravityRuntimeBridge(
     private val context: Context,
     private val model: () -> String,
     private val effort: () -> String,
+    /** The chat's saved agy conversation ([SavedConversation.encode]; a bare id from older builds also works). */
     private val conversationId: (String) -> String?,
-    private val saveConversationId: (String, String) -> Unit,
+    private val saveConversationId: (String, String?) -> Unit,
 ) : RuntimeBridge {
     private val installer = RuntimeInstaller(context)
     private val checkpoints = WorkspaceCheckpoints(context.filesDir, context)
@@ -400,6 +401,7 @@ class AntigravityRuntimeBridge(
         var spawnedOutputFile: File? = null
         var openTailer: InotifyLogTailer? = null
         var keptWarm = false
+        var savedConversation: SavedConversation? = null
         var stopHandler: (() -> Unit)? = null
         runCatching {
             stopHandler = {
@@ -429,7 +431,16 @@ class AntigravityRuntimeBridge(
             }
             val currentModel = model()
             val currentEffort = effort()
-            val currentConversation = conversationId(projectId)
+            savedConversation = SavedConversation.decode(conversationId(projectId))
+            val currentConversation = savedConversation?.id
+            // agy only remembers its own conversation: messages it has not seen (all of them in a chat begun with
+            // another agent, or the turns another agent answered since) go along as text.
+            val unseen = conversationHistory.unseenBy(savedConversation).recentWithinCharacterBudget(MAX_HISTORY_CHARACTERS)
+            val promptWithHistory = StringBuilder()
+                .apply { appendConversationHistory(unseen, "/workspace/$projectSlug", resumed = savedConversation != null) }
+                .append(prompt).toString()
+            // The chat will hold the history plus this answer once the turn ends.
+            fun remember(id: String) = saveConversationId(projectId, SavedConversation(id, conversationHistory.size + 1).encode())
             val previous = warm
             warm = null
             warmGeneration++
@@ -469,7 +480,7 @@ class AntigravityRuntimeBridge(
             if (userStopRequested) process.destroy()
             val request = JSONObject()
                 .put("event", "user")
-                .put("message", JSONObject().put("content", antigravityWorkspacePrompt(projectSlug, prompt)))
+                .put("message", JSONObject().put("content", antigravityWorkspacePrompt(projectSlug, promptWithHistory)))
                 .toString() + "\n"
             process.outputStream.write(request.toByteArray())
             process.outputStream.flush()
@@ -494,7 +505,7 @@ class AntigravityRuntimeBridge(
                 val parsed = AntigravityEventParser.parse(line)
                 if (parsed != null) eventSeen = true
                 when (val event = parsed) {
-                    is AntigravityParsedEvent.Initialized -> saveConversationId(projectId, event.conversationId)
+                    is AntigravityParsedEvent.Initialized -> remember(event.conversationId)
                     is AntigravityParsedEvent.Text -> {
                         assistantTextSeen = true
                         pushForegroundProgress("Antigravity is working…")
@@ -514,7 +525,7 @@ class AntigravityRuntimeBridge(
                         eventBus.emit(RuntimeEvent.ToolCompleted(sessionId, event.name, event.detail))
                     }
                     is AntigravityParsedEvent.Result -> {
-                        event.conversationId?.let { saveConversationId(projectId, it) }
+                        event.conversationId?.let(::remember)
                         if (event.status.equals("SUCCESS", ignoreCase = true)) {
                             if (!assistantTextSeen && !event.response.isNullOrBlank()) {
                                 assistantTextSeen = true
@@ -598,7 +609,8 @@ class AntigravityRuntimeBridge(
                 // agy answered without end of input and is still running: keep it for the next message.
                 rememberWarmMode(true)
                 val entry = WarmAgy(
-                    process, tailer, spawnedOutputFile!!, projectId, currentModel, currentEffort, conversationId(projectId),
+                    process, tailer, spawnedOutputFile!!, projectId, currentModel, currentEffort,
+                    SavedConversation.decode(conversationId(projectId))?.id,
                 )
                 warm = entry
                 keptWarm = true
@@ -628,8 +640,12 @@ class AntigravityRuntimeBridge(
             val diagnostic = recentAntigravityDiagnostic(sessionStartedAtMillis)
             // A failure after launch (parser/IO/provider error) must not leave the agent running unattended in the chroot.
             activeProcess?.let { running -> runCatching { if (running.isAlive) running.destroyForcibly() } }
+            val lost = savedConversation != null &&
+                LOST_CONVERSATION.containsMatchIn("${it.message.orEmpty()}\n$diagnostic")
+            if (lost) saveConversationId(projectId, null) // the retry starts a new one with the chat history
             val message = when {
                 userStopRequested -> "Stopped by user"
+                lost -> ClaudeRuntimeBridge.SESSION_LOST_MESSAGE
                 // Already classified when it was thrown; classifying the friendly text again could pick up log noise.
                 it is AntigravitySessionException -> it.message.orEmpty()
                 else -> antigravityFriendlyError(
@@ -853,6 +869,12 @@ internal fun antigravityRetryStatus(logTail: String): String? {
 }
 
 private class AntigravitySessionException(message: String) : IllegalStateException(message)
+
+/** Same budget as the other agents' history. */
+private const val MAX_HISTORY_CHARACTERS = 160_000
+
+/** agy's wording when `--conversation` names a conversation it no longer has. */
+private val LOST_CONVERSATION = Regex("conversation[^\n]{0,60}(not found|does not exist|no such|unknown)", RegexOption.IGNORE_CASE)
 
 internal fun antigravityCommand(model: String, effort: String, conversationId: String?): List<String> = buildList {
     add(RuntimeInstaller.AGY_GUEST_PATH)

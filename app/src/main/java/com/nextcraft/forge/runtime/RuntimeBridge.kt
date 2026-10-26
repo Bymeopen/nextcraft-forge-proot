@@ -319,3 +319,66 @@ object RuntimeLaunchConfigBuilder {
         )
     }
 }
+
+/**
+ * An agent's own saved conversation for one chat (Claude Code session, agy conversation) and how many chat messages
+ * it had seen when it was saved. Messages after that count were answered by another agent, so the next turn gets them
+ * as text. [tag] ties the session to where it can be resumed (provider and workspace); a different tag starts afresh.
+ * Stored as "id|count|tag"; a bare id (older builds) has an unknown count.
+ */
+internal data class SavedConversation(val id: String, val messageCount: Int = -1, val tag: String = "") {
+    fun encode(): String = "$id|$messageCount|$tag"
+
+    companion object {
+        fun decode(raw: String?): SavedConversation? {
+            if (raw.isNullOrBlank()) return null
+            val parts = raw.split('|', limit = 3)
+            return SavedConversation(parts[0], parts.getOrNull(1)?.toIntOrNull() ?: -1, parts.getOrNull(2).orEmpty())
+                .takeIf { it.id.isNotBlank() }
+        }
+    }
+}
+
+/** Chat messages worth giving an agent: no greeting placeholder and no error bubbles. */
+internal fun List<ChatMessage>.usefulForAgent(): List<ChatMessage> = filter { msg ->
+    (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
+        !msg.text.startsWith("Failed to") &&
+        !msg.text.startsWith("Error:") &&
+        !msg.text.contains("API Error")
+}
+
+/**
+ * The messages of [history] (current prompt last) an agent resuming [saved] has not seen: all earlier ones when there
+ * is no saved conversation, only the newer ones when there is, none when the saved count is unknown.
+ */
+internal fun List<ChatMessage>.unseenBy(saved: SavedConversation?): List<ChatMessage> {
+    val prior = dropLast(1)
+    val unseen = when {
+        saved == null -> prior
+        saved.messageCount < 0 || saved.messageCount >= prior.size -> emptyList()
+        else -> prior.drop(saved.messageCount)
+    }
+    return unseen.usefulForAgent()
+}
+
+/** The `<conversation_history>` block; [resumed] says the agent already remembers what came before these messages. */
+internal fun StringBuilder.appendConversationHistory(messages: List<ChatMessage>, guestWorkspacePath: String, resumed: Boolean) {
+    if (messages.isEmpty()) return
+    appendLine("<conversation_history>")
+    appendLine(
+        if (resumed) "These messages were exchanged in this chat with another assistant since your last reply. Take them into account."
+        else "The following is our prior conversation in this project. Continue naturally from where we left off.",
+    )
+    appendLine()
+    for (msg in messages) {
+        appendLine("${if (msg.fromUser) "User" else "Assistant"}: ${msg.text}")
+        if (msg.attachments.isNotEmpty()) {
+            appendLine("Attached files:")
+            msg.attachments.forEach { appendLine("- ${it.displayName}: $guestWorkspacePath/${it.relativePath} (${it.mimeType})") }
+        }
+        appendLine()
+    }
+    appendLine("</conversation_history>")
+    appendLine()
+    appendLine("Now, respond to this new message from the user:")
+}
