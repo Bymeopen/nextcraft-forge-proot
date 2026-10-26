@@ -37,9 +37,56 @@ def build_report(data: dict[str, Any], generated_at: _dt.datetime | None = None,
         lines += ["", "> ⚠️ Entropi tinggi: berkas mungkin dipak, dikompresi, atau dienkripsi."]
     lines.append("")
 
+    apk = data.get("apk")
+    if apk:
+        manifest = apk["manifest"]
+        sig = apk["signature"]
+        lines += ["## APK & AndroidManifest", ""]
+        lines.append(f"- Paket: {_code(manifest['package'])} v`{manifest['version_name']}` (kode `{manifest['version_code']}`)")
+        lines.append(f"- SDK: `minSdk={manifest['min_sdk']}`, `targetSdk={manifest['target_sdk']}`")
+        lines.append(f"- Activity utama: {_code(manifest['main_activity'] or '-')}")
+        lines.append(
+            f"- Flag keamanan: `debuggable={manifest['debuggable']}`, "
+            f"`allowBackup={manifest['allow_backup']}`, `cleartext={manifest['cleartext_traffic']}`"
+        )
+        schemes = (["v1"] if sig.get("v1") else []) + list(sig.get("blocks", []))
+        lines.append(f"- Skema tanda tangan: {', '.join(_code(s) for s in schemes) or 'tidak ada'}")
+        if sig.get("v1_certificate_sha256"):
+            lines.append(f"- SHA-256 Sertifikat (v1): `{sig['v1_certificate_sha256']}`")
+        lines.append(f"- Total entri ZIP: `{apk['entries']}`, berkas di `assets/`: `{apk['assets']}`")
+        if apk.get("primary_native_lib"):
+            lines.append(f"- Pustaka native utama yang dianalisis: {_code(apk['primary_native_lib'])}")
+        lines.append("")
+        if apk.get("dex"):
+            lines += ["### Berkas DEX", "", "| Berkas | Ukuran | Class | Method | Field | Checksum |", "|---|---|---|---|---|---|"]
+            for d in apk["dex"]:
+                if d.get("skipped"):
+                    lines.append(f"| {_cell(d['name'])} | {d['size']} | _(dilewati)_ | - | - | - |")
+                else:
+                    ok_mark = "✅" if d.get("checksum_ok") else "⚠️"
+                    lines.append(f"| {_cell(d['name'])} | {d['size']} | {d['classes']} | {d['methods']} | {d['fields']} | {ok_mark} |")
+            lines.append("")
+        if apk.get("native_libs"):
+            lines += ["### Pustaka Native (`.so`)", ""]
+            for abi, so_list in apk["native_libs"].items():
+                lines.append(f"- **{abi}** ({len(so_list)}): " + ", ".join(_code(s) for s in so_list[:20]))
+            lines.append("")
+        if manifest.get("permissions"):
+            lines += [f"### Izin Android ({len(manifest['permissions'])})", ""]
+            for perm in manifest["permissions"][:40]:
+                badge = " ⚠️ *(berbahaya)*" if perm.get("dangerous") else ""
+                lines.append(f"- {_code(perm['name'])}{badge}")
+            lines.append("")
+        if apk.get("findings"):
+            lines += ["### Temuan Keamanan Manifest & APK", ""]
+            for item in apk["findings"]:
+                lines.append(f"- **[{item['level'].upper()}]** {item['message']}")
+            lines.append("")
+
     elf = data.get("elf")
     if elf:
-        lines += ["## ELF", ""]
+        elf_title = f"## ELF ({elf['source_entry']})" if elf.get("source_entry") else "## ELF"
+        lines += [elf_title, ""]
         lines.append(f"- Tipe: {elf['type']}, mesin: {elf['machine']}, {elf['class']}-bit, {elf['endian']}-endian")
         lines.append(f"- Titik masuk: `0x{elf['entry']:x}`")
         lines.append(f"- Simbol: {'tidak ada (di-strip)' if elf['stripped'] else 'ada'}")

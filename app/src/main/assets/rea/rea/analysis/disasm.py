@@ -51,9 +51,56 @@ def _read_at(elf, handle, address: int, size: int) -> bytes:
     raise ReaError(E_BAD_FORMAT, f"Alamat 0x{address:x} tidak berada di segmen yang dimuat.", "Periksa alamat dengan `rea analyze` (daftar segmen).")
 
 
+def _pick_default_function(elf, functions: list[dict[str, Any]]) -> tuple[int, str, int]:
+    """Pilih fungsi terbaik untuk di-disassembly bila ``main`` tidak ada atau ``e_entry == 0`` (mis. pustaka .so Android)."""
+    for candidate in functions:
+        if candidate["name"] == "main" and candidate["addr"] > 0:
+            return candidate["addr"], candidate["name"], candidate["size"]
+    for candidate in functions:
+        if candidate["name"].startswith("Java_") and candidate["addr"] > 0 and candidate["size"] >= 32:
+            return candidate["addr"], candidate["name"], candidate["size"]
+    for candidate in functions:
+        if candidate["name"].startswith("Java_") and candidate["addr"] > 0:
+            return candidate["addr"], candidate["name"], candidate["size"]
+    for candidate in functions:
+        if candidate["name"] == "JNI_OnLoad" and candidate["addr"] > 0:
+            return candidate["addr"], candidate["name"], candidate["size"]
+    for candidate in functions:
+        if (
+            candidate["size"] >= 32
+            and candidate["addr"] > 0
+            and not candidate["name"].startswith(("__cxa", "__stack", "_init", "_fini", "register_tm", "deregister_tm"))
+        ):
+            return candidate["addr"], candidate["name"], candidate["size"]
+    for candidate in functions:
+        if (
+            candidate["size"] > 0
+            and candidate["addr"] > 0
+            and not candidate["name"].startswith(("__cxa", "__stack", "_init", "_fini", "register_tm", "deregister_tm"))
+        ):
+            return candidate["addr"], candidate["name"], candidate["size"]
+    if functions:
+        first = functions[0]
+        return first["addr"], first["name"], first["size"]
+    if elf.header["e_entry"] > 0:
+        return elf.header["e_entry"], "entry", 0
+    text_sec = elf.get_section_by_name(".text")
+    if text_sec is not None and text_sec["sh_addr"] > 0:
+        return text_sec["sh_addr"], ".text", min(text_sec["sh_size"], _FALLBACK_BYTES)
+    return elf.header["e_entry"], "entry", 0
+
+
 def disassemble(path: str, symbol: str | None = None, address: int | None = None, count: int = DEFAULT_COUNT) -> dict[str, Any]:
-    """Disassembly satu fungsi (nama simbol), atau mulai dari ``address``; tanpa keduanya: titik masuk ELF."""
+    """Disassembly satu fungsi (nama simbol), atau mulai dari ``address``; tanpa keduanya: titik masuk ELF atau fungsi utama."""
     count = max(1, min(count, MAX_COUNT))
+    if address is None and symbol:
+        stripped_sym = symbol.strip()
+        if stripped_sym.startswith(("0x", "0X")) or stripped_sym.isdigit():
+            try:
+                address = int(stripped_sym, 0)
+                symbol = None
+            except ValueError:
+                pass
     with open(path, "rb") as handle:
         elf = open_elf(handle)
         machine = str(elf.header["e_machine"]).replace("EM_", "").lower()
@@ -63,12 +110,20 @@ def disassemble(path: str, symbol: str | None = None, address: int | None = None
         if address is None:
             if symbol:
                 match = next((f for f in functions if f["name"] == symbol), None)
-                if match is None:
-                    hint = "Simbol tidak ada (biner di-strip?). Pakai --addr 0x... atau tanpa argumen untuk titik masuk."
+                if match is None and symbol != "main":
+                    match = next((f for f in functions if symbol in f["name"]), None)
+                if match is not None:
+                    address, name, size = match["addr"], match["name"], match["size"]
+                elif symbol == "main":
+                    address, name, size = _pick_default_function(elf, functions)
+                else:
+                    hint = "Simbol tidak ada (biner di-strip?). Pakai --addr 0x... atau tanpa argumen untuk fungsi utama."
                     raise ReaError(E_SYMBOL, f"Simbol tidak ditemukan: {symbol}", hint)
-                address, size = match["addr"], match["size"]
             else:
-                address, name = elf.header["e_entry"], "entry"
+                if elf.header["e_entry"] > 0:
+                    address, name = elf.header["e_entry"], "entry"
+                else:
+                    address, name, size = _pick_default_function(elf, functions)
         else:
             owner = next((f for f in functions if f["addr"] <= address < f["addr"] + max(f["size"], 1)), None)
             name = owner["name"] if owner else None
