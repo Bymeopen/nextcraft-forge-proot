@@ -169,12 +169,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         api = githubClient.asAccountApi(),
         saveToken = { token ->
             vault.put("GITHUB_TOKEN", token)
+            connectorStore.syncGitHubConnector()
             val login = preferences.githubLogin.ifBlank { "x-access-token" }
             runCatching { installer.configureGitHubAccess(token, login) }
+            loadConnectors()
         },
         clearToken = {
             vault.remove("GITHUB_TOKEN")
+            connectorStore.removeGitHubConnectorIfAuto()
             runCatching { installer.clearGitHubAccess() }
+            loadConnectors()
         },
         savedLogin = { preferences.githubLogin },
         saveLogin = { login ->
@@ -564,9 +568,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (savedGitHubToken.isNotBlank()) {
                 val savedLogin = preferences.githubLogin.ifBlank { "x-access-token" }
                 withContext(Dispatchers.IO) {
+                    connectorStore.syncGitHubConnector()
                     runCatching { installer.configureGitHubAccess(savedGitHubToken, savedLogin) }
                         .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
                 }
+                loadConnectors()
                 githubAuth.restoreRepos(savedGitHubToken)
                 if (preferences.autoSyncGitHub) {
                     projects.forEach { proj ->

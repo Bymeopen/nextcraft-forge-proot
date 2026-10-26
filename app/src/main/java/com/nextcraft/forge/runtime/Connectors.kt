@@ -259,13 +259,48 @@ class ConnectorStore(context: Context) {
         vault.remove(vaultId(id))
     }
 
-    fun hasSecret(id: String): Boolean = vault.contains(vaultId(id))
+    fun hasSecret(id: String): Boolean = vault.contains(vaultId(id)) || (id == "github" && vault.contains("GITHUB_TOKEN"))
+
+    /**
+     * Automatically provisions and enables the official GitHub MCP connector using the saved
+     * `GITHUB_TOKEN` when GitHub is connected in the app. Does not overwrite a user's manual toggle.
+     */
+    fun syncGitHubConnector() {
+        val ghToken = vault.get("GITHUB_TOKEN")?.trim().orEmpty()
+        if (ghToken.isEmpty()) return
+        val current = list()
+        if (current.none { it.id == "github" }) {
+            save(
+                current + McpConnector(
+                    id = "github",
+                    name = "GitHub",
+                    transport = McpTransport.COMMAND,
+                    target = "npx -y @modelcontextprotocol/server-github",
+                    secretName = "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    enabled = true,
+                ),
+            )
+        }
+    }
+
+    /** Removes the auto-provisioned GitHub MCP connector when the user disconnects their GitHub account. */
+    fun removeGitHubConnectorIfAuto() {
+        if (!vault.contains(vaultId("github"))) {
+            save(list().filterNot { it.id == "github" })
+        }
+    }
 
     /** Claude Code's `mcpServers` entries for the enabled connectors, keyed by [McpConnector.key]. */
     fun mcpServersJson(): JSONObject {
+        syncGitHubConnector()
         val servers = JSONObject()
         list().filter { it.enabled }.forEach { c ->
             val secret = vault.get(vaultId(c.id))?.takeIf(String::isNotBlank)
+                ?: if (c.id == "github" || c.secretName == "GITHUB_PERSONAL_ACCESS_TOKEN") {
+                    vault.get("GITHUB_TOKEN")?.takeIf(String::isNotBlank)
+                } else {
+                    null
+                }
             val entry = when (c.transport) {
                 McpTransport.HTTP -> {
                     if (!LocalNetwork.isPlainHttpAllowed(c.target)) return@forEach
@@ -277,7 +312,10 @@ class ConnectorStore(context: Context) {
                     val words = McpNames.splitCommandLine(c.target)
                     if (words.isEmpty()) return@forEach
                     JSONObject().put("type", "stdio").put("command", words.first()).put("args", JSONArray(words.drop(1))).also { o ->
-                        if (secret != null && McpNames.isEnvName(c.secretName)) o.put("env", JSONObject().put(c.secretName, secret))
+                        val envName = c.secretName.ifBlank {
+                            if (c.id == "github") "GITHUB_PERSONAL_ACCESS_TOKEN" else ""
+                        }
+                        if (secret != null && McpNames.isEnvName(envName)) o.put("env", JSONObject().put(envName, secret))
                     }
                 }
             }
