@@ -1193,13 +1193,37 @@ Covers end-to-end delivery from local live preview in NextCraft Forge to product
         }
     }
 
-    /** Ensures `~/.gemini/config/GEMINI.md`, `~/.gemini/config/skills/`*, and `~/.gemini/antigravity-cli` settings are up to date in [rootfs]. */
-    fun apply(rootfs: File, guestWorkspacePath: String = "/workspace", write: (File, String) -> Unit) {
+    /** Ensures `~/.gemini/config/GEMINI.md`, `~/.gemini/config/mcp_config.json`, `~/.gemini/config/skills/`*, and `~/.gemini/antigravity-cli` settings are up to date in [rootfs]. */
+    fun apply(
+        rootfs: File,
+        guestWorkspacePath: String = "/workspace",
+        mcpServers: org.json.JSONObject? = null,
+        write: (File, String) -> Unit,
+    ) {
         if (!rootfs.isDirectory) return
         val configRoot = File(rootfs, CONFIG_DIR)
         val geminiMd = File(configRoot, "GEMINI.md")
         if (runCatching { geminiMd.takeIf { it.isFile }?.readText() }.getOrNull() != GLOBAL_GEMINI_MD) {
             runCatching { write(geminiMd, GLOBAL_GEMINI_MD) }
+        }
+        if (mcpServers != null) {
+            runCatching {
+                val mcpFile = File(configRoot, "mcp_config.json")
+                val existingRoot = runCatching { mcpFile.takeIf { it.isFile }?.readText()?.let { org.json.JSONObject(it) } }.getOrNull()
+                    ?: org.json.JSONObject()
+                val existingServers = existingRoot.optJSONObject("mcpServers") ?: org.json.JSONObject()
+                fun managed(source: org.json.JSONObject): String = source.keys().asSequence()
+                    .filter { it.startsWith(McpConnector.MANAGED_PREFIX) }.sorted()
+                    .joinToString("|") { key -> key + "=" + source.get(key) }
+                if (managed(existingServers) != managed(mcpServers) || !mcpFile.isFile) {
+                    existingServers.keys().asSequence().toList()
+                        .filter { it.startsWith(McpConnector.MANAGED_PREFIX) }
+                        .forEach { existingServers.remove(it) }
+                    mcpServers.keys().forEach { key -> existingServers.put(key, mcpServers.get(key)) }
+                    existingRoot.put("mcpServers", existingServers)
+                    write(mcpFile, existingRoot.toString(2) + "\n")
+                }
+            }
         }
         val globalSecurityGate = File(File(configRoot, "scripts"), "security_gate.py")
         if (runCatching { globalSecurityGate.takeIf { it.isFile }?.readText() }.getOrNull() != SECURITY_GATE_PY) {

@@ -2107,11 +2107,12 @@ class RuntimeInstaller(private val context: Context) {
         workspace.mkdirs()
         File(targetRootfs, guestWorkspacePath.removePrefix("/")).mkdirs()
         writeAndroidGradleConfiguration(targetRootfs)
-        AntigravityCustomizations.apply(targetRootfs, guestWorkspacePath) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+        val effectiveMcpServers = claudeMcpServers ?: runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull()
+        AntigravityCustomizations.apply(targetRootfs, guestWorkspacePath, effectiveMcpServers) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         AntigravityCustomizations.applyWorkspace(workspace, guestWorkspacePath)
         // ~/.claude.json belongs to Claude Code; other agents never read it, so they skip the parse + fsync per launch.
         if (trustClaudeWorkspace && guestWorkspacePath != "/root") {
-            ensureWorkspaceTrust(guestWorkspacePath, environment, claudeMcpServers)
+            ensureWorkspaceTrust(guestWorkspacePath, environment, effectiveMcpServers)
         }
         val bridge = File(context.filesDir, "runtime-bridge").apply { mkdirs() }
         File(context.filesDir, "runtime-bridge-responses").mkdirs()
@@ -2349,8 +2350,9 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         ensureSystemGitTrust()
         applyAndroidHostTools()
         ProotAndChrootOptimizer.applyGuestWrappers(rootfs) { file, body, mode -> writeRootfsFileAtomically(file, body, mode = mode) }
-        AntigravityCustomizations.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
-        ensureWorkspaceTrust("/workspace")
+        val managedMcp = runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull()
+        AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+        ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
         ensureSharedTmpPermissions()
     }
 

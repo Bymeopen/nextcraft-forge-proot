@@ -30,6 +30,31 @@ class ConnectorsTest {
     }
 
     @Test
+    fun openSourcePresetsAndAntigravityMcpSync() {
+        val presets = McpConnector.OPEN_SOURCE_PRESETS
+        assertTrue(presets.any { it.name == "Figma" && it.secretName == "FIGMA_API_KEY" })
+        assertTrue(presets.any { it.name == "Context7" && it.transport == McpTransport.HTTP })
+        assertTrue(presets.all { McpNames.id(it.name) != null })
+        assertTrue(presets.filter { it.secretName.isNotEmpty() }.all { McpNames.isEnvName(it.secretName) })
+
+        val tempRootfs = java.nio.file.Files.createTempDirectory("mcp-sync-test").toFile()
+        try {
+            val managed = org.json.JSONObject()
+                .put("forge-figma", org.json.JSONObject().put("type", "stdio").put("command", "npx"))
+            AntigravityCustomizations.apply(tempRootfs, "/workspace/demo", managed) { file, body ->
+                file.parentFile?.mkdirs()
+                file.writeText(body)
+            }
+            val mcpFile = java.io.File(tempRootfs, "root/.gemini/config/mcp_config.json")
+            assertTrue(mcpFile.isFile)
+            val parsed = org.json.JSONObject(mcpFile.readText()).getJSONObject("mcpServers")
+            assertEquals("npx", parsed.getJSONObject("forge-figma").getString("command"))
+        } finally {
+            tempRootfs.deleteRecursively()
+        }
+    }
+
+    @Test
     fun skillNamesAndFrontmatter() {
         assertEquals("code-review", ClaudeSkillStore.skillName("Code Review!"))
         assertNull(ClaudeSkillStore.skillName("???"))
