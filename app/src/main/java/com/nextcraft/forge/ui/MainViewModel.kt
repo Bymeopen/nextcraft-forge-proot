@@ -4223,10 +4223,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             put("COLORTERM", "truecolor")
             put("LANG", "C.UTF-8")
         }
-        val chroot = installer.isInstalled() && isRootAccessAvailable() && installer.installedRuntime().chrootExec.isFile
-        return if (chroot) {
-            // The guest environment (PATH, HOME, TERM, provider keys) travels in a one-shot env file sourced by su.
-            // /root is the chroot's home, so the shell is not tied to any project.
+        val runtimeAvailable = installer.isInstalled() && installer.isRuntimeAccessAvailable() && installer.installedRuntime().chrootExec.isFile
+        return if (runtimeAvailable) {
+            // The guest environment (PATH, HOME, TERM, provider keys) travels in a one-shot env file sourced by su / sh.
+            // /root is the runtime's home, so the shell is not tied to any project.
             // The general terminal is not tied to a project; a chat's terminal starts in that chat's folder.
             val folder = handle.chatId?.let { chatTerminalFolder(it) }
             handle.guestDir = folder?.let { "/workspace/${it.second}" }
@@ -4237,7 +4237,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 environment = activeChrootEnvironment(),
                 guestCommand = listOf("/bin/bash", "-l"),
             )
-            TerminalLaunchSpec("su", app.filesDir.absolutePath, arrayOf("su", "-mm", "-c", suCommand), env.toEnvArray(), inChroot = true)
+            val argv = installer.launchArgv(suCommand)
+            TerminalLaunchSpec(argv.first(), app.filesDir.absolutePath, argv.toTypedArray(), env.toEnvArray(), inChroot = true)
         } else {
             val folder = handle.chatId?.let { chatTerminalFolder(it) }
             handle.hostDir = folder?.first
