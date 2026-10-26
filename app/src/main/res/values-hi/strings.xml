@@ -1508,4 +1508,15 @@
     <string name="inspector_empty_hint">लाइव Android व्यू जांचने के लिए स्क्रीन UI स्कैन करें पर टैप करें और एजेंट से बदलने के लिए किसी भी तत्व को चुनें।</string>
     <string name="inspector_edit_with_agent">एजेंट से तत्व संपादित करें</string>
     <string name="inspector_instruction_hint">बताएँ कि एजेंट इस तत्व में क्या बदलाव करे</string>
+    <string name="build_retry_low_memory">मेमोरी खत्म: हल्की Gradle सेटिंग्स के साथ फिर से बिल्ड हो रहा है…</string>
+    <string name="verify_running">बिल्ड की जाँच हो रही है (बिल्ड + यूनिट टेस्ट)…</string>
+    <string name="verify_passed">बिल्ड जाँच सफल ✓</string>
+    <string name="verify_fixing">बिल्ड जाँच विफल: एजेंट इसे ठीक कर रहा है (राउंड %1$d / %2$d)…</string>
+    <string name="verify_gave_up">%1$d सुधार राउंड के बाद भी बिल्ड विफल है। समस्याएँ टैब देखें।</string>
+    <string name="verify_failed_memory">बिल्ड जाँच रुकी: मेमोरी खत्म। दूसरे ऐप बंद करके फिर कोशिश करें।</string>
+    <string name="verify_failed_dependency">बिल्ड जाँच विफल: एक लाइब्रेरी डाउनलोड नहीं हो सकी। ऑनलाइन होकर एक बार बिल्ड करें।</string>
+    <string name="verify_failed">बिल्ड जाँच विफल। समस्याएँ और लॉग टैब देखें।</string>
+    <string name="verify_now">अभी बिल्ड जाँचें (बिल्ड + टेस्ट)</string>
+    <string name="verify_auto_toggle">एजेंट के बदलावों के बाद बिल्ड जाँचें</string>
+    <string name="verify_autofix_toggle">एजेंट को बिल्ड त्रुटियाँ ठीक करने दें</string>
 </resources>

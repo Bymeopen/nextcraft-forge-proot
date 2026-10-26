@@ -194,6 +194,16 @@ class AppPreferences(private val context: Context) {
         get() = preferences.getBoolean("interactive_high_risk_approvals", !autoApproveAllTools)
         set(value) { preferences.edit().putBoolean("interactive_high_risk_approvals", value).apply() }
 
+    /** Local CI: build and unit-test an Android project after an agent changed its files. Off by default (battery, heat). */
+    var autoVerifyBuild: Boolean
+        get() = preferences.getBoolean("auto_verify_build", false)
+        set(value) { preferences.edit().putBoolean("auto_verify_build", value).apply() }
+
+    /** With [autoVerifyBuild]: send a failure in the code back to the same agent to fix, a few rounds at most. */
+    var autoFixBuild: Boolean
+        get() = preferences.getBoolean("auto_fix_build", false)
+        set(value) { preferences.edit().putBoolean("auto_fix_build", value).apply() }
+
     /** When true, every tool permission request is approved without classification or prompting. */
     var autoApproveAllTools: Boolean
         get() = preferences.getBoolean("auto_approve_all_tools", true)

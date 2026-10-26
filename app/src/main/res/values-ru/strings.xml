@@ -1548,4 +1548,15 @@
     <string name="inspector_empty_hint">Нажмите «Сканировать UI экрана», чтобы проверить элементы Android и выбрать любой для изменения с помощью агента.</string>
     <string name="inspector_edit_with_agent">Изменить элемент с агентом</string>
     <string name="inspector_instruction_hint">Опишите, как агент должен изменить этот элемент</string>
+    <string name="build_retry_low_memory">Не хватило памяти: повторная сборка с облегчёнными настройками Gradle…</string>
+    <string name="verify_running">Проверка сборки (сборка + юнит-тесты)…</string>
+    <string name="verify_passed">Проверка сборки пройдена ✓</string>
+    <string name="verify_fixing">Проверка сборки не пройдена: агент исправляет (раунд %1$d из %2$d)…</string>
+    <string name="verify_gave_up">Сборка всё ещё не проходит после %1$d раундов исправлений. Откройте вкладку «Проблемы».</string>
+    <string name="verify_failed_memory">Проверка сборки остановлена: не хватило памяти. Закройте другие приложения и повторите.</string>
+    <string name="verify_failed_dependency">Проверка сборки не пройдена: не удалось скачать библиотеку. Подключитесь к сети и соберите один раз.</string>
+    <string name="verify_failed">Проверка сборки не пройдена. Смотрите вкладки «Проблемы» и «Журнал».</string>
+    <string name="verify_now">Проверить сборку сейчас (сборка + тесты)</string>
+    <string name="verify_auto_toggle">Проверять сборку после изменений агента</string>
+    <string name="verify_autofix_toggle">Разрешить агенту исправлять ошибки сборки</string>
 </resources>
