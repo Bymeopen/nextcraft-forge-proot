@@ -53,7 +53,8 @@ class AntigravityAuthController(
 
     fun hasOfficialCredential(): Boolean {
         val file = officialCredentialFile()
-        if (file.isFile) return true
+        if (file.isFile && file.length() > 0L) return true
+        if (!RuntimeEngines.isRootEngine()) return false
         val quoted = shellSingleQuote(file.absolutePath)
         return runCatching {
             val proc = ProcessBuilder("su", "-c", "test -s $quoted").start()
@@ -354,7 +355,7 @@ class AntigravityAuthController(
             if (credential.exists()) {
                 credential.delete()
             }
-            if (hasOfficialCredential()) {
+            if (RuntimeEngines.isRootEngine() && hasOfficialCredential()) {
                 val quoted = shellSingleQuote(credential.absolutePath)
                 runCatching {
                     val proc = ProcessBuilder("su", "-c", "rm -f $quoted").start()

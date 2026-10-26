@@ -147,10 +147,11 @@ internal fun ToolStepGroup(items: List<ActivityItem>, modifier: Modifier = Modif
             }
             Chevron(open)
         }
+        val reduceMotion = rememberReduceMotion()
         AnimatedVisibility(
             visible = open,
-            enter = expandVertically(androidx.compose.animation.core.tween(ForgeMotion.EXPAND_MS)) + fadeIn(androidx.compose.animation.core.tween(ForgeMotion.FADE_MS)),
-            exit = shrinkVertically(androidx.compose.animation.core.tween(ForgeMotion.FADE_MS)) + fadeOut(androidx.compose.animation.core.tween(ForgeMotion.FADE_MS / 2)),
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
         ) {
             Column(modifier = Modifier.padding(start = 12.dp)) {
                 items.forEach { ToolCallRow(it) }
@@ -330,7 +331,12 @@ private fun ChangedFileRow(
             Spacer(modifier = Modifier.width(2.dp))
             Chevron(open)
         }
-        AnimatedVisibility(visible = open) {
+        val reduceMotion = rememberReduceMotion()
+        AnimatedVisibility(
+            visible = open,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
             Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
                 if (change.binary || change.diffLines.isEmpty()) {
                     Text(

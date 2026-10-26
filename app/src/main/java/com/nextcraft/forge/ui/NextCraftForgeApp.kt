@@ -149,6 +149,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
     var showNewProjectDialog by rememberSaveable { mutableStateOf(false) }
     var paletteOpen by rememberSaveable { mutableStateOf(false) }
     var showGitHubDialog by rememberSaveable { mutableStateOf(false) }
+    var showFigmaDialog by rememberSaveable { mutableStateOf(false) }
     if (paletteOpen) ForgeCommandPalette(onDismiss = { paletteOpen = false }, onOpen = viewModel::selectTab)
 
     if (!state.runtimeInstalled && !bypassSetupGate) {
@@ -224,7 +225,12 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
         topBar = {},
         bottomBar = {
             // adjustResize lifts the bar above the keyboard and eats the composer's space; hide it while typing.
-            if (!imeVisible) {
+            val reduceMotion = rememberReduceMotion()
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !imeVisible,
+                enter = ForgeMotion.expandEnter(reduceMotion),
+                exit = ForgeMotion.shrinkExit(reduceMotion),
+            ) {
                 val inProject = state.activeTab == ForgeTab.PROJECTS && state.projectView != ProjectView.LIST
                 if (inProject) {
                     // Inside a project the bar belongs to the project: Chat · Files · Terminal · Preview.
@@ -289,7 +295,16 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                     viewModel.dismissBanner()
                 }
             }
-            state.bannerMessage?.asString()?.let { banner ->
+            val reduceMotion = rememberReduceMotion()
+            val bannerText = state.bannerMessage?.asString()
+            var lastBannerText by remember { mutableStateOf("") }
+            if (bannerText != null) lastBannerText = bannerText
+            androidx.compose.animation.AnimatedVisibility(
+                visible = bannerText != null,
+                enter = ForgeMotion.expandEnter(reduceMotion),
+                exit = ForgeMotion.shrinkExit(reduceMotion),
+            ) {
+                val banner = bannerText ?: lastBannerText
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -356,19 +371,39 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                 onStopBuild = viewModel::stopAndroidBuild,
             )
 
-            // Screen host: inside Projects, going deeper (list → chats → conversation) pushes from the right and
-            // Back pops; pane switches inside a project also slide smoothly left/right.
-            val depth = when (state.projectView) { ProjectView.LIST -> 0; ProjectView.CHATS -> 1; ProjectView.CONVERSATION -> 2 }
+            // Screen host: inside Projects, going deeper (list → chats → conversation) or into a Tool sub-screen pushes
+            // from the right and Back pops; pane and sibling tab switches slide/drift smoothly left/right.
+            val depth = when {
+                state.activeTab == ForgeTab.PROJECTS -> when (state.projectView) {
+                    ProjectView.LIST -> 0
+                    ProjectView.CHATS -> 1
+                    ProjectView.CONVERSATION -> 2
+                }
+                state.activeTab in toolsGroup && state.activeTab != ForgeTab.TOOLS -> 1
+                else -> 0
+            }
             val paneOrder = state.projectPane.ordinal
+            val tabNavIndex = state.activeTab.navIndex()
             var lastDepth by remember { mutableStateOf(depth) }
             var lastPaneOrder by remember { mutableStateOf(paneOrder) }
-            val depthChanged = depth != lastDepth
+            var lastTabNavIndex by remember { mutableStateOf(tabNavIndex) }
+            var lastActiveTab by remember { mutableStateOf(state.activeTab) }
+            val tabGroupChanged = tabNavIndex != lastTabNavIndex
+            val depthChanged = !tabGroupChanged && depth != lastDepth
             val paneChanged = !splitPane && state.activeTab == ForgeTab.PROJECTS && state.projectView != ProjectView.LIST && paneOrder != lastPaneOrder
-            val forward = if (depthChanged) depth >= lastDepth else paneOrder >= lastPaneOrder
-            val slide = state.activeTab == ForgeTab.PROJECTS && (depthChanged || paneChanged)
+            val toolDrillChanged = (state.activeTab in toolsGroup && lastActiveTab in toolsGroup) && state.activeTab != lastActiveTab
+            val forward = when {
+                tabGroupChanged -> tabNavIndex >= lastTabNavIndex
+                depthChanged -> depth >= lastDepth
+                paneChanged -> paneOrder >= lastPaneOrder
+                else -> state.activeTab.ordinal >= lastActiveTab.ordinal
+            }
+            val slide = (state.activeTab == ForgeTab.PROJECTS && (depthChanged || paneChanged)) || toolDrillChanged
             androidx.compose.runtime.SideEffect {
                 lastDepth = depth
                 lastPaneOrder = paneOrder
+                lastTabNavIndex = tabNavIndex
+                lastActiveTab = state.activeTab
             }
             // Single-pane screens stop at a readable width on wide displays; workspace screens use all of it.
             val capWidth = expanded && !splitPane && state.activeTab !in fullWidthTabs
@@ -429,6 +464,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                             onImportZip = viewModel::importZipProject,
                             onCloneGitUrl = viewModel::cloneGitUrl,
                             onConnectGitHub = { showGitHubDialog = true },
+                            onConnectFigma = { showFigmaDialog = true },
                             onDeleteProject = viewModel::deleteProject,
                             onRenameProject = viewModel::renameProject,
                             onNewQuickProject = viewModel::createQuickProject,
@@ -500,6 +536,15 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
             title = { Text(stringResource(R.string.settings_github)) },
             text = { GitHubSection(state, viewModel) },
             confirmButton = { ForgeTextButton(onClick = { showGitHubDialog = false }) { Text(stringResource(R.string.agent_close)) } },
+        )
+    }
+
+    if (showFigmaDialog) {
+        ForgeAlertDialog(
+            onDismissRequest = { showFigmaDialog = false },
+            title = { Text(stringResource(R.string.projects_connect_figma)) },
+            text = { FigmaSection(state = state, viewModel = viewModel, onClose = { showFigmaDialog = false }) },
+            confirmButton = { ForgeTextButton(onClick = { showFigmaDialog = false }) { Text(stringResource(R.string.agent_close)) } },
         )
     }
 

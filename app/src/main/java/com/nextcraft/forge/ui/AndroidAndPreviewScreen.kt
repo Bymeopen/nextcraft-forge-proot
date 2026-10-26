@@ -297,9 +297,19 @@ fun AndroidBuildScreen(
                 )
             }
         }
-        if (build.phase == AndroidBuildPhase.BUILDING) {
+        val reduceMotion = rememberReduceMotion()
+        val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = build.stage.progressFraction(),
+            animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springFluid(),
+            label = "buildProgress",
+        )
+        androidx.compose.animation.AnimatedVisibility(
+            visible = build.phase == AndroidBuildPhase.BUILDING,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
             LinearProgressIndicator(
-                progress = build.stage.progressFraction(),
+                progress = animatedProgress,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp)
@@ -342,6 +352,10 @@ fun AndroidBuildScreen(
             )
         }
 
+        var lastActiveTab by remember { mutableStateOf(activeTab) }
+        val buildTabForward = activeTab >= lastActiveTab
+        androidx.compose.runtime.SideEffect { lastActiveTab = activeTab }
+
         ForgePillTabs(
             items = listOf(
                 stringResource(R.string.launch_tab_stages),
@@ -357,11 +371,16 @@ fun AndroidBuildScreen(
             onSelect = { activeTab = it },
         )
 
-        when (activeTab) {
+        androidx.compose.animation.AnimatedContent(
+            targetState = activeTab,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            transitionSpec = { ForgeMotion.tabTransition(forward = buildTabForward, reduceMotion = reduceMotion) },
+            label = "androidBuildTabSwitch",
+        ) { tabIdx ->
+        when (tabIdx) {
             0 -> Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
                     .verticalScroll(rememberScrollState()),
             ) {
                 stageRows.forEachIndexed { index, row ->
@@ -395,7 +414,7 @@ fun AndroidBuildScreen(
                 onOpenFile = { path ->
                     viewModel.openFilesTabForEditing(path)
                 },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
             )
 
             2 -> {
@@ -408,8 +427,7 @@ fun AndroidBuildScreen(
                 }
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
+                        .fillMaxSize()
                         .padding(horizontal = 14.dp, vertical = 6.dp)
                         .clip(consoleShape)
                         .background(tokens.terminalBackground)
@@ -436,8 +454,9 @@ fun AndroidBuildScreen(
                 onSetMinLevel = viewModel::setLogcatMinimumLevel,
                 onSetQuery = viewModel::setLogcatQuery,
                 onFixCrashWithAgent = viewModel::fixLogcatCrashWithAgent,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
             )
+        }
         }
     }
 }
@@ -714,6 +733,7 @@ fun WebPreviewScreen(
         }
 
         var previewMode by rememberSaveable { mutableStateOf(0) } // 0 = Web Preview, 1 = UI Inspector
+        val reduceMotion = rememberReduceMotion()
         ForgePillTabs(
             items = listOf(
                 stringResource(R.string.inspector_tab_web),
@@ -723,13 +743,20 @@ fun WebPreviewScreen(
             onSelect = { previewMode = it },
         )
 
-        if (previewMode == 1) {
+        androidx.compose.animation.AnimatedContent(
+            targetState = previewMode,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            transitionSpec = { ForgeMotion.tabTransition(forward = targetState >= initialState, reduceMotion = reduceMotion) },
+            label = "previewModeSwitch",
+        ) { mode ->
+        if (mode == 1) {
             UiInspectorPanel(
                 state = state,
                 viewModel = viewModel,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
             )
         } else {
+        Column(modifier = Modifier.fillMaxSize()) {
         // Address bar: status dot, URL, go arrow; refresh sits outside the bar.
         var opened by rememberSaveable { mutableStateOf(false) }
         val serverUp = state.activeLocalPorts.isNotEmpty() || opened
@@ -882,6 +909,8 @@ fun WebPreviewScreen(
                 (view as? WebView)?.let { runCatching { it.stopLoading(); it.destroy() } }
             },
         )
+        }
+        }
         }
         }
     }

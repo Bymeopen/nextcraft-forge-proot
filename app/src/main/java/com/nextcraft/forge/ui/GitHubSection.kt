@@ -277,3 +277,105 @@ internal fun looksLikeGitHubToken(value: String): Boolean {
     return (v.startsWith("github_pat_") && v.length >= 60) ||
         (listOf("ghp_", "gho_", "ghu_", "ghs_", "ghr_").any(v::startsWith) && v.length >= 40)
 }
+
+/** Figma Personal Access Token (`figd_...`) configuration and Figma design URL import dialog. */
+@Composable
+fun FigmaSection(state: ForgeUiState, viewModel: MainViewModel, onClose: () -> Unit = {}) {
+    val context = LocalContext.current
+    val scheme = MaterialTheme.colorScheme
+    var figmaTokenInput by remember { mutableStateOf("") }
+    var figmaUrlInput by rememberSaveable { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.projects_figma_description),
+            fontSize = ForgeType.secondary,
+            color = scheme.onSurfaceVariant,
+        )
+        if (!state.figmaConnected) {
+            ForgeTextButton(
+                onClick = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.figma.com/developers/api#access-tokens")))
+                    }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("FigmaSection", it) }
+                },
+            ) {
+                Text(stringResource(R.string.projects_figma_open_settings))
+            }
+            fun connectFigmaToken() {
+                val token = figmaTokenInput.trim()
+                if (token.isNotEmpty()) {
+                    viewModel.connectFigma(token)
+                    figmaTokenInput = ""
+                }
+            }
+            ForgeTextField(
+                kind = ForgeFieldKind.SECRET,
+                imeAction = ImeAction.Done,
+                onImeAction = { connectFigmaToken() },
+                value = figmaTokenInput,
+                onValueChange = { value ->
+                    figmaTokenInput = value
+                    if (value.trim().startsWith("figd_") && value.trim().length >= 36) {
+                        connectFigmaToken()
+                    }
+                },
+                label = { Text(stringResource(R.string.projects_figma_token_hint)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            ForgePrimaryButton(
+                text = stringResource(R.string.settings_connect),
+                onClick = { connectFigmaToken() },
+                enabled = figmaTokenInput.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                ForgeStatusIcon(ForgeStatus.DONE, iconSize = 18.dp)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.projects_figma_connected),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                ForgeTextButton(onClick = viewModel::disconnectFigma) {
+                    Text(stringResource(R.string.settings_disconnect))
+                }
+            }
+        }
+
+        ThinDivider()
+        ForgeTextField(
+            kind = ForgeFieldKind.URL,
+            imeAction = ImeAction.Done,
+            onImeAction = {
+                if (figmaUrlInput.isNotBlank()) {
+                    viewModel.importFigmaDesignUrl(figmaUrlInput)
+                    figmaUrlInput = ""
+                    onClose()
+                }
+            },
+            value = figmaUrlInput,
+            onValueChange = { figmaUrlInput = it },
+            label = { Text(stringResource(R.string.projects_figma_url_hint)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(
+            shape = RoundedCornerShape(100),
+            onClick = {
+                viewModel.importFigmaDesignUrl(figmaUrlInput)
+                figmaUrlInput = ""
+                onClose()
+            },
+            enabled = figmaUrlInput.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+        ) {
+            Text(stringResource(R.string.projects_figma_import_url))
+        }
+    }
+}

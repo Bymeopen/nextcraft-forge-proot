@@ -50,7 +50,8 @@ HOST_RESP="$HOST_BRIDGE-responses"
 SHM_DIR="$ROOTFS/tmp/.nextcraft-shm"
 
 mkdir -p "$ROOTFS$GUEST_WORKSPACE" "$HOST_WORKSPACE" "$HOST_BRIDGE" "$HOST_RESP" "$PROOT_TMP_DIR" "$SHM_DIR" \
-    "$ROOTFS/nextcraft-bridge" "$ROOTFS/pocketdev-bridge" "$ROOTFS/pocket-bridge" "$ROOTFS/pocketdev-bridge-responses" \
+    "$ROOTFS/nextcraft-bridge" "$ROOTFS/pocketdev-bridge" "$ROOTFS/pocket-bridge" \
+    "$ROOTFS/nextcraft-bridge-responses" "$ROOTFS/pocketdev-bridge-responses" \
     "$ROOTFS/tmp" "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys"
 
 if [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
@@ -70,6 +71,9 @@ export TERM="${TERM:-xterm-256color}"
 export LANG="${LANG:-C.UTF-8}"
 export TMPDIR="/tmp"
 export GLIBC_TUNABLES="glibc.pthread.rseq=0"
+export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
+export POCKETDEV_BRIDGE_DIR="/nextcraft-bridge"
+export NEXTCRAFT_RESPONSE_DIR="/nextcraft-bridge-responses"
 
 BASE_PATH="/opt/nextcraft/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 if [ -d "$ROOTFS/root/android-sdk" ]; then
@@ -103,6 +107,6 @@ exec "$PROOT" --kill-on-exit --link2symlink -0 -r "$ROOTFS" \
     $BIONIC_BINDS \
     $WORKSPACE_BIND \
     -b "$HOST_BRIDGE:/nextcraft-bridge" -b "$HOST_BRIDGE:/pocketdev-bridge" -b "$HOST_BRIDGE:/pocket-bridge" \
-    -b "$HOST_RESP:/pocketdev-bridge-responses" \
+    -b "$HOST_RESP:/nextcraft-bridge-responses" -b "$HOST_RESP:/pocketdev-bridge-responses" \
     -w "$GUEST_WORKSPACE" \
     /usr/bin/env GUEST_WORKSPACE="$GUEST_WORKSPACE" /bin/sh -c 'cd "$GUEST_WORKSPACE" && exec "$@"' -- "$@"

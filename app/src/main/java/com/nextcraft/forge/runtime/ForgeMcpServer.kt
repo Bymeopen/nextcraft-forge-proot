@@ -49,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -186,9 +187,9 @@ def _clean_hex(value, fallback):
 def _safe_workspace_path(path_str):
     if not path_str or not isinstance(path_str, str):
         return None
-    abs_path = os.path.abspath(path_str)
-    if abs_path.startswith("/workspace/") or abs_path.startswith("/tmp/"):
-        return abs_path
+    real_path = os.path.realpath(os.path.abspath(path_str))
+    if real_path.startswith("/workspace/") or real_path.startswith("/tmp/"):
+        return real_path
     return None
 
 
@@ -207,7 +208,11 @@ def handle_design_generate_svg(args):
     title = _xml_escape(args.get("title") or "NextCraft")
     primary = _clean_hex(args.get("primaryColor"), "#10B981")
     secondary = _clean_hex(args.get("secondaryColor"), "#0EA5E9")
-    size = max(64, min(2048, int(args.get("size") or 512)))
+    try:
+        raw_size = int(args.get("size") or 512)
+    except (ValueError, TypeError):
+        raw_size = 512
+    size = max(64, min(2048, raw_size))
     half = size // 2
     radius = max(16, size // 5)
 
@@ -469,13 +474,29 @@ class _PreviewHTMLParser(html.parser.HTMLParser):
             self._curr_heading.append(data)
 
 
+class _SafePreviewRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https"):
+            raise urllib.error.URLError("Blocked redirect to unsupported URL scheme")
+        if parsed.scheme == "http" and host not in ("127.0.0.1", "localhost", "::1"):
+            raise urllib.error.URLError("Blocked cleartext HTTP redirect to non-loopback host")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def handle_web_preview_inspect(args):
     url = str(args.get("url") or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
         return "Invalid URL: must start with http:// or https://"
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "http" and host not in ("127.0.0.1", "localhost", "::1"):
+        return "Invalid URL: cleartext http:// is only allowed for loopback hosts (127.0.0.1, localhost, ::1); use https:// for remote URLs"
     req = urllib.request.Request(url, headers={"User-Agent": "NextCraft-Forge-Inspector/1.0"})
+    opener = urllib.request.build_opener(_SafePreviewRedirectHandler())
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with opener.open(req, timeout=10) as resp:
             status = resp.status
             ctype = resp.headers.get("Content-Type", "")
             raw = resp.read(256 * 1024).decode("utf-8", errors="replace")
@@ -590,7 +611,12 @@ def main():
         use_content_length = False
         if stripped.lower().startswith(b"content-length:"):
             use_content_length = True
-            length = int(stripped.split(b":", 1)[1].strip())
+            try:
+                length = int(stripped.split(b":", 1)[1].strip())
+            except ValueError:
+                continue
+            if length <= 0 or length > 16 * 1024 * 1024:
+                continue
             while True:
                 hdr = stdin.readline()
                 if not hdr or hdr in (b"\r\n", b"\n"):
@@ -632,9 +658,17 @@ if __name__ == "__main__":
         if (mcpServers == null || mcpServers.length() == 0) return "[]\n"
         val keys = mcpServers.keys().asSequence().toList().sorted()
         val entries = ArrayList<String>()
+        val usedServerNames = HashSet<String>()
         for (rawKey in keys) {
             val server = mcpServers.optJSONObject(rawKey) ?: continue
-            val serverName = normalizeDshServerName(rawKey)
+            val baseName = normalizeDshServerName(rawKey)
+            var serverName = baseName
+            var suffix = 2
+            while (!usedServerNames.add(serverName)) {
+                val suffixStr = "_$suffix"
+                serverName = baseName.take((32 - suffixStr.length).coerceAtLeast(1)) + suffixStr
+                suffix++
+            }
             val type = server.optString("type")
             val block = StringBuilder()
             block.appendLine("    - id: ${yamlSingleQuote(serverName)}")
