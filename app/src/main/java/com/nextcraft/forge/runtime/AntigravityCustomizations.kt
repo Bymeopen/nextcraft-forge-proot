@@ -118,6 +118,7 @@ DENY_CMD_PATTERNS = [
     (r"unprivileged_bpf_disabled", "Blocked: Modifying unprivileged_bpf_disabled crashes Android system_server."),
     (r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+(/|/root|/workspace|~|\${'$'}HOME)(\s|${'$'})", "Blocked: Catastrophic recursive deletion outside project subdir."),
     (r"\b(mkfs|fdisk|wipefs)\b", "Blocked: Disk formatting utilities are forbidden."),
+    (r"\bdd\b.*\bof=/dev/(sd|vd|nvme|mmcblk|loop|block|dm-)", "Blocked: Direct dd write to block device is forbidden."),
     (r":\(\)\s*\{\s*:\|:&\s*\};:", "Blocked: Fork bomb detected."),
 ]
 
@@ -199,7 +200,7 @@ def main():
     tool_name = tool_call.get("name", "") or payload.get("toolName", "")
     args = tool_call.get("args", {})
 
-    if tool_name in ("write_file", "edit_file") or "Path" in args:
+    if tool_name in ("write_file", "edit_file", "replace_file_content", "multi_replace_file_content") or any(k in args for k in ("Path", "path", "TargetFile")):
         result = check_file_mutation(args)
     else:
         result = check_command(args)
@@ -577,6 +578,9 @@ class SimpleHTMLToText(html.parser.HTMLParser):
         return "\n".join(line for line in lines if line)
 
 def fetch_web(url: str, max_chars: int = 6000) -> None:
+    if not url.lower().startswith(("http://", "https://")):
+        print(f"Error fetching {url}: Only http:// and https:// URLs are allowed.")
+        sys.exit(1)
     req = urllib.request.Request(url, headers={"User-Agent": "HermesLite-Reader/2.0 (+NextCraftForge)"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -638,7 +642,7 @@ if __name__ == "__main__":
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/security_gate.py",
+            "command": "python3 .agents/scripts/security_gate.py 2>/dev/null || python3 scripts/security_gate.py",
             "timeout": 5
           }
         ]

@@ -58,7 +58,17 @@ class GeminiImageClient {
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+                val sb = StringBuilder()
+                val buf = CharArray(8 * 1024)
+                val maxChars = 32 * 1024 * 1024
+                while (sb.length < maxChars) {
+                    val n = reader.read(buf, 0, minOf(buf.size, maxChars - sb.length))
+                    if (n <= 0) break
+                    sb.append(buf, 0, n)
+                }
+                sb.toString()
+            }.orEmpty()
             parseResponse(code, text)
         } catch (e: Exception) {
             GeminiImageResult.Failure(e.message ?: e.javaClass.simpleName)

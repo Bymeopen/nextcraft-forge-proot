@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/security_gate.py",
+            "command": "python3 .agents/scripts/security_gate.py 2>/dev/null || python3 scripts/security_gate.py",
             "timeout": 5
           }
         ]

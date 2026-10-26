@@ -41,6 +41,9 @@ class AppUpdater(
             connection.instanceFollowRedirects = true
             connection.setRequestProperty("Accept", "application/json")
             val code = connection.responseCode
+            check(connection.url.protocol.equals("https", ignoreCase = true)) {
+                "Update manifest redirect to non-HTTPS URL blocked."
+            }
             if (code == 404) throw NoPublishedReleaseException()
             if (code !in 200..299) throw java.io.IOException("Update manifest request failed (HTTP $code)")
             val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
@@ -90,6 +93,9 @@ class AppUpdater(
                 connection.readTimeout = 30_000
                 connection.instanceFollowRedirects = true
                 val code = connection.responseCode
+                check(connection.url.protocol.equals("https", ignoreCase = true)) {
+                    "Update download redirect to non-HTTPS URL blocked."
+                }
                 check(code in 200..299) { "Update download failed (HTTP $code)." }
                 val total = connection.contentLengthLong.takeIf { it > 0 } ?: info.sizeBytes
                 val maxBytes = if (info.sizeBytes in 1..MAX_APK_BYTES) info.sizeBytes else MAX_APK_BYTES

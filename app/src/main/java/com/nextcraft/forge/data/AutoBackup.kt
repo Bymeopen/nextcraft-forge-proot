@@ -64,13 +64,18 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val settings = AutoBackupSettings(applicationContext)
         val target = settings.target ?: return Result.success()
         val password = settings.password
-        return runCatching {
-            val out = applicationContext.contentResolver.openOutputStream(target, "wt") ?: error("The backup file is no longer reachable")
-            BackupManager(applicationContext).create(
-                out,
-                BackupManager.Options(apiKeys = settings.includeApiKeys && password.isNotEmpty()),
-                password.toCharArray().takeIf { it.isNotEmpty() },
-            )
+        val passwordChars = password.toCharArray()
+        return try {
+            runCatching {
+                val out = applicationContext.contentResolver.openOutputStream(target, "wt") ?: error("The backup file is no longer reachable")
+                BackupManager(applicationContext).create(
+                    out,
+                    BackupManager.Options(apiKeys = settings.includeApiKeys && passwordChars.isNotEmpty()),
+                    passwordChars.takeIf { it.isNotEmpty() },
+                )
+            }
+        } finally {
+            passwordChars.fill('\u0000')
         }.fold(
             onSuccess = {
                 settings.lastRunAt = System.currentTimeMillis()

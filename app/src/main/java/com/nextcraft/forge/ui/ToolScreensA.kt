@@ -233,8 +233,15 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
             if (pendingChangesCount > 0) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     ForgePrimaryButton(text = stringResource(R.string.tool_keep_all), onClick = viewModel::keepAllChanges, enabled = !busy, modifier = Modifier.weight(1f))
-                    OutlinedButton(shape = RoundedCornerShape(100), onClick = viewModel::revertAllChanges, enabled = !busy, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.tool_revert_all))
+                    ConfirmedAction(
+                        title = stringResource(R.string.tool_revert_all),
+                        message = quantityStringResource(R.plurals.tool_pending_changes, pendingChangesCount, pendingChangesCount),
+                        confirmLabel = stringResource(R.string.tool_revert_all),
+                        onConfirm = viewModel::revertAllChanges,
+                    ) { onClick ->
+                        OutlinedButton(shape = RoundedCornerShape(100), onClick = onClick, enabled = !busy, modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.tool_revert_all))
+                        }
                     }
                 }
             }
