@@ -202,6 +202,7 @@
     <string name="shell_check_root">صلاحية Root (مساحة أسماء التركيب `su -mm`)</string>
     <string name="shell_root_granted">تم منح صلاحية Magisk / KernelSU / APatch</string>
     <string name="shell_root_required">صلاحيات Root مطلوبة لـ chroot</string>
+    <string name="shell_proot_fallback">بدون Root: يعمل على محرك PRoot المدمج (بناء أبطأ)</string>
     <string name="shell_check_rootfs">Ubuntu 24.04 Rootfs وأدوات الوكيل</string>
     <string name="shell_installed_ready">مثبّت وجاهز</string>
     <string name="shell_resume_setup">استئناف الإعداد</string>
@@ -673,6 +674,13 @@
     <string name="settings_appearance">المظهر</string>
     <string name="settings_language_system">افتراضي النظام</string>
     <string name="settings_language">اللغة</string>
+    <string name="settings_runtime_engine">محرك وقت التشغيل</string>
+    <string name="engine_auto">تلقائي</string>
+    <string name="engine_auto_sub">Root chroot عند المنح، وإلا PRoot</string>
+    <string name="engine_chroot">Root chroot</string>
+    <string name="engine_chroot_sub">يتطلب Magisk / KernelSU / APatch؛ الأسرع</string>
+    <string name="engine_proot">PRoot (بدون Root)</string>
+    <string name="engine_proot_sub">لا يطلب Root أبدًا؛ البناء أبطأ</string>
     <string name="settings_agent_not_installed">%1$s غير مثبّت</string>
     <string name="settings_agent_install_hint">ثبّت حزمة وكيل %1$s لاستخدامه مع مشاريعك الحالية.</string>
     <string name="settings_agent_install_named">تثبيت %1$s</string>

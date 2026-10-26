@@ -49,6 +49,11 @@ class AppPreferences(private val context: Context) {
         set(value) { preferences.edit().putBoolean("initial_language_selected", value).apply() }
 
     /** Coding agent engine the user picked during setup. Absent = pre-agent-choice install → Claude. */
+    /** Runtime engine choice: "auto" (root chroot when granted, else PRoot), "chroot", or "proot". ADR-007. */
+    var runtimeEngine: String
+        get() = preferences.getString("runtime_engine", "auto") ?: "auto"
+        set(value) { preferences.edit().putString("runtime_engine", value).apply() }
+
     var agentKind: String
         get() = preferences.getString("agent_kind", AgentKind.CLAUDE_CODE.stableId) ?: AgentKind.CLAUDE_CODE.stableId
         set(value) { preferences.edit().putString("agent_kind", value).apply() }

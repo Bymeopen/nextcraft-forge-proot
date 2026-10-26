@@ -50,6 +50,8 @@ internal object RootfsRepair {
      */
     fun ensureUnmounted(targetDir: File): Boolean {
         if (!targetDir.exists()) return true
+        // PRoot never mounts anything (bindings are ptrace path translations), and without root nothing could unmount.
+        if (!RuntimeEngines.isRootEngine()) return true
         val canonicalPath = runCatching { targetDir.canonicalPath }.getOrDefault(targetDir.absolutePath).trimEnd('/')
         require(canonicalPath.length > 1 && canonicalPath.startsWith("/")) {
             "Refusing to operate on invalid rootfs path: '$canonicalPath'"
@@ -106,6 +108,8 @@ internal object RootfsRepair {
      */
     fun reclaimOwnership(target: File, uid: Int, recursive: Boolean = true): Boolean {
         if (!target.exists() && !java.nio.file.Files.isSymbolicLink(target.toPath())) return true
+        // Under PRoot every guest process already runs as the app UID, so nothing is ever root-owned.
+        if (!RuntimeEngines.isRootEngine()) return true
         val canonicalPath = target.canonicalPath.trimEnd('/')
         require(canonicalPath.length > 1 && canonicalPath.startsWith("/")) {
             "Refusing to change ownership of invalid path: '$canonicalPath'"

@@ -156,10 +156,16 @@ internal fun RuntimeOnboardingScreen(
         )
         StatusCheckRow(
             label = stringResource(R.string.shell_check_root),
-            ok = state.rootAvailable,
-            detail = stringResource(if (state.rootAvailable) R.string.shell_root_granted else R.string.shell_root_required),
+            ok = state.rootAvailable || state.prootAvailable,
+            detail = stringResource(
+                when {
+                    state.rootAvailable -> R.string.shell_root_granted
+                    state.prootAvailable -> R.string.shell_proot_fallback
+                    else -> R.string.shell_root_required
+                },
+            ),
         )
-        if (!state.rootAvailable) {
+        if (!state.rootAvailable && !state.prootAvailable) {
             // Explain why root is needed and what to do next, instead of leaving a bare red row.
             Text(
                 text = stringResource(R.string.onb_root_help),

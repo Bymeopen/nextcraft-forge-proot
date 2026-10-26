@@ -138,6 +138,7 @@ class DiagnosticsController(private val context: Context) {
         return buildList {
             val root = runCatching { isRootAccessAvailable() }.getOrDefault(false)
             add(row(R.string.diag_root, UiText.res(if (root) R.string.diag_granted else R.string.diag_unavailable)))
+            add(UiText.Raw("Runtime engine") to UiText.Raw(runCatching { installer.runtimeEngine() }.getOrNull()?.name?.lowercase() ?: "none"))
             if (root) {
                 runCatching { detectRomInfo() }.getOrNull()?.let { info ->
                     add(UiText.Raw("ROM") to UiText.Raw(info.rom))

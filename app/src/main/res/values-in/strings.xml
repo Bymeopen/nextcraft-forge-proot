@@ -203,6 +203,7 @@
     <string name="shell_check_root">Akses root (mount namespace `su -mm`)</string>
     <string name="shell_root_granted">Magisk / KernelSU / APatch diizinkan</string>
     <string name="shell_root_required">Hak akses root diperlukan untuk chroot</string>
+    <string name="shell_proot_fallback">Tanpa root: memakai mesin PRoot bawaan (build lebih lambat)</string>
     <string name="shell_check_rootfs">Rootfs Ubuntu 24.04 &amp; toolchain Agen</string>
     <string name="shell_installed_ready">Terpasang &amp; siap</string>
     <string name="shell_resume_setup">Lanjutkan pemasangan</string>
@@ -614,6 +615,13 @@
     <string name="settings_appearance">Tampilan</string>
     <string name="settings_language_system">Bawaan sistem</string>
     <string name="settings_language">Bahasa</string>
+    <string name="settings_runtime_engine">Mesin runtime</string>
+    <string name="engine_auto">Otomatis</string>
+    <string name="engine_auto_sub">Chroot root bila diizinkan, jika tidak PRoot</string>
+    <string name="engine_chroot">Chroot root</string>
+    <string name="engine_chroot_sub">Butuh Magisk / KernelSU / APatch; paling cepat</string>
+    <string name="engine_proot">PRoot (tanpa root)</string>
+    <string name="engine_proot_sub">Tidak pernah meminta root; build lebih lambat</string>
     <string name="settings_agent_not_installed">%1$s belum terpasang</string>
     <string name="settings_agent_install_hint">Pasang paket agen %1$s untuk memakainya di proyek yang sudah ada.</string>
     <string name="settings_agent_install_named">Pasang %1$s</string>

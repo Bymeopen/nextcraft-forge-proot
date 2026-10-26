@@ -147,6 +147,10 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // libproot.so (src/main/jniLibs) is executed, not dlopen'ed: it must be extracted to nativeLibraryDir.
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 

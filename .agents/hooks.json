@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /workspace/nextcraft-forge/.agents/scripts/security_gate.py",
+            "command": "python3 .agents/scripts/security_gate.py",
             "timeout": 5
           }
         ]
