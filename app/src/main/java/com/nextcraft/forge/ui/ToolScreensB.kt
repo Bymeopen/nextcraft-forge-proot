@@ -342,11 +342,11 @@ fun CiCdScreen(viewModel: MainViewModel) {
                             Text(prHeader, fontSize = ForgeType.rowTitle, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(prBranches, fontSize = ForgeType.caption, fontFamily = FontFamily.Monospace, color = scheme.onSurfaceVariant)
                         }
-                        ConfirmedAction(
+                        MergePrConfirmed(
                             title = stringResource(R.string.repo_pr_merge),
                             message = "#${pr.number} · ${pr.title} (${pr.headBranch} → ${pr.baseBranch})",
                             confirmLabel = stringResource(R.string.repo_pr_merge),
-                            onConfirm = { viewModel.cicd.mergePullRequest(pr.number) },
+                            onConfirm = { method -> viewModel.cicd.mergePullRequest(pr.number, method) },
                         ) { onClick ->
                             OutlinedButton(
                                 shape = RoundedCornerShape(100),

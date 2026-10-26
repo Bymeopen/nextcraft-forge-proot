@@ -181,10 +181,12 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
         if (!viewModel.projectBack(paneBesideChat = splitPane)) backTarget?.let(viewModel::selectTab)
     }
 
-    // Undo Snackbar for project deletion: the files stay on disk until the VM's undo window closes.
+    // Undo Snackbar for project and chat deletion: the files stay on disk until the VM's undo window closes.
     val snackbarHostState = remember { SnackbarHostState() }
     val undoDelete = state.undoDelete
     val deletedMessage = undoDelete?.let { stringResource(R.string.msg_project_deleted, it.name) }
+    val undoChatDelete = state.undoChatDelete
+    val deletedChatMessage = undoChatDelete?.let { stringResource(R.string.msg_project_deleted, it.title) }
     val undoLabel = stringResource(R.string.action_undo)
     LaunchedEffect(undoDelete) {
         if (undoDelete == null || deletedMessage == null) return@LaunchedEffect
@@ -195,6 +197,16 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
             duration = SnackbarDuration.Long,
         )
         if (result == SnackbarResult.ActionPerformed) viewModel.undoDeleteProject() else viewModel.clearUndoPrompt()
+    }
+    LaunchedEffect(undoChatDelete) {
+        if (undoChatDelete == null || deletedChatMessage == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = deletedChatMessage,
+            actionLabel = undoLabel,
+            withDismissAction = true,
+            duration = SnackbarDuration.Long,
+        )
+        if (result == SnackbarResult.ActionPerformed) viewModel.undoDeleteChat() else viewModel.clearChatUndoPrompt()
     }
 
     // targetSdk 35+ is edge-to-edge: adjustResize no longer resizes the window, so the IME, status and

@@ -273,6 +273,8 @@ data class ForgeUiState(
     val retryPrompts: Map<String, RetryPrompt> = emptyMap(),
     /** Set while a deleted project can still be restored; the UI shows a Snackbar with Undo. */
     val undoDelete: ProjectUndo? = null,
+    /** Set while a deleted chat can still be restored; the UI shows a Snackbar with Undo. */
+    val undoChatDelete: ChatUndo? = null,
     /** Parsed Android UI hierarchy nodes for the Visual UI Inspector & Tap-to-Edit mode in Preview. */
     val uiInspectorNodes: List<UiInspectorNode> = emptyList(),
     val uiInspectorBusy: Boolean = false,
@@ -323,6 +325,9 @@ data class QueuedPrompt(
 
 /** A project removed from the list whose files are kept until the undo window (UNDO_WINDOW_MS) passes. */
 data class ProjectUndo(val projectId: String, val name: String)
+
+/** A chat removed from the list whose messages/branch stay on disk until the undo window (UNDO_WINDOW_MS) passes. */
+data class ChatUndo(val projectId: String, val chatId: String, val title: String)
 
 /** Snapshot of one active agent turn across any project/chat, displayed in the Dynamic Multi-Agent Live HUD. */
 data class LiveAgentRunInfo(

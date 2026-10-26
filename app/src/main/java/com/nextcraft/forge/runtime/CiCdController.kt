@@ -138,7 +138,7 @@ class CiCdController(
         }
     }
 
-    fun mergePullRequest(number: Int) {
+    fun mergePullRequest(number: Int, mergeMethod: String = "squash") {
         val project = activeProject() ?: return
         mutable.update { it.copy(loading = true, message = null) }
         scope.launch {
@@ -147,14 +147,14 @@ class CiCdController(
                     val token = vault.get("GITHUB_TOKEN").orEmpty()
                     if (token.isBlank()) throw UiTextException(UiText.res(R.string.rt_cicd_connect_github))
                     val (owner, repo) = githubRepositoryOf(workspaceFor(project.id)) ?: error("No GitHub remote.")
-                    client.mergePullRequest(token, owner, repo, number)
+                    client.mergePullRequest(token, owner, repo, number, mergeMethod)
                 }
             }
             mutable.update {
                 it.copy(
                     loading = false,
                     message = result.fold(
-                        { UiText.Raw("PR #$number merged") },
+                        { UiText.Raw("PR #$number merged ($mergeMethod)") },
                         { e -> e.toUiText(R.string.rt_cicd_start_failed) },
                     ),
                 )
