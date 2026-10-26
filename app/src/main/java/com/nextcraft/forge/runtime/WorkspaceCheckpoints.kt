@@ -45,6 +45,8 @@ class WorkspaceCheckpoints(
 
     fun ensureWorkspace(projectId: String): File {
         val safeId = safeProjectId(projectId)
+        // A chat branch (its own clone of the project) registered a directory for its pseudo project id.
+        workspaceOverrides[safeId]?.let { return it.apply { mkdirs() } }
         val base = File(filesDir, "workspaces/$safeId").apply { mkdirs() }.canonicalFile
         val rootPath = projectRoots[safeId].orEmpty()
         if (rootPath.isBlank()) return base
@@ -95,13 +97,16 @@ class WorkspaceCheckpoints(
                             runCatching { directory.canonicalFile.toPath().startsWith(workspacePath) }.getOrDefault(false)
                         )
                 }
+                // Directories are already confined to the workspace by onEnter, so a regular file inside one cannot
+                // escape it; a canonicalFile() per file was a realpath walk for every file of every prompt.
                 .filter {
                     it.isFile &&
                         !isInternalRuntimePath(it.relativeTo(workspace).invariantSeparatorsPath) &&
-                        !Files.isSymbolicLink(it.toPath()) &&
-                        runCatching { it.canonicalFile.toPath().startsWith(workspacePath) }.getOrDefault(false)
+                        !Files.isSymbolicLink(it.toPath())
                 }
                 .forEach { source ->
+                    // A file only root can read (made by a build in the chroot) must not abort the whole turn.
+                    if (!source.canRead()) return@forEach
                     val relative = source.relativeTo(workspace).invariantSeparatorsPath
                     activeRelatives.add(relative)
                     val destination = safeWorkspaceFile(backup, relative)
@@ -119,7 +124,7 @@ class WorkspaceCheckpoints(
                         // Always copy bytes into a distinct inode so in-place O_TRUNC edits in
                         // workspace never overwrite the checkpoint baseline!
                         source.copyTo(destination, overwrite = true)
-                        runCatching { destination.setLastModified(source.lastModified()) }
+                        runCatching { destination.setLastModified(source.lastModified()) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("WorkspaceCheckpoints", it) }
                     }
                 }
             val backupPath = backup.canonicalFile.toPath()
@@ -258,6 +263,65 @@ class WorkspaceCheckpoints(
         }
     }
 
+    fun revertHunk(projectId: String, workspace: File, path: String, hunkIndex: Int): Boolean {
+        if (hunkIndex < 0) return false
+        val safeId = safeProjectId(projectId)
+        if (isInternalRuntimePath(path)) return false
+        return synchronized(lockFor(safeId)) {
+            val pending = readChangedPathsUnlocked(safeId)
+            if (path !in pending) return@synchronized false
+            val checkpoint = checkpointDir(safeId)
+            val backup = File(checkpoint, "project")
+            if (!backup.isDirectory) return@synchronized false
+            val target = safeWorkspaceFile(workspace, path)
+            val original = safeWorkspaceFile(backup, path)
+            if (!original.isFile || !target.isFile) {
+                return@synchronized revertFile(projectId, workspace, path)
+            }
+            val beforeBytes = original.readBytes()
+            val afterBytes = target.readBytes()
+            if (!beforeBytes.isProbablyText() || !afterBytes.isProbablyText()) {
+                return@synchronized revertFile(projectId, workspace, path)
+            }
+            val before = textLines(beforeBytes)
+            val after = textLines(afterBytes)
+            val rawDiff = computeRawDiffLines(before, after) ?: return@synchronized false
+            val tagged = assignHunkIndices(rawDiff)
+            val updatedLines = ArrayList<String>(after.size)
+            for ((line, hIdx) in tagged) {
+                if (hIdx == hunkIndex) {
+                    // Revert this hunk to `before` state: keep CONTEXT and DELETION, drop ADDITION
+                    if (line.type == DiffLineType.CONTEXT || line.type == DiffLineType.DELETION) {
+                        updatedLines += line.text
+                    }
+                } else {
+                    // Keep `after` state for all other hunks: keep CONTEXT and ADDITION, drop DELETION
+                    if (line.type == DiffLineType.CONTEXT || line.type == DiffLineType.ADDITION) {
+                        updatedLines += line.text
+                    }
+                }
+            }
+            if (updatedLines == before) {
+                original.copyTo(target, overwrite = true)
+            } else {
+                val useCrlf = afterBytes.toString(Charsets.UTF_8).contains("\r\n") || beforeBytes.toString(Charsets.UTF_8).contains("\r\n")
+                val lineSep = if (useCrlf) "\r\n" else "\n"
+                val hadTrailingNewline = afterBytes.isNotEmpty() && afterBytes.last() == '\n'.code.toByte()
+                val newText = updatedLines.joinToString(lineSep) + if (hadTrailingNewline && updatedLines.isNotEmpty()) lineSep else ""
+                target.writeText(newText, Charsets.UTF_8)
+            }
+            if (digest(target) == digest(original)) {
+                val remaining = pending.filterNot { it == path }
+                if (remaining.isEmpty()) {
+                    checkpoint.deleteRecursively()
+                } else {
+                    writeManifestAtomically(File(checkpoint, "changes.json"), JSONArray(remaining).toString())
+                }
+            }
+            true
+        }
+    }
+
     fun acceptAll(projectId: String) {
         val safeId = safeProjectId(projectId)
         synchronized(lockFor(safeId)) {
@@ -333,15 +397,17 @@ class WorkspaceCheckpoints(
         }
         val before = textLines(beforeBytes)
         val after = textLines(afterBytes)
-        if (before.size > MAX_RENDERED_DIFF_LINES || after.size > MAX_RENDERED_DIFF_LINES) {
-            return listOf(
-                DiffLine(
-                    DiffLineType.INFO,
-                    "Diff is too large to display (${before.size} → ${after.size} lines). Undo and Keep still work.",
-                ),
-            )
-        }
+        val raw = computeRawDiffLines(before, after) ?: return listOf(
+            DiffLine(
+                DiffLineType.INFO,
+                "Diff is too large to display (${before.size} → ${after.size} lines). Undo and Keep still work.",
+            ),
+        )
+        return collapseUnchangedLines(raw)
+    }
 
+    private fun computeRawDiffLines(before: List<String>, after: List<String>): List<DiffLine>? {
+        if (before.size > MAX_RENDERED_DIFF_LINES || after.size > MAX_RENDERED_DIFF_LINES) return null
         val lcs = Array(before.size + 1) { IntArray(after.size + 1) }
         for (oldIndex in before.lastIndex downTo 0) {
             for (newIndex in after.lastIndex downTo 0) {
@@ -373,7 +439,37 @@ class WorkspaceCheckpoints(
                 }
             }
         }
-        return collapseUnchangedLines(result)
+        return result
+    }
+
+    private fun assignHunkIndices(lines: List<DiffLine>): List<Pair<DiffLine, Int>> {
+        val changedIndexes = lines.indices.filter { lines[it].type != DiffLineType.CONTEXT }
+        if (changedIndexes.isEmpty()) return lines.map { it to -1 }
+        val visible = BooleanArray(lines.size)
+        changedIndexes.forEach { changed ->
+            for (index in maxOf(0, changed - DIFF_CONTEXT_LINES)..minOf(lines.lastIndex, changed + DIFF_CONTEXT_LINES)) {
+                visible[index] = true
+            }
+        }
+        val out = ArrayList<Pair<DiffLine, Int>>(lines.size)
+        var hunkId = 0
+        var inVisibleBlock = false
+        for (i in lines.indices) {
+            if (visible[i]) {
+                if (!inVisibleBlock) {
+                    inVisibleBlock = true
+                }
+                val tagged = lines[i].copy(hunkIndex = hunkId)
+                out += tagged to (if (lines[i].type != DiffLineType.CONTEXT) hunkId else -1)
+            } else {
+                if (inVisibleBlock) {
+                    hunkId++
+                    inVisibleBlock = false
+                }
+                out += lines[i] to -1
+            }
+        }
+        return out
     }
 
     private fun collapseUnchangedLines(lines: List<DiffLine>): List<DiffLine> {
@@ -387,13 +483,20 @@ class WorkspaceCheckpoints(
         }
         val result = mutableListOf<DiffLine>()
         var index = 0
+        var hunkId = 0
+        var seenVisibleBlock = false
         while (index < lines.size) {
             if (visible[index]) {
-                result += lines[index++]
+                seenVisibleBlock = true
+                result += lines[index++].copy(hunkIndex = hunkId)
             } else {
+                if (seenVisibleBlock) {
+                    hunkId++
+                    seenVisibleBlock = false
+                }
                 val start = index
                 while (index < lines.size && !visible[index]) index++
-                result += DiffLine(DiffLineType.INFO, "… ${index - start} unchanged lines …")
+                result += DiffLine(DiffLineType.INFO, "… ${index - start} unchanged lines …", hunkIndex = -1)
             }
         }
         return result
@@ -429,7 +532,7 @@ class WorkspaceCheckpoints(
 
     private fun textLines(bytes: ByteArray): List<String> {
         if (bytes.isEmpty() || !bytes.isProbablyText()) return emptyList()
-        val lines = bytes.toString(Charsets.UTF_8).split('\n')
+        val lines = bytes.toString(Charsets.UTF_8).split('\n').map { it.trimEnd('\r') }
         return if (lines.lastOrNull().isNullOrEmpty()) lines.dropLast(1) else lines
     }
 
@@ -475,13 +578,15 @@ class WorkspaceCheckpoints(
                         runCatching { directory.canonicalFile.toPath().startsWith(rootPath) }.getOrDefault(false)
                     )
             }
+            // onEnter already keeps the walk inside the root, so no per-file canonicalFile() is needed.
             .filter {
                 it.isFile &&
                     !isInternalRuntimePath(it.relativeTo(root).invariantSeparatorsPath) &&
-                    !Files.isSymbolicLink(it.toPath()) &&
-                    runCatching { it.canonicalFile.toPath().startsWith(rootPath) }.getOrDefault(false)
+                    !Files.isSymbolicLink(it.toPath())
             }
-            .associate { it.relativeTo(root).invariantSeparatorsPath to digest(it) }
+            // A file the app cannot read (root-owned, or removed meanwhile) is left out instead of failing the turn.
+            .mapNotNull { file -> runCatching { digest(file) }.getOrNull()?.let { file.relativeTo(root).invariantSeparatorsPath to it } }
+            .toMap()
     }
 
     fun changedFiles(root: File, before: Map<String, String>): List<String> {
@@ -537,6 +642,12 @@ class WorkspaceCheckpoints(
             ".git",
             ".gradle",
             ".idea",
+            // Kotlin compiler daemon state; Gradle builds in the chroot (root) leave unreadable files here.
+            ".kotlin",
+            // Chat branches: one clone of the project per chat lives in here (see ChatBranches).
+            ".forge",
+            // REA reports and sessions (see the REA tool).
+            ".rea",
             ".next",
             ".dart_tool",
             ".venv",
@@ -545,5 +656,16 @@ class WorkspaceCheckpoints(
         )
         private val BUILD_OUTPUT_DIRECTORY_NAMES = setOf("build", "dist", "target")
         private val projectLocks = ConcurrentHashMap<String, Any>()
+
+        /** Pseudo project ids of chat branches -> the clone directory they work in (shared by every instance). */
+        private val workspaceOverrides = ConcurrentHashMap<String, File>()
+
+        fun registerWorkspaceOverride(projectId: String, directory: File) {
+            workspaceOverrides[projectId] = directory
+        }
+
+        fun clearWorkspaceOverride(projectId: String) {
+            workspaceOverrides.remove(projectId)
+        }
     }
 }

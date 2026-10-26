@@ -2,6 +2,8 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -36,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.CrashReporter
 import com.nextcraft.forge.R
+import com.nextcraft.forge.runtime.BatteryOptimization
 import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.DevStack
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
@@ -69,8 +71,10 @@ fun ToolchainsScreen(state: ForgeUiState, viewModel: MainViewModel) {
                     }
                     when {
                         stack == DevStack.WEB -> Text(stringResource(R.string.tool_core), fontSize = ForgeType.secondary, color = LocalForgeThemeTokens.current.accentText)
-                        installed -> OutlinedButton(shape = RoundedCornerShape(100), onClick = { viewModel.removeStack(stack) }, enabled = !busy) {
-                            Text(stringResource(R.string.tool_remove))
+                        installed -> UninstallConfirmed(name = stack.displayLabel(), onConfirm = { viewModel.removeStack(stack) }) { ask ->
+                            OutlinedButton(shape = RoundedCornerShape(100), onClick = ask, enabled = !busy) {
+                                Text(stringResource(R.string.tool_remove))
+                            }
                         }
                         else -> OutlinedButton(shape = RoundedCornerShape(100), onClick = { viewModel.installStack(stack) }, enabled = !running) {
                             Text(stringResource(R.string.tool_install))
@@ -110,7 +114,9 @@ fun ToolchainsScreen(state: ForgeUiState, viewModel: MainViewModel) {
                                 Text(stringResource(R.string.settings_agent_update, update.latestVersion))
                             }
                         }
-                        ForgeTextButton(onClick = { viewModel.removeAgent(agent) }, enabled = !busy) { Text(stringResource(R.string.tool_remove)) }
+                        UninstallConfirmed(name = agent.displayTitle(), onConfirm = { viewModel.removeAgent(agent) }) { ask ->
+                            ForgeTextButton(onClick = ask, enabled = !busy) { Text(stringResource(R.string.tool_remove)) }
+                        }
                     }
                 }
             }
@@ -130,9 +136,9 @@ fun DiagnosticsScreen(viewModel: MainViewModel) {
         onBack = { viewModel.selectTab(ForgeTab.TOOLS) },
     ) {
         ToolSectionLabel(stringResource(R.string.tool_device))
-        ToolCard { diag.device.forEach { (key, value) -> KeyValueRow(key, value) } }
+        ToolCard { diag.device.forEach { (key, value) -> KeyValueRow(key.asString(), value.asString()) } }
         ToolSectionLabel(stringResource(R.string.tool_runtime))
-        ToolCard { diag.runtime.forEach { (key, value) -> KeyValueRow(key, value) } }
+        ToolCard { diag.runtime.forEach { (key, value) -> KeyValueRow(key.asString(), value.asString()) } }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(shape = RoundedCornerShape(100), onClick = viewModel.diagnostics::refresh, modifier = Modifier.weight(1f)) {
                 Text(stringResource(R.string.tool_refresh))
@@ -150,8 +156,26 @@ fun DiagnosticsScreen(viewModel: MainViewModel) {
                 )
             }
         }
+        // Many ROMs stop "optimized" apps mid-build; offer the exemption until it is granted.
+        val batteryContext = LocalContext.current
+        var batteryUnrestricted by remember { mutableStateOf(BatteryOptimization.isUnrestricted(batteryContext)) }
+        val batteryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            batteryUnrestricted = BatteryOptimization.isUnrestricted(batteryContext)
+            viewModel.diagnostics.refresh()
+        }
+        if (!batteryUnrestricted) {
+            OutlinedButton(
+                shape = RoundedCornerShape(100),
+                onClick = { BatteryOptimization.launch(batteryContext) { batteryLauncher.launch(it) } },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.tool_battery_unrestrict)) }
+        }
         diag.healthSummary?.let { Text(it, fontSize = ForgeType.control, fontWeight = FontWeight.Medium, color = LocalForgeThemeTokens.current.accentText) }
         LogBox(text = diag.healthOutput, placeholder = stringResource(R.string.tool_health_placeholder))
+
+        // Errors the app caught and carried on from: the trail a field problem used to leave nowhere.
+        ToolSectionLabel(stringResource(R.string.diag_recent_errors))
+        LogBox(text = diag.swallowedErrors, placeholder = stringResource(R.string.diag_no_recent_errors))
 
         // The full stack trace of the last crash, readable and copyable without adb.
         val context = LocalContext.current
@@ -166,6 +190,11 @@ fun DiagnosticsScreen(viewModel: MainViewModel) {
                     onClick = { clipboard.setText(AnnotatedString(crash.orEmpty())) },
                     modifier = Modifier.weight(1f),
                 )
+                OutlinedButton(
+                    shape = RoundedCornerShape(100),
+                    onClick = { CrashReporter.shareIntent(context)?.let { context.startActivity(it) } },
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.crash_prompt_share)) }
                 OutlinedButton(
                     shape = RoundedCornerShape(100),
                     onClick = {
@@ -187,7 +216,8 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
     var label by rememberSaveable { mutableStateOf("") }
     var pendingRestore by remember { mutableStateOf<WorkspaceSnapshot?>(null) }
     LaunchedEffect(state.activeProjectId) { viewModel.snapshots.refresh() }
-    val busy = state.sessionRunning || state.terminalRunning
+    val busy = state.sessionRunning || state.terminalRunning || state.buildingProjectIds.isNotEmpty()
+    val pendingChangesCount = state.changedItems.count { it.accepted == null }
     ToolScaffold(
         title = stringResource(R.string.tools_checkpoints),
         subtitle = snaps.projectName.ifBlank { stringResource(R.string.tools_checkpoints_desc) },
@@ -196,11 +226,11 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
         ToolSectionLabel(stringResource(R.string.tool_agent_changes))
         ToolCard {
             Text(
-                text = if (state.changedItems.isEmpty()) stringResource(R.string.tool_no_pending_changes)
-                else quantityStringResource(R.plurals.tool_pending_changes, state.changedItems.size, state.changedItems.size),
+                text = if (pendingChangesCount == 0) stringResource(R.string.tool_no_pending_changes)
+                else quantityStringResource(R.plurals.tool_pending_changes, pendingChangesCount, pendingChangesCount),
                 fontSize = ForgeType.control,
             )
-            if (state.changedItems.isNotEmpty()) {
+            if (pendingChangesCount > 0) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     ForgePrimaryButton(text = stringResource(R.string.tool_keep_all), onClick = viewModel::keepAllChanges, enabled = !busy, modifier = Modifier.weight(1f))
                     OutlinedButton(shape = RoundedCornerShape(100), onClick = viewModel::revertAllChanges, enabled = !busy, modifier = Modifier.weight(1f)) {
@@ -227,7 +257,7 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
                 enabled = !snaps.busy && state.activeProjectId.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             )
-            snaps.message?.let { Text(it, fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant) }
+            snaps.message?.let { Text(it.asString(), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant) }
         }
         if (snaps.snapshots.isEmpty()) {
             Text(stringResource(R.string.tool_no_snapshots), fontSize = ForgeType.control, color = scheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
@@ -254,7 +284,7 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
         }
     }
     pendingRestore?.let { target ->
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { pendingRestore = null },
             title = { Text(stringResource(R.string.tool_restore_title)) },
             text = { Text(stringResource(R.string.tool_restore_message, target.label)) },

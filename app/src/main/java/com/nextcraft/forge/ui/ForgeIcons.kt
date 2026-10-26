@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
  * navigation glyphs. Every icon is drawn in a 24-unit box; [ForgeIcon] scales it to [size].
  */
 enum class ForgeGlyph {
-    FOLDER, FILE, EDIT, TRASH, UPLOAD, DOWNLOAD, PLUS, INFO, LINK, REFRESH, SPARK, TERMINAL, SLIDERS, GLOBE, SHIELD, WARNING, SEARCH, CODE, HISTORY, LOCK, BUILD
+    FOLDER, FILE, EDIT, TRASH, UPLOAD, DOWNLOAD, PLUS, INFO, LINK, REFRESH, SPARK, TERMINAL, SLIDERS, GLOBE, SHIELD, WARNING, SEARCH, CODE, HISTORY, LOCK, BUILD, MIC
 }
 
 @Composable
@@ -64,6 +64,7 @@ fun ForgeIcon(
             ForgeGlyph.CODE -> { path { moveTo(8 * u, 7 * u); lineTo(3 * u, 12 * u); lineTo(8 * u, 17 * u) }; path { moveTo(16 * u, 7 * u); lineTo(21 * u, 12 * u); lineTo(16 * u, 17 * u) } }
             ForgeGlyph.HISTORY -> { drawArc(tint, -150f, 300f, false, p(4f, 4f), Size(16 * u, 16 * u), style = stroke); path { moveTo(4 * u, 4 * u); lineTo(4 * u, 9 * u); lineTo(9 * u, 9 * u) }; path { moveTo(12 * u, 8 * u); lineTo(12 * u, 12 * u); lineTo(15 * u, 14 * u) } }
             ForgeGlyph.LOCK -> { rr(5f, 11f, 14f, 10f, 2.5f); drawArc(tint, 180f, 180f, false, p(8f, 4f), Size(8 * u, 12 * u), style = stroke); line(8f, 10f, 8f, 11f); line(16f, 10f, 16f, 11f) }
+            ForgeGlyph.MIC -> { rr(9f, 3f, 6f, 11f, 3f); drawArc(tint, 0f, 180f, false, p(5f, 5f), Size(14 * u, 12 * u), style = stroke); line(12f, 17f, 12f, 21f); line(9f, 21f, 15f, 21f) }
             ForgeGlyph.BUILD -> { path { moveTo(14 * u, 5 * u); quadraticBezierTo(18 * u, 4 * u, 19 * u, 8 * u); lineTo(16 * u, 11 * u); lineTo(13 * u, 8 * u); close() }; line(13f, 10f, 5f, 18f); line(5f, 18f, 6f, 19f); line(6f, 19f, 14f, 11f) }
         }
     }

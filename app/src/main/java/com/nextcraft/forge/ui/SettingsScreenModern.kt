@@ -2,6 +2,8 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -102,10 +105,12 @@ fun SettingsScreenModern(
     val isProvisioning = state.setupSnapshot.status == RuntimeSetupStatus.RUNNING
     val runtimeBusy = !state.runtimeInstalled || isProvisioning
 
+    val scroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .forgeFadingVertical(scroll, MaterialTheme.colorScheme.background)
+            .verticalScroll(scroll)
             .padding(start = 14.dp, end = 14.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -116,7 +121,7 @@ fun SettingsScreenModern(
         )
 
         // ───────────────────────── General ─────────────────────────
-        ForgeSectionLabel(stringResource(R.string.settings_general), horizontalPadding = 6.dp)
+        ForgeSectionLabel(stringResource(R.string.settings_general), horizontalPadding = 6.dp, topPadding = 8.dp)
         ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
             val activeThemeMode = ForgeThemeMode.fromStored(state.themeMode)
             var appearanceOpen by rememberSaveable { mutableStateOf(false) }
@@ -128,46 +133,20 @@ fun SettingsScreenModern(
                 trailing = { Chevron(appearanceOpen) },
             )
             AnimatedVisibility(visible = appearanceOpen) {
-                // 2 × 2 tiles: icon-less by design, the badge carries the name; selection by accent tint + ring.
-                Column(
-                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ForgeThemeMode.entries.chunked(2).forEach { pair ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            pair.forEach { mode ->
-                                val selected = mode == activeThemeMode
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = if (selected) scheme.primary.copy(alpha = 0.12f) else tokens.cardElevatedColor,
-                                    border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, scheme.primary.copy(alpha = 0.6f)) else null,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 76.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable(role = Role.RadioButton) { viewModel.setThemeMode(mode.id) }
-                                        .forgeSelected(selected),
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalArrangement = Arrangement.Center,
-                                    ) {
-                                        Text(
-                                            text = stringResource(mode.title),
-                                            fontSize = ForgeType.body,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = if (selected) scheme.primary else scheme.onSurface,
-                                        )
-                                        Text(
-                                            text = stringResource(mode.subtitle),
-                                            fontSize = ForgeType.caption,
-                                            color = scheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                            }
-                            if (pair.size == 1) Spacer(modifier = Modifier.weight(1f))
-                        }
+                Column {
+                    ThemeModeGrid(active = activeThemeMode, onSelect = viewModel::setThemeMode)
+                    if (activeThemeMode == ForgeThemeMode.GLASS) {
+                        val glassContext = androidx.compose.ui.platform.LocalContext.current
+                        SettingsRow(
+                            icon = ForgeGlyph.SLIDERS,
+                            title = stringResource(R.string.settings_glass_solid),
+                            subtitle = stringResource(R.string.settings_glass_solid_desc),
+                            onClick = {
+                                glassUserSolid = !glassUserSolid
+                                com.nextcraft.forge.data.AppPreferences(glassContext).glassSolid = glassUserSolid
+                            },
+                            trailing = { androidx.compose.material3.Switch(checked = glassUserSolid, onCheckedChange = null) },
+                        )
                     }
                 }
             }
@@ -179,7 +158,7 @@ fun SettingsScreenModern(
             SettingsRow(
                 icon = ForgeGlyph.GLOBE,
                 title = stringResource(R.string.settings_language),
-                subtitle = activeLanguage.nativeName,
+                subtitle = if (activeLanguage == AppLanguage.SYSTEM) stringResource(R.string.settings_language_system) else activeLanguage.nativeName,
                 onClick = { languageOpen = !languageOpen },
                 trailing = { Chevron(languageOpen) },
             )
@@ -187,7 +166,7 @@ fun SettingsScreenModern(
                 Column(modifier = Modifier.padding(bottom = 6.dp)) {
                     languages.forEach { lang ->
                         RadioRow(
-                            title = lang.nativeName,
+                            title = if (lang == AppLanguage.SYSTEM) stringResource(R.string.settings_language_system) else lang.nativeName,
                             subtitle = lang.displayName,
                             selected = lang == activeLanguage,
                             onClick = { viewModel.setLanguageCode(lang.code) },
@@ -223,21 +202,74 @@ fun SettingsScreenModern(
             ThinDivider()
 
             ForgeToggleRow(
-                title = stringResource(R.string.settings_high_risk_command_approvals),
-                subtitle = stringResource(R.string.settings_prompt_before_executing_destructive),
-                checked = state.interactiveHighRiskApprovals,
-                onCheckedChange = viewModel::setInteractiveHighRiskApprovals,
+                title = stringResource(R.string.settings_auto_keep_changes),
+                subtitle = stringResource(R.string.settings_auto_keep_changes_subtitle),
+                checked = state.autoKeepChanges,
+                onCheckedChange = viewModel::setAutoKeepChanges,
                 modifier = Modifier.padding(horizontal = 14.dp),
             )
             ForgeToggleRow(
-                title = stringResource(R.string.settings_auto_approve_all_tools),
-                subtitle = stringResource(R.string.settings_auto_approve_all_tools_subtitle),
-                checked = state.autoApproveAllTools,
-                onCheckedChange = viewModel::setAutoApproveAllTools,
+                title = stringResource(R.string.settings_android_host_tools),
+                subtitle = stringResource(R.string.settings_android_host_tools_subtitle),
+                checked = state.androidHostTools,
+                onCheckedChange = viewModel::setAndroidHostTools,
                 modifier = Modifier.padding(horizontal = 14.dp),
             )
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_game_templates),
+                subtitle = stringResource(R.string.settings_game_templates_subtitle),
+                checked = state.gameTemplatesEnabled,
+                onCheckedChange = viewModel::setGameTemplatesEnabled,
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+        }
+
+        // ───────────────────────── Agent ─────────────────────────
+        ForgeSectionLabel(stringResource(R.string.settings_section_agent), horizontalPadding = 6.dp, topPadding = 8.dp)
+        ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_rea_chat_hint),
+                subtitle = stringResource(R.string.settings_rea_chat_hint_subtitle),
+                checked = state.reaChatHint,
+                onCheckedChange = viewModel::setReaChatHint,
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_schedule_agent),
+                subtitle = stringResource(R.string.settings_schedule_agent_subtitle),
+                checked = state.scheduleEnabled,
+                onCheckedChange = viewModel::setScheduleEnabled,
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+        }
+
+        // ───────────────────────── Tool approval ─────────────────────────
+        // One choice instead of two switches that excluded each other: the app already keeps them mutually exclusive.
+        ForgeSectionLabel(stringResource(R.string.settings_approval_title), horizontalPadding = 6.dp, topPadding = 8.dp)
+        ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
+            RadioRow(
+                title = stringResource(R.string.settings_approval_ask),
+                subtitle = stringResource(R.string.settings_prompt_before_executing_destructive),
+                selected = !state.autoApproveAllTools && state.interactiveHighRiskApprovals,
+                onClick = { viewModel.setInteractiveHighRiskApprovals(true) },
+            )
+            RadioRow(
+                title = stringResource(R.string.settings_approval_block),
+                subtitle = stringResource(R.string.settings_approval_block_subtitle),
+                selected = !state.autoApproveAllTools && !state.interactiveHighRiskApprovals,
+                onClick = {
+                    viewModel.setAutoApproveAllTools(false)
+                    viewModel.setInteractiveHighRiskApprovals(false)
+                },
+            )
+            RadioRow(
+                title = stringResource(R.string.settings_auto_approve_all_tools),
+                subtitle = stringResource(R.string.settings_auto_approve_all_tools_subtitle),
+                selected = state.autoApproveAllTools,
+                onClick = { viewModel.setAutoApproveAllTools(true) },
+            )
             if (state.autoApproveAllTools) {
-                // Both switches together mean nothing is ever confirmed: say so where the user is looking.
+                // Approving everything means nothing is ever confirmed: say so where the user is looking.
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.Top,
@@ -254,7 +286,7 @@ fun SettingsScreenModern(
         }
 
         // ───────────────────────── Developer tools ─────────────────────────
-        ForgeSectionLabel(stringResource(R.string.settings_runtime), horizontalPadding = 6.dp)
+        ForgeSectionLabel(stringResource(R.string.settings_runtime), horizontalPadding = 6.dp, topPadding = 8.dp)
         var toolsOpen by rememberSaveable { mutableStateOf(true) }
         val optionalInstalled = state.installedDevStacks.count { it != DevStack.WEB }
         DisclosureCard(
@@ -282,8 +314,10 @@ fun SettingsScreenModern(
                                 ForgeStatusIcon(ForgeStatus.DONE, iconSize = 16.dp)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(stringResource(R.string.settings_agent_installed), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
-                                ForgeTextButton(onClick = { viewModel.removeStack(stack) }, enabled = !runtimeBusy) {
-                                    Text(stringResource(R.string.settings_remove), color = tokens.dangerText)
+                                UninstallConfirmed(name = stack.displayLabel(), onConfirm = { viewModel.removeStack(stack) }) { ask ->
+                                    ForgeTextButton(onClick = ask, enabled = !runtimeBusy) {
+                                        Text(stringResource(R.string.settings_remove), color = tokens.dangerText)
+                                    }
                                 }
                             }
                             else -> OutlinedButton(
@@ -336,11 +370,51 @@ fun SettingsScreenModern(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(stringResource(R.string.settings_clear_terminal_history))
                 }
+                var cachesOpen by remember { mutableStateOf(false) }
+                OutlinedButton(
+                    shape = RoundedCornerShape(100),
+                    onClick = { cachesOpen = true; viewModel.loadRuntimeCacheSizes() },
+                    enabled = !state.sessionRunning && state.buildingProjectIds.isEmpty(),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                ) {
+                    ForgeIcon(glyph = ForgeGlyph.TRASH, tint = MaterialTheme.colorScheme.onSurface, size = 16.dp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(stringResource(R.string.settings_clear_caches))
+                }
+                if (cachesOpen) {
+                    val sizes = state.runtimeCacheSizes
+                    ForgeAlertDialog(
+                        modifier = Modifier.forgePopIn(),
+                        onDismissRequest = { cachesOpen = false },
+                        shape = RoundedCornerShape(24.dp),
+                        title = { Text(stringResource(R.string.settings_clear_caches), fontWeight = FontWeight.SemiBold) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(stringResource(R.string.settings_clear_caches_message))
+                                com.nextcraft.forge.runtime.RuntimeCaches.Kind.entries.forEach { kind ->
+                                    KeyValueRow(kind.label, sizes?.get(kind.name)?.let(::cacheSizeLabel) ?: "…")
+                                }
+                                if (sizes != null) {
+                                    KeyValueRow(stringResource(R.string.settings_clear_caches_total), cacheSizeLabel(sizes.values.sum()))
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = { cachesOpen = false; viewModel.clearRuntimeCaches() },
+                                enabled = sizes != null && sizes.values.sum() > 0 && !state.sessionRunning && state.buildingProjectIds.isEmpty(),
+                            ) { Text(stringResource(R.string.settings_clear_caches_confirm), color = tokens.dangerText) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { cachesOpen = false }) { Text(stringResource(R.string.agent_cancel)) }
+                        },
+                    )
+                }
             }
         }
 
         // ───────────────────────── Danger zone ─────────────────────────
-        ForgeSectionLabel(stringResource(R.string.settings_danger_zone), horizontalPadding = 6.dp)
+        ForgeSectionLabel(stringResource(R.string.settings_danger_zone), horizontalPadding = 6.dp, topPadding = 8.dp)
         ForgeThemedCard(
             modifier = Modifier.fillMaxWidth(),
             border = androidx.compose.foundation.BorderStroke(1.dp, tokens.dangerText.copy(alpha = 0.45f)),
@@ -356,7 +430,7 @@ fun SettingsScreenModern(
         }
 
         // ───────────────────────── About ─────────────────────────
-        ForgeSectionLabel(stringResource(R.string.settings_about), horizontalPadding = 6.dp)
+        ForgeSectionLabel(stringResource(R.string.settings_about), horizontalPadding = 6.dp, topPadding = 8.dp)
         ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
             SettingsRow(
                 icon = ForgeGlyph.INFO,
@@ -364,12 +438,43 @@ fun SettingsScreenModern(
                 trailing = { Text("v${BuildConfig.VERSION_NAME}", color = scheme.onSurfaceVariant, fontSize = ForgeType.control) },
             )
             ThinDivider()
+            // What changed in this build: read here instead of a phone notification after each update.
+            var whatsNewOpen by rememberSaveable { mutableStateOf(false) }
+            SettingsRow(
+                icon = ForgeGlyph.INFO,
+                title = stringResource(R.string.chg_notif_channel),
+                onClick = { whatsNewOpen = !whatsNewOpen },
+                trailing = { Text(if (whatsNewOpen) "⌄" else "›", color = scheme.onSurfaceVariant) },
+            )
+            if (whatsNewOpen) {
+                Text(
+                    stringResource(R.string.chg_notif_text),
+                    fontSize = ForgeType.secondary,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                )
+            }
+            ThinDivider()
             SettingsRow(
                 icon = ForgeGlyph.REFRESH,
                 title = stringResource(R.string.settings_check_for_app_updates),
                 subtitle = state.updateStatusMessage ?: stringResource(R.string.settings_check_updates_sub),
                 onClick = { viewModel.checkForAppUpdates() },
                 trailing = { Text("›", color = scheme.onSurfaceVariant) },
+            )
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_update_notify),
+                subtitle = stringResource(R.string.settings_update_notify_sub),
+                checked = state.updateNotifications,
+                onCheckedChange = viewModel::setUpdateNotifications,
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+            ForgeToggleRow(
+                title = stringResource(R.string.settings_auto_install_updates),
+                subtitle = stringResource(R.string.settings_auto_install_updates_sub),
+                checked = state.autoInstallUpdates,
+                onCheckedChange = viewModel::setAutoInstallUpdates,
+                modifier = Modifier.padding(horizontal = 14.dp),
             )
             state.updateProgress?.let { fraction ->
                 LinearProgressIndicator(
@@ -436,7 +541,7 @@ internal fun AntigravityAccountCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = agyAuth.message ?: stringResource(R.string.settings_google_required),
+                        text = agyAuth.message?.asString() ?: stringResource(R.string.settings_google_required),
                         fontSize = ForgeType.secondary,
                         color = scheme.onSurfaceVariant,
                         maxLines = 2,
@@ -490,7 +595,7 @@ internal fun AntigravityAccountCard(
                             text = stringResource(R.string.settings_complete_sign_in),
                             onClick = {
                                 if (agyVerificationCode.isNotBlank()) {
-                                    runCatching { viewModel.antigravityAuth.submitCode(agyVerificationCode.trim()) }
+                                    runCatching { viewModel.antigravityAuth.submitCode(agyVerificationCode.trim()) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SettingsScreenModern", it) }
                                     agyVerificationCode = ""
                                 }
                             },
@@ -581,12 +686,12 @@ internal fun AntigravityAccountCard(
                         Chevron(expanded = false)
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Stacked, not side by side: the long hint used to squeeze the label into two ragged lines.
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         text = stringResource(R.string.agent_reasoning_depth),
                         fontSize = ForgeType.secondary,
                         color = scheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
                     )
                     Text(
                         text = stringResource(
@@ -602,6 +707,7 @@ internal fun AntigravityAccountCard(
                 }
                 ForgePillTabs(
                     items = listOf(stringResource(R.string.agent_effort_low), stringResource(R.string.agent_effort_medium), stringResource(R.string.agent_effort_high)),
+                    equalWidth = true,
                     selectedIndex = effortIndex,
                     onSelect = {
                         onAgyEffortChange(efforts[it])
@@ -740,8 +846,6 @@ internal fun RadioRow(
                     fontSize = ForgeType.secondary,
                     color = scheme.onSurfaceVariant,
                     fontFamily = if (mono) FontFamily.Monospace else null,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -752,8 +856,17 @@ internal fun RadioRow(
 @Composable
 internal fun KeyValueRow(key: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(key, fontSize = ForgeType.body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        Text(value, fontSize = ForgeType.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(key, fontSize = ForgeType.body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.widthIn(max = 140.dp).padding(end = 12.dp))
+        // A long value (installed stacks, agent versions) wraps and ends at the right edge; it must not push the label out.
+        Text(
+            value,
+            fontSize = ForgeType.body,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+        )
     }
 }
 
@@ -767,4 +880,62 @@ internal fun SetupProgress(state: ForgeUiState, scope: SetupScope? = null) {
     if (status == RuntimeSetupStatus.RUNNING || status == RuntimeSetupStatus.ERROR) {
         RuntimeProgressPanel(state.setupSnapshot)
     }
+}
+
+/** 2 × 2 theme tiles: icon-less by design, the title carries the name; selection by accent tint + ring. Tiles in a row share one height. */
+@Composable
+internal fun ThemeModeGrid(active: ForgeThemeMode, onSelect: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val tokens = LocalForgeThemeTokens.current
+    Column(
+        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ForgeThemeMode.entries.chunked(2).forEach { pair ->
+            // IntrinsicSize.Min + fillMaxHeight: both tiles in a row are as tall as the taller one.
+            Row(modifier = Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                pair.forEach { mode ->
+                    val selected = mode == active
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (selected) scheme.primary.copy(alpha = 0.12f) else tokens.cardElevatedColor,
+                        border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, scheme.primary.copy(alpha = 0.6f)) else null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .heightIn(min = 76.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable(role = Role.RadioButton) { onSelect(mode.id) }
+                            .forgeSelected(selected),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.Top,
+                        ) {
+                            Text(
+                                text = stringResource(mode.title),
+                                fontSize = ForgeType.body,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (selected) scheme.primary else scheme.onSurface,
+                            )
+                            Text(
+                                text = stringResource(mode.subtitle),
+                                fontSize = ForgeType.caption,
+                                color = scheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (pair.size == 1) Spacer(modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** "412 MB" style size for the cache list. */
+private fun cacheSizeLabel(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> String.format(java.util.Locale.US, "%.1f GB", bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> "${bytes shr 20} MB"
+    bytes > 0 -> "${maxOf(1, bytes shr 10)} KB"
+    else -> "0"
 }

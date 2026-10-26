@@ -1,1 +1,0 @@
-/workspace/nextcraft-forge-chroot/app/src/main/cpp/CMakeLists.txt

@@ -5,15 +5,18 @@ import com.nextcraft.forge.network.DiscoveredModel
 
 /** Antigravity ids offered before `agy models` has been run (the live list from the signed-in account replaces them). */
 private val ANTIGRAVITY_PRESETS = listOf(
-    "gemini-3.8-flash-high",
+    "claude-sonnet-5-5-low",
+    "claude-sonnet-5-5-medium",
+    "claude-sonnet-5-5-high",
+    "claude-opus-5-5-low",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5-high",
+    "gemini-3.8-flash-low",
     "gemini-3.8-flash-medium",
-    "gemini-3.6-flash-high",
-    "gemini-3.6-flash-medium",
-    "gemini-3.6-flash-low",
-    "gemini-3.1-pro-high",
-    "gemini-3.1-pro-low",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6-thinking",
+    "gemini-3.8-flash-high",
+    "gemini-4-argon-low",
+    "gemini-4-argon-medium",
+    "gemini-4-argon-high",
     "gpt-oss-120b-medium",
 )
 
@@ -59,9 +62,16 @@ internal fun antigravityModelOptions(liveModels: List<String>, current: String):
 internal fun providerPresetModels(kind: ProviderKind): List<ModelOption> = when (kind) {
     ProviderKind.CLAUDE -> listOf(
         ModelOption("default", "Default (recommended for your plan)", labelRes = com.nextcraft.forge.R.string.model_default_recommended),
-        ModelOption("sonnet", "Claude Sonnet", "latest"),
-        ModelOption("opus", "Claude Opus", "latest"),
-        ModelOption("haiku", "Claude Haiku", "fast"),
+        ModelOption("sonnet", "Claude Sonnet (latest)", "latest"),
+        ModelOption("opus", "Claude Opus (latest)", "latest"),
+        ModelOption("haiku", "Claude Haiku (latest)", "fast"),
+        ModelOption("claude-fable-5-1", "Claude Fable 5.1", "5.1"),
+        ModelOption("claude-opus-5-5", "Claude Opus 5.5", "5.5"),
+        ModelOption("claude-sonnet-5-5", "Claude Sonnet 5.5", "5.5"),
+        ModelOption("claude-haiku-5-5", "Claude Haiku 5.5", "5.5"),
+        ModelOption("claude-sonnet-4-6", "Claude Sonnet 4.6", "4.6"),
+        ModelOption("sonnet[1m]", "Claude Sonnet (1M context)", "1M"),
+        ModelOption("opus[1m]", "Claude Opus (1M context)", "1M"),
         ModelOption("opusplan", "Opus plans, Sonnet builds", labelRes = com.nextcraft.forge.R.string.model_opusplan),
     )
     ProviderKind.LLM_ROUTER -> listOf(

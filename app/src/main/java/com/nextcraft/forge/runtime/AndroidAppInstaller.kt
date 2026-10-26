@@ -65,6 +65,11 @@ object AndroidAppInstaller {
 
         Thread({
             val apkHash = runCatching { fingerprint(apk) }.getOrNull()
+            // Own update: with root, replace the app without the system dialog (the app restarts itself). A failure leaves
+            // the old build in place and falls through to the normal installer below.
+            if (isSelfUpdate && com.nextcraft.forge.update.SilentSelfUpdate.install(appContext, apk)) {
+                return@Thread
+            }
             if (!isSelfUpdate && pkgName != null && apkHash != null && installSilentlyViaRoot(apk)) {
                 rememberInstalled(appContext, pkgName, apkHash)
                 val launched = launchAfterInstall && launch(appContext, pkgName)
@@ -197,7 +202,7 @@ object AndroidAppInstaller {
                 session.commit(pending.intentSender)
             }
         } catch (error: Throwable) {
-            runCatching { installer.abandonSession(sessionId) }
+            runCatching { installer.abandonSession(sessionId) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAppInstaller", it) }
             throw error
         }
     }

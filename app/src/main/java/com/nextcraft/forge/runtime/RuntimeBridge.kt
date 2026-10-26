@@ -45,10 +45,18 @@ object RuntimeTaskController {
         if (action != null) hooks.entries.removeAll { it.value === action }
     }
 
+    /** True while any agent session or build holds a stop hook, i.e. while work is running. */
+    @Synchronized
+    fun hasActiveTask(): Boolean = hooks.isNotEmpty()
+
     /** Stops only the task of [kind]. */
     fun stop(kind: String) {
-        val action = synchronized(this) { hooks.remove(kind) }
-        action?.invoke()
+        // Parallel chats register as "agent:<sessionId>"; stopping the kind stops all of them.
+        val actions = synchronized(this) {
+            val keys = hooks.keys.filter { it == kind || it.startsWith("$kind:") }
+            keys.mapNotNull { hooks.remove(it) }
+        }
+        actions.forEach { it() }
     }
 
     /** Stops every running task (the shared notification's Stop action, app teardown). */
@@ -71,6 +79,9 @@ object RuntimeExecutionServiceContract {
     const val ACTION_CANCELLED = "com.nextcraft.forge.runtime.action.CANCELLED"
     const val EXTRA_PROJECT_NAME = "com.nextcraft.forge.runtime.extra.PROJECT_NAME"
     const val EXTRA_DETAIL = "com.nextcraft.forge.runtime.extra.DETAIL"
+    /** Fixed phrases travel as a string resource id plus format args, so the service words them in the app language. */
+    const val EXTRA_DETAIL_RES = "com.nextcraft.forge.runtime.extra.DETAIL_RES"
+    const val EXTRA_DETAIL_ARGS = "com.nextcraft.forge.runtime.extra.DETAIL_ARGS"
 
     private fun resolveServiceClass(): Class<*>? =
         runCatching { Class.forName(SERVICE_CLASS_NAME) }.getOrNull()
@@ -84,7 +95,7 @@ object RuntimeExecutionServiceContract {
                     .setAction(ACTION_START)
                     .putExtra(EXTRA_PROJECT_NAME, projectName),
             )
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
     }
 
     fun pushProgress(context: Context, projectName: String?, detail: String) {
@@ -96,7 +107,7 @@ object RuntimeExecutionServiceContract {
                     .putExtra(EXTRA_PROJECT_NAME, projectName)
                     .putExtra(EXTRA_DETAIL, detail),
             )
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
     }
 
     fun finishForeground(context: Context, completed: Boolean, projectName: String, detail: String, tag: String = "RuntimeBridge") {
@@ -110,7 +121,23 @@ object RuntimeExecutionServiceContract {
             )
         }.onFailure { error ->
             Log.w(tag, "Could not post task result notification", error)
-            runCatching { context.stopService(Intent(context, cls)) }
+            runCatching { context.stopService(Intent(context, cls)) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
+        }
+    }
+
+    fun finishForegroundRes(context: Context, completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, args: Array<String>, tag: String = "RuntimeBridge") {
+        val cls = resolveServiceClass() ?: return
+        runCatching {
+            context.startService(
+                Intent(context, cls)
+                    .setAction(if (completed) ACTION_COMPLETE else ACTION_FAILED)
+                    .putExtra(EXTRA_PROJECT_NAME, projectName)
+                    .putExtra(EXTRA_DETAIL_RES, detailRes)
+                    .putExtra(EXTRA_DETAIL_ARGS, args),
+            )
+        }.onFailure { error ->
+            Log.w(tag, "Could not post task result notification", error)
+            runCatching { context.stopService(Intent(context, cls)) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
         }
     }
 
@@ -119,7 +146,7 @@ object RuntimeExecutionServiceContract {
         runCatching {
             context.startService(Intent(context, cls).setAction(ACTION_CANCELLED))
         }.onFailure {
-            runCatching { context.stopService(Intent(context, cls)) }
+            runCatching { context.stopService(Intent(context, cls)) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
         }
     }
 }
@@ -166,6 +193,58 @@ internal fun List<ChatMessage>.recentWithinCharacterBudget(maxCharacters: Int): 
 internal fun localServerPlaceholderKey(profile: ProviderProfile): String =
     if (profile.kind == ProviderKind.CUSTOM) "no-key-required" else ""
 
+/** Effort levels Claude Code accepts in CLAUDE_CODE_EFFORT_LEVEL. */
+val CLAUDE_EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max")
+
+/**
+ * Shared factual-accuracy and anti-hallucination rules injected into every coding agent and AI provider prompt
+ * (Claude Code, Antigravity CLI, DeepSeek Harness, Anthropic API, OpenRouter, Kimi, OpenCode Zen, NVIDIA NIM, Custom API).
+ */
+internal val ANTI_HALLUCINATION_RULES: List<String> = listOf(
+    "Strict anti-hallucination & factual accuracy policy (applies to every AI provider and model):",
+    "- Never fabricate, guess, or hallucinate file paths, class/function/symbol names, APIs, library versions, command outputs, or test/build results.",
+    "- Always read and inspect the actual workspace files before referencing, editing, or explaining them.",
+    "- Never claim a build, test, command, or fix succeeded unless you actually executed it with a tool and verified its exit code and output.",
+    "- If a file, symbol, dependency, or tool is missing, or if an operation fails, report the exact factual state or error honestly instead of inventing a workaround or pretending it worked.",
+)
+
+internal fun buildAgentWorkspacePrompt(
+    currentPrompt: String,
+    /** Earlier messages the agent has not seen (see [unseenBy]), oldest first. */
+    priorMessages: List<ChatMessage>,
+    guestWorkspacePath: String,
+    projectKind: ProjectKind,
+    androidStackInstalled: Boolean,
+    maxHistoryChars: Int,
+    /** The agent resumes its own session and only needs the messages another agent answered since. */
+    resumed: Boolean = false,
+): String {
+    val recent = priorMessages.recentWithinCharacterBudget(maxHistoryChars)
+    val sb = StringBuilder()
+    sb.appendLine("<project_workspace>")
+    if (projectKind == ProjectKind.QUICK_PROJECT) {
+        sb.appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
+        sb.appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
+        sb.appendLine("Keep every file and command inside this project workspace.")
+    } else {
+        sb.appendLine("The current working directory $guestWorkspacePath is the project root.")
+        sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
+        sb.appendLine("When giving commands to the user, make them runnable from this project root.")
+    }
+    if (androidStackInstalled) {
+        AndroidToolchain.AGENT_PROMPT_LINES.forEach(sb::appendLine)
+    } else {
+        sb.appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
+    }
+    sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
+    ANTI_HALLUCINATION_RULES.forEach(sb::appendLine)
+    sb.appendLine("</project_workspace>")
+    sb.appendLine()
+    sb.appendConversationHistory(recent, guestWorkspacePath, resumed)
+    sb.appendLine(currentPrompt)
+    return sb.toString()
+}
+
 object RuntimeLaunchConfigBuilder {
     fun build(
         profile: ProviderProfile,
@@ -176,6 +255,8 @@ object RuntimeLaunchConfigBuilder {
          * so no token is passed. (A token in CLAUDE_CODE_OAUTH_TOKEN is never refreshed and expires within hours.)
          */
         useStoredLogin: Boolean = false,
+        /** Claude Code effort level; blank or unknown values leave the CLI's default. */
+        claudeEffort: String = "",
     ): RuntimeLaunchConfig {
         val cleanToken = authToken?.trim().orEmpty()
         val isClaudeOAuthToken = cleanToken.startsWith("sk-ant-oat")
@@ -212,7 +293,8 @@ object RuntimeLaunchConfigBuilder {
                 }
             }
             ProviderProtocol.ANTHROPIC -> {
-                environment["ANTHROPIC_BASE_URL"] = profile.resolvedBaseUrl.trim().trimEnd('/')
+                // Claude Code appends /v1/messages itself; a base URL saved with /v1 would hit /v1/v1/messages.
+                environment["ANTHROPIC_BASE_URL"] = profile.resolvedBaseUrl.trim().trimEnd('/').removeSuffix("/v1")
                 environment["ANTHROPIC_MODEL"] = profile.model
             }
             ProviderProtocol.ANTHROPIC_GATEWAY -> {
@@ -233,6 +315,7 @@ object RuntimeLaunchConfigBuilder {
                 environment["ANTHROPIC_MODEL"] = "claude-sonnet-4-6"
             }
         }
+        claudeEffort.trim().lowercase().takeIf { it in CLAUDE_EFFORT_LEVELS }?.let { environment["CLAUDE_CODE_EFFORT_LEVEL"] = it }
         val runtimeModel = environment["ANTHROPIC_MODEL"] ?: profile.model
         if (useClaudeOAuth) {
             if (cleanToken.isNotBlank()) {
@@ -284,4 +367,67 @@ object RuntimeLaunchConfigBuilder {
             environment = environment,
         )
     }
+}
+
+/**
+ * An agent's own saved conversation for one chat (Claude Code session, agy conversation) and how many chat messages
+ * it had seen when it was saved. Messages after that count were answered by another agent, so the next turn gets them
+ * as text. [tag] ties the session to where it can be resumed (provider and workspace); a different tag starts afresh.
+ * Stored as "id|count|tag"; a bare id (older builds) has an unknown count.
+ */
+internal data class SavedConversation(val id: String, val messageCount: Int = -1, val tag: String = "") {
+    fun encode(): String = "$id|$messageCount|$tag"
+
+    companion object {
+        fun decode(raw: String?): SavedConversation? {
+            if (raw.isNullOrBlank()) return null
+            val parts = raw.split('|', limit = 3)
+            return SavedConversation(parts[0], parts.getOrNull(1)?.toIntOrNull() ?: -1, parts.getOrNull(2).orEmpty())
+                .takeIf { it.id.isNotBlank() }
+        }
+    }
+}
+
+/** Chat messages worth giving an agent: no greeting placeholder and no error bubbles. */
+internal fun List<ChatMessage>.usefulForAgent(): List<ChatMessage> = filter { msg ->
+    (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
+        !msg.text.startsWith("Failed to") &&
+        !msg.text.startsWith("Error:") &&
+        !msg.text.contains("API Error")
+}
+
+/**
+ * The messages of [history] (current prompt last) an agent resuming [saved] has not seen: all earlier ones when there
+ * is no saved conversation, only the newer ones when there is, none when the saved count is unknown.
+ */
+internal fun List<ChatMessage>.unseenBy(saved: SavedConversation?): List<ChatMessage> {
+    val prior = dropLast(1)
+    val unseen = when {
+        saved == null -> prior
+        saved.messageCount < 0 || saved.messageCount >= prior.size -> emptyList()
+        else -> prior.drop(saved.messageCount)
+    }
+    return unseen.usefulForAgent()
+}
+
+/** The `<conversation_history>` block; [resumed] says the agent already remembers what came before these messages. */
+internal fun StringBuilder.appendConversationHistory(messages: List<ChatMessage>, guestWorkspacePath: String, resumed: Boolean) {
+    if (messages.isEmpty()) return
+    appendLine("<conversation_history>")
+    appendLine(
+        if (resumed) "These messages were exchanged in this chat with another assistant since your last reply. Take them into account."
+        else "The following is our prior conversation in this project. Continue naturally from where we left off.",
+    )
+    appendLine()
+    for (msg in messages) {
+        appendLine("${if (msg.fromUser) "User" else "Assistant"}: ${msg.text}")
+        if (msg.attachments.isNotEmpty()) {
+            appendLine("Attached files:")
+            msg.attachments.forEach { appendLine("- ${it.displayName}: $guestWorkspacePath/${it.relativePath} (${it.mimeType})") }
+        }
+        appendLine()
+    }
+    appendLine("</conversation_history>")
+    appendLine()
+    appendLine("Now, respond to this new message from the user:")
 }

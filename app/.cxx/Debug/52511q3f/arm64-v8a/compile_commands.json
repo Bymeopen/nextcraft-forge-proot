@@ -1,8 +1,0 @@
-[
-{
-  "directory": "/workspace/nextcraft-forge-chroot/app/.cxx/Debug/52511q3f/arm64-v8a",
-  "command": "/root/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang --target=aarch64-none-linux-android26 --sysroot=/root/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/sysroot -Dforgespawn_EXPORTS -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -fno-limit-debug-info  -fPIC -Wall -Wextra -O2 -fPIC -o CMakeFiles/forgespawn.dir/forge_spawn.c.o -c /workspace/nextcraft-forge-chroot/app/src/main/cpp/forge_spawn.c",
-  "file": "/workspace/nextcraft-forge-chroot/app/src/main/cpp/forge_spawn.c",
-  "output": "/workspace/nextcraft-forge-chroot/app/.cxx/Debug/52511q3f/arm64-v8a/CMakeFiles/forgespawn.dir/forge_spawn.c.o"
-}
-]

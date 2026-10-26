@@ -5,6 +5,7 @@ package com.nextcraft.forge.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
@@ -65,9 +65,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.unit.Density
@@ -119,6 +121,10 @@ import androidx.compose.foundation.layout.imePadding
 
 private const val NAV_MAX_FONT_SCALE = 1.3f
 
+// Bottom inset at or below this is the gesture-navigation handle strip; the bar overlaps its top GESTURE_INSET_TRIM.
+private val GESTURE_INSET_MAX = 34.dp
+private val GESTURE_INSET_TRIM = 10.dp
+
 internal data class NavEntry(val tab: ForgeTab, @StringRes val label: Int)
 
 /** Global bar: five destinations; Terminal also appears inside the project bar. */
@@ -144,7 +150,7 @@ internal val fullWidthTabs = setOf(ForgeTab.TERMINAL, ForgeTab.FILES, ForgeTab.P
 // Screens reachable from the Tools launcher keep the Tools tab highlighted.
 private val toolsGroup = setOf(
     ForgeTab.TOOLS, ForgeTab.FILES, ForgeTab.ANDROID, ForgeTab.PREVIEW,
-    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS,
+    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA, ForgeTab.BACKUP,
 )
 
 private fun ForgeTab.navIndex(): Int {
@@ -165,11 +171,16 @@ internal fun ForgeBottomBar(
     agentRunning: Boolean,
     terminalBusy: Boolean,
     onSelectTab: (ForgeTab) -> Unit,
+    /** Long-press on a tab (opens the command palette); null = no long-press action. */
+    onLongPressTab: (() -> Unit)? = null,
 ) {
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
     val reduceMotion = rememberReduceMotion()
     val haptics = LocalHapticFeedback.current
+    val tap = { tab: ForgeTab -> haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); onSelectTab(tab) }
+    val longPressLabel = onLongPressTab?.let { stringResource(R.string.palette_title) }
+    val onLongPress = onLongPressTab?.let { open -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); open() } }
     // Global entries collapse the Tools group onto Tools; the project bar matches its keys directly.
     val selectedIndex = entries.indexOfFirst { it.tab == selectedTab }.takeIf { it >= 0 } ?: selectedTab.navIndex()
     val pillOffset by animateFloatAsState(
@@ -185,29 +196,45 @@ internal fun ForgeBottomBar(
     val pillEdge = scheme.primary.copy(alpha = 0.30f)
     val pillShape = RoundedCornerShape(if (floating) 100 else 22)
 
+    // Glass on Android 12+: the bar blurs and refracts the screen behind it; otherwise the translucent surface below.
+    val backdrop = LocalForgeBackdrop.current.takeIf { floating }
     Surface(
         shape = shape,
-        color = tokens.bottomBarContainerColor,
+        color = if (backdrop != null) Color.Transparent else tokens.bottomBarContainerColor,
         contentColor = scheme.onSurface,
         border = if (floating) tokens.cardBorderStroke else null,
         shadowElevation = if (floating) 12.dp else 0.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(outerPadding),
+            .padding(outerPadding)
+            .forgeGlassSurface(backdrop, tokens.bottomBarContainerColor),
     ) {
-        Column(modifier = Modifier.navigationBarsPadding().windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))) {
+        // Gesture navigation only needs a thin strip for its handle: keep the bar close to it instead of floating a full
+        // extra inset above the screen edge. Three-button navigation keeps its whole inset so the bar never sits under
+        // the buttons.
+        val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val bottomInset = if (navInset <= GESTURE_INSET_MAX) (navInset - GESTURE_INSET_TRIM).coerceAtLeast(0.dp) else navInset
+        Column(
+            modifier = Modifier
+                .padding(bottom = bottomInset)
+                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
+        ) {
             if (!floating) Divider(color = scheme.outlineVariant, thickness = 0.5.dp)
             // Taller with larger system text, and labels stop scaling at 1.3x (five tabs share the width).
             val density = LocalDensity.current
             val navFontScale = density.fontScale.coerceAtMost(NAV_MAX_FONT_SCALE)
-            val barHeight = 72.dp + 16.dp * (navFontScale - 1f).coerceAtLeast(0f)
+            val compactHeight = rememberCompactHeight()
+            val barHeight = (if (compactHeight) 56.dp else 66.dp) + 16.dp * (navFontScale - 1f).coerceAtLeast(0f)
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(barHeight)
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .padding(horizontal = 6.dp, vertical = if (compactHeight) 2.dp else 6.dp),
             ) {
                 val slot = maxWidth / entries.size
+                val labels = entries.map { stringResource(it.label) }
+                val longestLabel = labels.maxOf { it.length }
                 val pillInset = if (entries.size >= 5) 2.dp else 6.dp
                 // Pill: the only moving object. A radial gradient drawn behind it gives the soft outward glow
                 // (no blur, so it costs nothing on low-end GPUs). White skips the glow: it would look muddy.
@@ -227,7 +254,8 @@ internal fun ForgeBottomBar(
                                         brush = Brush.radialGradient(
                                             colors = listOf(scheme.primary.copy(alpha = 0.28f), Color.Transparent),
                                             center = center,
-                                            radius = size.maxDimension * 0.62f,
+                                            // Half the short side: the glow fades out inside the slot. A larger radius is cut off by the slot edge and shows as a faint rectangle.
+                                            radius = size.minDimension / 2f,
                                         ),
                                     )
                                 },
@@ -273,10 +301,13 @@ internal fun ForgeBottomBar(
                                 .weight(1f)
                                 .fillMaxHeight()
                                 .clip(pillShape)
-                                .clickable(role = Role.Tab, onClickLabel = label) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onSelectTab(entry.tab)
-                                }
+                                .combinedClickable(
+                                    role = Role.Tab,
+                                    onClickLabel = label,
+                                    onLongClick = onLongPress,
+                                    onLongClickLabel = longPressLabel,
+                                    onClick = { tap(entry.tab) },
+                                )
                                 .forgeSelected(selected),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
@@ -307,7 +338,12 @@ internal fun ForgeBottomBar(
                             CompositionLocalProvider(LocalDensity provides Density(density.density, navFontScale)) {
                                 Text(
                                     text = label,
-                                    fontSize = ForgeType.caption,
+                                    // One size for every tab: when any label is long, all labels on the narrow bar shrink together.
+                                    fontSize = when {
+                                        slot < 76.dp && longestLabel >= 9 -> ForgeType.navCompact * 0.92f
+                                        slot < 76.dp -> ForgeType.navCompact
+                                        else -> ForgeType.caption
+                                    },
                                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                                     color = tint,
                                     maxLines = 1,

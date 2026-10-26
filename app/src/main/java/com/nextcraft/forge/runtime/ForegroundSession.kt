@@ -23,9 +23,16 @@ internal class ForegroundSession(
     @Volatile private var startedAt = 0L
     @Volatile private var lastProgressAt = 0L
     @Volatile private var resultPosted = false
+    /**
+     * True between [start] and the finish/cancel call. The service counts one task per start and one per finish, so
+     * every started session must send exactly one finish (the service itself keeps the notification and the wake lock
+     * until the last task is done), and a session that never started must send none.
+     */
+    @Volatile private var started = false
 
     /** Marks the start of a turn: resets the timer, the progress throttle and the posted-result guard. */
     fun begin() {
+        started = false
         startedAt = SystemClock.elapsedRealtime()
         lastProgressAt = 0L
         resultPosted = false
@@ -37,6 +44,9 @@ internal class ForegroundSession(
     }
 
     fun start(projectName: String) {
+        // Several chats can run at once; the service counts the tasks and outlives all of them.
+        if (started) return
+        started = true
         RuntimeExecutionServiceContract.startForeground(context, projectName)
     }
 
@@ -53,12 +63,25 @@ internal class ForegroundSession(
     fun finish(completed: Boolean, projectName: String, detail: String) {
         if (resultPosted) return
         resultPosted = true
+        if (!started) return
+        started = false
         RuntimeExecutionServiceContract.finishForeground(context, completed, projectName, detail, tag)
+    }
+
+    /** Same as [finish] for a fixed phrase: the service words [detailRes] in the app language. */
+    fun finishRes(completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, vararg args: String) {
+        if (resultPosted) return
+        resultPosted = true
+        if (!started) return
+        started = false
+        RuntimeExecutionServiceContract.finishForegroundRes(context, completed, projectName, detailRes, arrayOf(*args), tag)
     }
 
     fun cancel() {
         if (resultPosted) return
         resultPosted = true
+        if (!started) return
+        started = false
         RuntimeExecutionServiceContract.cancelForeground(context)
     }
 

@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -46,6 +48,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -152,7 +156,7 @@ fun rememberImeVisible(): State<Boolean> {
 fun forgeBackTarget(tab: ForgeTab): ForgeTab? = when (tab) {
     ForgeTab.PROJECTS -> null
     ForgeTab.FILES, ForgeTab.ANDROID, ForgeTab.PREVIEW,
-    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS,
+    ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX, ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA, ForgeTab.BACKUP,
     -> ForgeTab.TOOLS
     ForgeTab.TERMINAL, ForgeTab.AGENT, ForgeTab.TOOLS, ForgeTab.SETTINGS -> ForgeTab.PROJECTS
 }
@@ -226,6 +230,8 @@ fun ForgeSectionLabel(
     text: String,
     modifier: Modifier = Modifier,
     horizontalPadding: Dp = 20.dp,
+    /** Space above the label. A parent that already spaces its children (spacedBy) passes less so the gap is not doubled. */
+    topPadding: Dp = ForgeSpace.section,
 ) {
     Text(
         text = text.uppercase(),
@@ -234,7 +240,7 @@ fun ForgeSectionLabel(
         letterSpacing = ForgeType.sectionTracking,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier
-            .padding(start = horizontalPadding, end = horizontalPadding, top = ForgeSpace.section, bottom = ForgeSpace.labelToCard)
+            .padding(start = horizontalPadding, end = horizontalPadding, top = topPadding, bottom = ForgeSpace.labelToCard)
             .forgeHeading(),
     )
 }
@@ -336,10 +342,10 @@ fun ForgePillIcon(
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .forgePressScale(interaction, pressedScale = 0.88f)
-            .size(width = 44.dp, height = 38.dp)
+            .forgePressScale(interaction, pressedScale = 0.88f, haptic = true)
+            .size(width = 48.dp, height = 48.dp) // 48 dp is the minimum touch target
             .clip(RoundedCornerShape(100))
-            .clickable(interactionSource = interaction, indication = androidx.compose.material.ripple.rememberRipple(), enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -361,12 +367,18 @@ fun ForgePillTabs(
     modifier: Modifier = Modifier,
     onLongPress: ((Int) -> Unit)? = null,
     longPressLabel: String? = null,
+    /** A few short options (e.g. Low / Medium / High): equal-width segments that fill the row instead of scrolling. */
+    equalWidth: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val scroll = rememberScrollState()
+    // Equal segments only while they can hold their labels; more than three options scroll instead of being cut to "R…".
+    val equalWidth = equalWidth && items.size <= 3
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
+            // The fade at a cut edge tells the reader there are more tabs to scroll to.
+            .then(if (equalWidth) Modifier else Modifier.forgeFadingEdges(scroll, scheme.background).horizontalScroll(scroll))
             .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
     ) {
@@ -374,6 +386,7 @@ fun ForgePillTabs(
             val selected = index == selectedIndex
             Box(
                 modifier = Modifier
+                    .then(if (equalWidth) Modifier.weight(1f) else Modifier.widthIn(max = 168.dp))
                     .heightIn(min = 40.dp)
                     .clip(RoundedCornerShape(100))
                     .background(if (selected) scheme.onSurface.copy(alpha = 0.09f) else Color.Transparent)
@@ -385,14 +398,16 @@ fun ForgePillTabs(
                         onClick = { onSelect(index) },
                     )
                     .forgeSelected(selected)
-                    .padding(horizontal = 15.dp),
+                    .padding(horizontal = if (equalWidth) 8.dp else 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = label,
-                    fontSize = ForgeType.body,
+                    // Equal segments are narrower (a third of the row at 360dp): one size down keeps "Antigravity" whole.
+                    fontSize = if (equalWidth) ForgeType.control else ForgeType.body,
                     color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
                     maxLines = 1,
+                    overflow = TextOverflow.MiddleEllipsis,
                 )
             }
         }
@@ -413,7 +428,7 @@ fun ForgePrimaryButton(
         enabled = enabled,
         shape = RoundedCornerShape(100),
         interactionSource = interaction,
-        modifier = modifier.forgePressScale(interaction).heightIn(min = 44.dp),
+        modifier = modifier.forgePressScale(interaction, haptic = true).heightIn(min = 44.dp),
     ) {
         Text(text = text, fontWeight = FontWeight.SemiBold)
     }
@@ -429,5 +444,115 @@ fun rememberReduceMotion(): Boolean {
             android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
             1f,
         ) == 0f
+    }
+}
+
+/**
+ * Vertical twin of [forgeFadingEdges]: fades the top and bottom edge of a scrolling screen into [background] while more
+ * content continues past it, so a row cut off by the bottom bar reads as "scroll for more" and not as a clipping bug.
+ */
+fun Modifier.forgeFadingVertical(scroll: androidx.compose.foundation.ScrollState, background: Color, height: Dp = 24.dp): Modifier = this
+    .drawWithContent {
+        drawContent()
+        val h = height.toPx()
+        if (scroll.value > 0) {
+            drawRect(
+                brush = androidx.compose.ui.graphics.Brush.verticalGradient(listOf(background, Color.Transparent), startY = 0f, endY = h),
+                size = Size(size.width, h),
+            )
+        }
+        if (scroll.value < scroll.maxValue) {
+            drawRect(
+                brush = androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, background), startY = size.height - h, endY = size.height),
+                topLeft = Offset(0f, size.height - h),
+                size = Size(size.width, h),
+            )
+        }
+    }
+
+/**
+ * Fades the edge of a horizontally scrolling row into [background] wherever more content continues past it. A plain
+ * gradient drawn over the content: no offscreen layer or blend mode, so it renders the same on every device.
+ */
+fun Modifier.forgeFadingEdges(scroll: androidx.compose.foundation.ScrollState, background: Color, width: Dp = 28.dp): Modifier = this
+    .drawWithContent {
+        drawContent()
+        val w = width.toPx()
+        if (scroll.value > 0) {
+            drawRect(
+                brush = androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(background, Color.Transparent), startX = 0f, endX = w),
+                size = Size(w, size.height),
+            )
+        }
+        if (scroll.value < scroll.maxValue) {
+            drawRect(
+                brush = androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color.Transparent, background), startX = size.width - w, endX = size.width),
+                topLeft = Offset(size.width - w, 0f),
+                size = Size(w, size.height),
+            )
+        }
+    }
+
+/** Compact live system resource bar (RAM free, App heap, Battery) with a 1-tap Clean Idle Daemons button. */
+@Composable
+fun LiveResourceMiniBar(
+    onCleanIdleDaemons: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val tokens = LocalForgeThemeTokens.current
+    val scheme = MaterialTheme.colorScheme
+    val stats = remember { mutableStateOf("") }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context, forceRefresh = true)
+            val mem = android.app.ActivityManager.MemoryInfo()
+            context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mem)
+            val freeGb = String.format(java.util.Locale.US, "%.1f", mem.availMem / (1024.0 * 1024.0 * 1024.0))
+            val totalGb = String.format(java.util.Locale.US, "%.1f GB", mem.totalMem / (1024.0 * 1024.0 * 1024.0))
+            val swapStr = if (hw.swap.hasActiveSwap) {
+                val swapUsedGb = String.format(java.util.Locale.US, "%.1f", hw.swap.swapUsedMb / 1024.0)
+                val swapTotalGb = String.format(java.util.Locale.US, "%.1f GB", hw.swap.swapTotalMb / 1024.0)
+                " · Swap $swapUsedGb/$swapTotalGb"
+            } else {
+                ""
+            }
+            val bat = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            val level = bat?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = bat?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val batStr = if (level >= 0 && scale > 0) " · ${level * 100 / scale}%" else ""
+            stats.value = "${hw.socVendor.shortBadge} · RAM $freeGb/$totalGb$swapStr$batStr"
+            kotlinx.coroutines.delay(5_000)
+        }
+    }
+    if (stats.value.isEmpty()) return
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = stats.value,
+            fontSize = ForgeType.caption,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            color = scheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = stringResource(R.string.resource_clean_daemons),
+            fontSize = ForgeType.caption,
+            fontWeight = FontWeight.SemiBold,
+            color = tokens.accentText,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(scheme.primary.copy(alpha = 0.12f))
+                .clickable(role = Role.Button, onClick = onCleanIdleDaemons)
+                .padding(horizontal = 10.dp, vertical = 3.dp),
+        )
     }
 }

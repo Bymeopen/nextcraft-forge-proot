@@ -1,13 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Halo lembut di belakang chevron (pengganti glow) -->
     <path
-        android:fillColor="#38BDF8"
-        android:pathData="M34,36L50,54L34,72L29,67L40.5,54L29,41L34,36z" />
+        android:pathData="M32,36 L52,54 L32,72"
+        android:strokeColor="#3338BDF8"
+        android:strokeWidth="14"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Chevron prompt dengan gradasi biru ke hijau -->
     <path
-        android:fillColor="#34D399"
-        android:pathData="M54,65h24v7h-24z" />
+        android:pathData="M32,36 L52,54 L32,72"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="32" android:startY="36"
+                android:endX="52" android:endY="72"
+                android:startColor="#38BDF8"
+                android:endColor="#34D399" />
+        </aapt:attr>
+    </path>
+    <!-- Kursor -->
+    <path
+        android:pathData="M58,72 L78,72"
+        android:strokeColor="#34D399"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+    <!-- Spark percikan tempa -->
+    <path
+        android:pathData="M72,30 C73,35.5 74.5,36.5 80,38 C74.5,39.5 73,40.5 72,46 C71,40.5 69.5,39.5 64,38 C69.5,36.5 71,35.5 72,30Z"
+        android:fillColor="#FBBF24" />
 </vector>

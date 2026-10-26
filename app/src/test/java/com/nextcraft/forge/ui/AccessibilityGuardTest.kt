@@ -59,8 +59,8 @@ class AccessibilityGuardTest {
     }
 
     private companion object {
-        // Audited: all 14 sit beside visible text or inside a control with onClickLabel (expand chevrons,
-        // leading icons, status glyphs). Tightened from 38 (18 before the unused ForgeTopBar was removed) so a new unlabeled icon fails the test.
-        const val BASELINE = 14
+        // Audited: all 15 sit beside visible text or inside a control with onClickLabel (expand chevrons,
+        // leading icons, status glyphs, the logo beside the app name on the projects home). Tightened from 38 (18 before the unused ForgeTopBar was removed) so a new unlabeled icon fails the test.
+        const val BASELINE = 15
     }
 }

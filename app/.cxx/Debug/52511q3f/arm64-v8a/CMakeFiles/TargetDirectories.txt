@@ -1,3 +1,0 @@
-/workspace/nextcraft-forge-chroot/app/.cxx/Debug/52511q3f/arm64-v8a/CMakeFiles/forgespawn.dir
-/workspace/nextcraft-forge-chroot/app/.cxx/Debug/52511q3f/arm64-v8a/CMakeFiles/edit_cache.dir
-/workspace/nextcraft-forge-chroot/app/.cxx/Debug/52511q3f/arm64-v8a/CMakeFiles/rebuild_cache.dir

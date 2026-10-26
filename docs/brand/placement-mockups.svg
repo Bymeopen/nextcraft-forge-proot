@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 620" width="920" height="620" font-family="Inter,Helvetica,Arial,sans-serif">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0A0A0A"/><stop offset="1" stop-color="#000"/></linearGradient>
+<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="32" y1="36" x2="52" y2="72"><stop offset="0" stop-color="#38BDF8"/><stop offset="1" stop-color="#34D399"/></linearGradient>
+<clipPath id="sq"><rect width="108" height="108" rx="26"/></clipPath><g id="ic"><g clip-path="url(#sq)"><rect width="108" height="108" fill="url(#bg)"/><path d="M32,36 L52,54 L32,72" fill="none" stroke="#38BDF8" stroke-opacity=".2" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/><path d="M32,36 L52,54 L32,72" fill="none" stroke="url(#g)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M58,72 H78" stroke="#34D399" stroke-width="8" stroke-linecap="round"/><path d="M72,30 C73,35.5 74.5,36.5 80,38 C74.5,39.5 73,40.5 72,46 C71,40.5 69.5,39.5 64,38 C69.5,36.5 71,35.5 72,30Z" fill="#FBBF24"/></g><rect x=".5" y=".5" width="107" height="107" rx="25.5" fill="none" stroke="#fff" stroke-opacity=".18"/></g></defs>
+<rect width="920" height="620" fill="#27272A"/>
+<text x="40" y="30" fill="#F9FAFB" font-size="18" font-weight="700">Contoh penempatan logo dan tagline (mockup)</text>
+<g transform="translate(40,70)"><rect width="260" height="520" rx="30" fill="#000" stroke="#52525B" stroke-width="3"/>
+<text x="130" y="-14" fill="#D1D5DB" font-size="15" text-anchor="middle" font-weight="600">1. Layar awal</text>
+<rect x="105" y="10" width="50" height="6" rx="3" fill="#27272A"/><g transform="translate(82,130) scale(.9)"><use href="#ic"/></g>
+<text x="130" y="262" fill="#F9FAFB" font-size="22" font-weight="700" text-anchor="middle">NextCraft Forge</text>
+<text x="130" y="288" fill="#9CA3AF" font-size="13" text-anchor="middle">Forge your dreams with AI.</text>
+<rect x="55" y="330" width="150" height="42" rx="21" fill="url(#g)"/><text x="130" y="356" fill="#000" font-size="14" font-weight="700" text-anchor="middle">New project</text>
+<text x="130" y="470" fill="#6B7280" font-size="11" text-anchor="middle">v1.0</text></g><g transform="translate(330,70)"><rect width="260" height="520" rx="30" fill="#000" stroke="#52525B" stroke-width="3"/>
+<text x="130" y="-14" fill="#D1D5DB" font-size="15" text-anchor="middle" font-weight="600">2. Settings / About</text>
+<rect x="105" y="10" width="50" height="6" rx="3" fill="#27272A"/><text x="20" y="52" fill="#F9FAFB" font-size="18" font-weight="700">Settings</text>
+<g transform="translate(20,72) scale(.5)"><use href="#ic"/></g>
+<text x="86" y="98" fill="#F9FAFB" font-size="15" font-weight="700">NextCraft Forge</text>
+<text x="86" y="116" fill="#9CA3AF" font-size="11">Forge your dreams with AI.</text>
+<text x="86" y="132" fill="#6B7280" font-size="10">Version 1.0</text>
+<rect x="16" y="160" width="228" height="52" rx="12" fill="#111827"/><text x="30" y="182" fill="#F9FAFB" font-size="13" font-weight="600">Theme</text><text x="30" y="200" fill="#9CA3AF" font-size="11">Dark</text><rect x="16" y="220" width="228" height="52" rx="12" fill="#111827"/><text x="30" y="242" fill="#F9FAFB" font-size="13" font-weight="600">Language</text><text x="30" y="260" fill="#9CA3AF" font-size="11">English</text><rect x="16" y="280" width="228" height="52" rx="12" fill="#111827"/><text x="30" y="302" fill="#F9FAFB" font-size="13" font-weight="600">API keys</text><text x="30" y="320" fill="#9CA3AF" font-size="11">3 providers</text><rect x="16" y="340" width="228" height="52" rx="12" fill="#111827"/><text x="30" y="362" fill="#F9FAFB" font-size="13" font-weight="600">About</text><text x="30" y="380" fill="#9CA3AF" font-size="11">Licenses, version</text></g><g transform="translate(620,70)"><rect width="260" height="520" rx="30" fill="#000" stroke="#52525B" stroke-width="3"/>
+<text x="130" y="-14" fill="#D1D5DB" font-size="15" text-anchor="middle" font-weight="600">3. Top bar</text>
+<rect x="105" y="10" width="50" height="6" rx="3" fill="#27272A"/><rect y="30" width="260" height="56" fill="#0A0A0A"/><g transform="translate(16,42) scale(.3)"><use href="#ic"/></g>
+<text x="58" y="63" fill="#F9FAFB" font-size="15" font-weight="700">NextCraft Forge</text>
+<circle cx="236" cy="58" r="3" fill="#9CA3AF"/><circle cx="224" cy="58" r="3" fill="#9CA3AF"/>
+<rect x="16" y="110" width="170" height="44" rx="14" fill="#111827"/><text x="28" y="137" fill="#D1D5DB" font-size="12">Create a todo app</text>
+<rect x="60" y="170" width="184" height="70" rx="14" fill="#0F2A24"/><text x="72" y="196" fill="#A7F3D0" font-size="12">Scaffolding project...</text><text x="72" y="216" fill="#6EE7B7" font-size="11">&gt; gradle assembleDebug</text>
+<rect x="16" y="460" width="228" height="42" rx="21" fill="#111827"/><text x="34" y="486" fill="#6B7280" font-size="12">Message...</text></g></svg>

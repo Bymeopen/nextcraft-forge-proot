@@ -1,7 +1,0 @@
-# ninja log v5
-1	328	1792291044964051667	CMakeFiles/forgespawn.dir/forge_spawn.c.o	8b143a505e046e96
-333	475	1792291045112051667	/workspace/nextcraft-forge-chroot/app/build/intermediates/cxx/Debug/52511q3f/obj/arm64-v8a/libforgespawn.so	75d283be3835b637
-28	474	1792325800868484054	CMakeFiles/forgespawn.dir/forge_spawn.c.o	8b143a505e046e96
-475	635	1792325801036484054	/workspace/nextcraft-forge-chroot/app/build/intermediates/cxx/Debug/52511q3f/obj/arm64-v8a/libforgespawn.so	75d283be3835b637
-1	450	1792329117556482789	CMakeFiles/forgespawn.dir/forge_spawn.c.o	8b143a505e046e96
-451	647	1792329117756482789	/workspace/nextcraft-forge-chroot/app/build/intermediates/cxx/Debug/52511q3f/obj/arm64-v8a/libforgespawn.so	75d283be3835b637

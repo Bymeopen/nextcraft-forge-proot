@@ -62,11 +62,11 @@ internal class OpenRouterRoutingGateway(
             runCatching {
                 socket.soTimeout = SOCKET_TIMEOUT_MS
                 socket.tcpNoDelay = true
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
             try {
                 workers.execute { runCatching { socket.use(::handle) } } // client disconnects must not escape as uncaught exceptions (crashes the app)
             } catch (_: java.util.concurrent.RejectedExecutionException) {
-                runCatching { socket.close() }
+                runCatching { socket.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
             }
         }
     }
@@ -159,7 +159,7 @@ internal class OpenRouterRoutingGateway(
         allowRetry: Boolean,
     ): Boolean {
         val currentKey = activeApiKey
-        val connection = URL(endpoint).openConnection() as HttpURLConnection
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).also(upstreamConnections::add).apply { instanceFollowRedirects = false }
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 20_000
@@ -212,9 +212,13 @@ internal class OpenRouterRoutingGateway(
             output.flush()
             return true
         } finally {
+            upstreamConnections.remove(connection)
             connection.disconnect()
         }
     }
+
+    /** Open upstream calls; close() disconnects them so a stopped session stops spending the user's quota. */
+    private val upstreamConnections: MutableSet<HttpURLConnection> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private fun isAuthorized(headers: Map<String, String>): Boolean {
         val presented = headers["x-api-key"]
@@ -241,7 +245,7 @@ internal class OpenRouterRoutingGateway(
                 }
                 else -> Unit
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
     }
 
     /** Reads an HTTP/1.1 chunked body, or returns null when it is malformed or larger than [MAX_REQUEST_BYTES]. */
@@ -298,8 +302,9 @@ internal class OpenRouterRoutingGateway(
 
     override fun close() {
         running.set(false)
-        runCatching { server.close() }
+        runCatching { server.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
         workers.shutdown()
+        upstreamConnections.toList().forEach { runCatching { it.disconnect() } }
     }
 
     private companion object {

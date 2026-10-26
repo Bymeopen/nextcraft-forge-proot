@@ -32,6 +32,9 @@ internal object RootfsRepair {
         // Never copyRecursively a rootfs: it follows symlinks and drops ownership, modes and
         // special files. A root `mv` preserves all of them (and is a plain rename on one fs).
         if (target.exists()) return false
+        require(RootPathGuard.isInsideAppData(source.canonicalPath) && RootPathGuard.isInsideAppData(target.canonicalPath)) {
+            "Refusing to move outside the app data directory"
+        }
         val exit = runRootCommand(
             "su", "-c",
             "mv -- ${shellSingleQuote(source.absolutePath)} ${shellSingleQuote(target.absolutePath)}",
@@ -56,14 +59,24 @@ internal object RootfsRepair {
         val quotedRootfs = shellSingleQuote(canonicalPath)
         val unmountScript = """
             ROOTFS_PATH=$quotedRootfs
+            # A launch that is mounting holds this lock; wait for it so its mounts are not added after the sweep below.
+            # New launches see the maintenance marker (see [beginMaintenance]) and stop before mounting anything.
+            if [ -d "${'$'}ROOTFS_PATH" ]; then
+                exec 9>"${'$'}ROOTFS_PATH/.nextcraft-mount.lock" 2>/dev/null && { flock 9 2>/dev/null || busybox flock 9 2>/dev/null || true; }
+            fi
+            mounts_at_or_under() {
+                while read -r _ mp _; do
+                    case "${'$'}mp" in "${'$'}1"|"${'$'}1"/*) printf '%s\n' "${'$'}mp" ;; esac
+                done < /proc/mounts
+            }
             # Make every mount under the rootfs private before unmounting: the Bionic directories are recursive copies of
             # shared Android mounts, and unmounting a copy that is still a peer would also unmount the original.
-            for mp in ${'$'}(awk -v prefix="${'$'}ROOTFS_PATH/" -v exact="${'$'}ROOTFS_PATH" 'index(${'$'}2, prefix) == 1 || ${'$'}2 == exact { print ${'$'}2 }' /proc/mounts | sort); do
+            for mp in ${'$'}(mounts_at_or_under "${'$'}ROOTFS_PATH" | sort); do
                 mount --make-private "${'$'}mp" 2>/dev/null || mount -o private "${'$'}mp" 2>/dev/null || true
             done
 
             for pass in 1 2 3; do
-                MOUNTS=${'$'}(awk -v prefix="${'$'}ROOTFS_PATH/" -v exact="${'$'}ROOTFS_PATH" 'index(${'$'}2, prefix) == 1 || ${'$'}2 == exact { print ${'$'}2 }' /proc/mounts | sort -r)
+                MOUNTS=${'$'}(mounts_at_or_under "${'$'}ROOTFS_PATH" | sort -r)
                 [ -z "${'$'}MOUNTS" ] && break
                 for mp in ${'$'}MOUNTS; do
                     if [ "${'$'}pass" -lt 3 ]; then
@@ -73,14 +86,15 @@ internal object RootfsRepair {
                     fi
                 done
             done
-            if awk -v prefix="${'$'}ROOTFS_PATH/" -v exact="${'$'}ROOTFS_PATH" 'index(${'$'}2, prefix) == 1 || ${'$'}2 == exact { found=1 } END { exit !found }' /proc/mounts; then
+            if [ -n "${'$'}(mounts_at_or_under "${'$'}ROOTFS_PATH")" ]; then
                 exit 1
             fi
             rm -rf "${'$'}{ROOTFS_PATH}/tmp/.nextcraft-mounts" 2>/dev/null || true
             exit 0
         """.trimIndent()
 
-        val masterCode = runRootCommand("su", "-mm", "-c", unmountScript)
+        // Without -mm support there is no separate master namespace to clean; the plain su pass below covers it.
+        val masterCode = if (SuCompat.supportsMasterMount()) runRootCommand("su", "-mm", "-c", unmountScript) else 0
         val defaultCode = runRootCommand("su", "-c", unmountScript)
         check(masterCode == 0 && defaultCode == 0) {
             "Refusing to modify or delete Chroot directory '$canonicalPath' while kernel mounts are still active (master=$masterCode, default=$defaultCode)"
@@ -92,7 +106,7 @@ internal object RootfsRepair {
      * Gives [target] (recursively) back to [uid]. Commands inside the chroot run as root, so files they create
      * (npm installs, Gradle/pip caches, Claude's own state) are root-owned and the app UID cannot change them.
      */
-    fun reclaimOwnership(target: File, uid: Int): Boolean {
+    fun reclaimOwnership(target: File, uid: Int, recursive: Boolean = true): Boolean {
         if (!target.exists() && !java.nio.file.Files.isSymbolicLink(target.toPath())) return true
         // Under PRoot every guest process already runs as the app UID, so nothing is ever root-owned.
         if (!RuntimeEngines.isRootEngine()) return true
@@ -100,29 +114,88 @@ internal object RootfsRepair {
         require(canonicalPath.length > 1 && canonicalPath.startsWith("/")) {
             "Refusing to change ownership of invalid path: '$canonicalPath'"
         }
+        require(RootPathGuard.isInsideAppData(canonicalPath)) {
+            "Refusing to change ownership outside the app data directory: '$canonicalPath'"
+        }
         // -h: change a symlink itself, never the file it points to (it may point outside the rootfs).
         val exit = runRootCommand(
             "su", "-c",
-            "chown -R -h $uid:$uid -- ${shellSingleQuote(canonicalPath)}",
+            "chown ${if (recursive) "-R " else ""}-h $uid:$uid -- ${shellSingleQuote(canonicalPath)}",
             timeoutSeconds = 120L,
         )
         return exit == 0
     }
 
-    fun safeDeleteRecursively(targetDir: File): Boolean {
+    /**
+     * Last resort when the app UID cannot write [target] even after [reclaimOwnership] (a root-owned file in a folder the
+     * app does not own, or a label the app may not write): the bytes are staged in an app-owned [staging] file and root
+     * copies them in, then hands the file to [uid].
+     */
+    fun writeAsRoot(target: File, content: ByteArray, staging: File, uid: Int, mode: Int = 0b110100100): Boolean {
+        val parent = target.parentFile ?: return false
+        if (!RootPathGuard.isInsideAppData(target.canonicalPath)) return false
+        staging.parentFile?.mkdirs()
+        return try {
+            staging.writeBytes(content)
+            val dest = shellSingleQuote(target.absolutePath)
+            val temp = shellSingleQuote(target.absolutePath + ".nextcraft-tmp")
+            // Write beside the target and `mv -f` over it: rename replaces a symlink itself (an `apt install` puts
+            // /etc/resolv.conf back as a link into /run/systemd), where `cat > target` would follow the link instead.
+            val exit = runRootCommand(
+                "su", "-c",
+                "mkdir -p -- ${shellSingleQuote(parent.absolutePath)} && cat -- ${shellSingleQuote(staging.absolutePath)} > $temp && " +
+                    "chown $uid:$uid -- $temp && chmod ${mode.toString(8)} -- $temp && mv -f -- $temp $dest",
+                timeoutSeconds = 30L,
+            )
+            exit == 0
+        } finally {
+            staging.delete()
+        }
+    }
+
+    /**
+     * While the marker exists chroot-exec refuses to mount (it checks after taking the mount lock), so no launch can add
+     * mounts between [ensureUnmounted] and the rename or delete that follows. Nested calls share one marker.
+     */
+    private val maintenanceDepth = java.util.concurrent.atomic.AtomicInteger()
+
+    internal fun maintenanceMarker(runtimeChild: File): File = File(runtimeChild.absoluteFile.parentFile, MAINTENANCE_MARKER)
+
+    private inline fun <T> underMaintenance(runtimeChild: File, block: () -> T): T {
+        val marker = maintenanceMarker(runtimeChild)
+        if (maintenanceDepth.getAndIncrement() == 0) runCatching { marker.parentFile?.mkdirs(); marker.writeText("1") }
+        try {
+            return block()
+        } finally {
+            if (maintenanceDepth.decrementAndGet() == 0) marker.delete()
+        }
+    }
+
+    const val MAINTENANCE_MARKER = ".rootfs-maintenance"
+
+    fun safeDeleteRecursively(targetDir: File): Boolean = underMaintenance(targetDir) { safeDeleteLocked(targetDir) }
+
+    private fun safeDeleteLocked(targetDir: File): Boolean {
         if (!targetDir.exists()) return true
-        ensureUnmounted(targetDir)
+        // A mount left under the tree (bind of /workspace, /dev, /android) would be walked into by either delete below
+        // and remove real files of the phone: stop here instead of deleting anything.
+        if (!ensureUnmounted(targetDir)) return false
         if (targetDir.deleteRecursively()) return true
-        // Fallback to root rm -rf ONLY after ensureUnmounted verified 0 active kernel mounts
+        // Fallback to root rm -rf, reached ONLY when ensureUnmounted verified 0 active kernel mounts
         val canonicalPath = targetDir.canonicalPath.trimEnd('/')
         require(canonicalPath.length > 1 && canonicalPath.startsWith("/")) {
             "Refusing to delete invalid path: '$canonicalPath'"
+        }
+        require(RootPathGuard.isInsideAppData(canonicalPath)) {
+            "Refusing to delete outside the app data directory: '$canonicalPath'"
         }
         val quotedPath = shellSingleQuote(canonicalPath)
         val exit = runRootCommand(
             "su",
             "-c",
-            "rm -rf --one-file-system -- $quotedPath 2>/dev/null || rm -rf -- $quotedPath",
+            // --one-file-system only: a plain `rm -rf` fallback would follow a mount that appeared after
+            // ensureUnmounted into the user's projects or shared storage.
+            "rm -rf --one-file-system -- $quotedPath",
             // A multi-GB tree with root-owned apt/npm files takes far longer than the 15 s default; a timeout here
             // used to make activate() roll back a rootfs that had already validated.
             timeoutSeconds = 30 * 60L,
@@ -137,6 +210,10 @@ internal object RootfsRepair {
         validate: (File) -> Boolean,
     ) {
         if (!backup.exists()) return
+        underMaintenance(rootfs) { reconcileLocked(rootfs, staging, backup, validate) }
+    }
+
+    private fun reconcileLocked(rootfs: File, staging: File, backup: File, validate: (File) -> Boolean) {
 
         ensureUnmounted(rootfs)
         ensureUnmounted(staging)
@@ -169,6 +246,10 @@ internal object RootfsRepair {
             "Rebuilt Linux environment failed validation"
         }
         check(!backup.exists()) { "A previous Linux environment repair is still pending" }
+        underMaintenance(rootfs) { activateLocked(rootfs, staging, backup, validate) }
+    }
+
+    private fun activateLocked(rootfs: File, staging: File, backup: File, validate: (File) -> Boolean) {
 
         ensureUnmounted(rootfs)
         ensureUnmounted(staging)

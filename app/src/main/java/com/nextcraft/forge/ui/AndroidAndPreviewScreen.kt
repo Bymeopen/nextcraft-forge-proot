@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -153,98 +154,94 @@ fun AndroidBuildScreen(
     val clipboard = LocalClipboardManager.current
 
     // Stage events carry only the active stage, so remember the last real one to place success/failure.
-    var lastRow by remember { mutableStateOf(-1) }
-    LaunchedEffect(build.stage, build.phase) {
+    var lastRow by remember(state.activeProjectId) { mutableStateOf(-1) }
+    LaunchedEffect(state.activeProjectId, build.stage, build.phase) {
         val index = stageRowIndex(build.stage)
         if (build.phase == AndroidBuildPhase.IDLE) lastRow = -1 else if (index >= 0) lastRow = index
     }
-    LaunchedEffect(build.phase) {
+    LaunchedEffect(state.activeProjectId, build.phase) {
         if (build.phase == AndroidBuildPhase.FAILED && build.issues.isNotEmpty()) activeTab = 1
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(end = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Launch is reached from a project's header, so it reads as a project page: name first, "Launch" under it.
-            ForgeLargeTitle(
-                title = state.activeProject?.name ?: stringResource(R.string.launch_launch),
-                subtitle = stringResource(R.string.launch_launch),
-                modifier = Modifier.weight(1f),
-            )
-            ForgeActionPill {
-                if (canStop) {
-                    ForgePillIcon(
-                        icon = Icons.Default.Close,
-                        description = stringResource(R.string.launch_cancel_build),
-                        onClick = viewModel::stopAndroidBuild,
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                } else {
-                    ForgePillIcon(
-                        icon = Icons.Default.PlayArrow,
-                        description = stringResource(R.string.launch_build_and_install_apk),
+        ForgeProjectHeader(
+            title = state.activeProject?.name ?: stringResource(R.string.launch_launch),
+            accentSeed = state.activeProject?.name,
+            subtitle = stringResource(R.string.launch_launch),
+            // Opened from Tools there is no project header above: Back returns to Tools, like the other tool screens.
+            onBack = if (state.activeTab != ForgeTab.PROJECTS) ({ viewModel.selectTab(ForgeTab.TOOLS) }) else null,
+            actions = {
+            if (canStop) {
+                ForgePillIcon(
+                    icon = Icons.Default.Close,
+                    description = stringResource(R.string.launch_cancel_build),
+                    onClick = viewModel::stopAndroidBuild,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            } else {
+                ForgePillIcon(
+                    icon = Icons.Default.PlayArrow,
+                    description = stringResource(R.string.launch_build_and_install_apk),
+                    enabled = !busy,
+                    onClick = { viewModel.runAndroidBuild("assembleDebug", installAfterBuild = true) },
+                )
+            }
+            Box {
+                ForgePillIcon(
+                    icon = Icons.Default.MoreVert,
+                    description = stringResource(R.string.launch_more_build_actions),
+                    onClick = { menuOpen = true },
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.launch_assemble_debug_no_install)) },
                         enabled = !busy,
-                        onClick = { viewModel.runAndroidBuild("assembleDebug", installAfterBuild = true) },
+                        onClick = {
+                            menuOpen = false
+                            viewModel.runAndroidBuild("assembleDebug", installAfterBuild = false)
+                        },
                     )
-                }
-                Box {
-                    ForgePillIcon(
-                        icon = Icons.Default.MoreVert,
-                        description = stringResource(R.string.launch_more_build_actions),
-                        onClick = { menuOpen = true },
+                    if (build.apkPath != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.launch_install_last_apk)) },
+                            enabled = !busy,
+                            onClick = {
+                                menuOpen = false
+                                viewModel.installBuiltApk()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.launch_clean)) },
+                        enabled = !busy,
+                        onClick = {
+                            menuOpen = false
+                            viewModel.runAndroidBuild("clean", installAfterBuild = false)
+                        },
                     )
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.launch_force_rebuild)) },
+                        enabled = !busy,
+                        onClick = {
+                            menuOpen = false
+                            viewModel.runAndroidBuild("clean assembleDebug", installAfterBuild = true)
+                        },
+                    )
+                    if (build.apkPath != null) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.launch_assemble_debug_no_install)) },
-                            enabled = !busy,
+                            text = { Text(stringResource(R.string.launch_copy_apk_path)) },
                             onClick = {
                                 menuOpen = false
-                                viewModel.runAndroidBuild("assembleDebug", installAfterBuild = false)
+                                clipboard.setText(AnnotatedString(build.apkPath))
                             },
                         )
-                        if (build.apkPath != null) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.launch_install_last_apk)) },
-                                enabled = !busy,
-                                onClick = {
-                                    menuOpen = false
-                                    viewModel.installBuiltApk()
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.launch_clean)) },
-                            enabled = !busy,
-                            onClick = {
-                                menuOpen = false
-                                viewModel.runAndroidBuild("clean", installAfterBuild = false)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.launch_force_rebuild)) },
-                            enabled = !busy,
-                            onClick = {
-                                menuOpen = false
-                                viewModel.runAndroidBuild("clean assembleDebug", installAfterBuild = true)
-                            },
-                        )
-                        if (build.apkPath != null) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.launch_copy_apk_path)) },
-                                onClick = {
-                                    menuOpen = false
-                                    clipboard.setText(AnnotatedString(build.apkPath))
-                                },
-                            )
-                        }
                     }
                 }
             }
-        }
+            },
+        )
+
+        LiveResourceMiniBar(onCleanIdleDaemons = viewModel::cleanIdleDaemons)
 
         // Status block
         val errorCount = build.issues.count { it.severity == AndroidIssueSeverity.ERROR }
@@ -267,7 +264,7 @@ fun AndroidBuildScreen(
                             quantityStringResource(R.plurals.launch_warnings, warningCount, warningCount),
                         )
                     } else {
-                        build.message ?: build.stage.displayLabel()
+                        build.message?.let { messageText(it) } ?: build.stage.displayLabel()
                     },
                     fontSize = ForgeType.control,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -283,17 +280,32 @@ fun AndroidBuildScreen(
                     .height(3.dp),
             )
         }
-        if (build.phase == AndroidBuildPhase.FAILED && build.issues.isNotEmpty()) {
-            ForgePrimaryButton(
-                text = stringResource(R.string.launch_fix_with_agent),
-                onClick = {
-                    viewModel.sendPrompt(build.issues.joinToString("\n\n") { it.formatForAgentPrompt() })
-                    viewModel.openConversation()
-                },
+        if (build.phase == AndroidBuildPhase.FAILED && (build.issues.isNotEmpty() || build.log.isNotBlank())) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ForgePrimaryButton(
+                    text = stringResource(R.string.launch_fix_with_agent),
+                    onClick = { viewModel.fixBuildWithAgent(autoRebuild = false) },
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(
+                    onClick = { viewModel.fixBuildWithAgent(autoRebuild = true) },
+                    shape = RoundedCornerShape(100),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.launch_fix_auto_rebuild),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+            }
         } else if (build.phase == AndroidBuildPhase.SUCCEEDED && build.apkPath != null) {
             ForgePrimaryButton(
                 text = stringResource(R.string.launch_install_apk),
@@ -355,8 +367,7 @@ fun AndroidBuildScreen(
                     viewModel.openConversation()
                 },
                 onOpenFile = { path ->
-                    viewModel.openWorkspaceFile(path)
-                    viewModel.selectTab(ForgeTab.FILES)
+                    viewModel.openFilesTabForEditing(path)
                 },
                 modifier = Modifier.weight(1f),
             )
@@ -398,6 +409,7 @@ fun AndroidBuildScreen(
                 onClearLogcat = viewModel::clearProjectLogcat,
                 onSetMinLevel = viewModel::setLogcatMinimumLevel,
                 onSetQuery = viewModel::setLogcatQuery,
+                onFixCrashWithAgent = viewModel::fixLogcatCrashWithAgent,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -446,7 +458,7 @@ private fun BuildIssuesList(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = issue.title,
+                            text = messageText(issue.title),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                         )
@@ -464,13 +476,13 @@ private fun BuildIssuesList(
                         )
                     }
                     Text(
-                        text = issue.detail,
+                        text = messageText(issue.detail),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                     )
                     issue.suggestion?.let { hint ->
                         Text(
-                            text = hint,
+                            text = messageText(hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -499,10 +511,14 @@ private fun LogcatPanel(
     onClearLogcat: () -> Unit,
     onSetMinLevel: (AndroidLogLevel) -> Unit,
     onSetQuery: (String) -> Unit,
+    onFixCrashWithAgent: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val logcat = state.androidLogcat
     val tokens = LocalForgeThemeTokens.current
+    val hasCrashOrError = remember(logcat.lines) {
+        logcat.lines.any { it.level == AndroidLogLevel.ERROR || it.level == AndroidLogLevel.FATAL }
+    }
     val filteredLines = remember(logcat.lines, logcat.minimumLevel, logcat.query) {
         val q = logcat.query.trim()
         logcat.lines.filter { line ->
@@ -522,7 +538,7 @@ private fun LogcatPanel(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = logcat.message ?: "UID-scoped Logcat (${logcat.packageName ?: "app"})",
+                text = logcat.message ?: stringResource(R.string.logcat_uid_scoped, logcat.packageName ?: stringResource(R.string.logcat_app_fallback)),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
@@ -550,6 +566,14 @@ private fun LogcatPanel(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (hasCrashOrError) {
+                Button(
+                    onClick = onFixCrashWithAgent,
+                    shape = RoundedCornerShape(100),
+                ) {
+                    Text(stringResource(R.string.logcat_fix_crash_with_agent), fontWeight = FontWeight.SemiBold)
+                }
+            }
             AndroidLogLevel.entries.forEach { level ->
                 FilterChip(
                     selected = logcat.minimumLevel == level,
@@ -614,7 +638,7 @@ fun WebPreviewScreen(
             // Detach before destroy(): destroying a WebView that is still attached throws on some WebView builds.
             webViewRef?.let { view ->
                 (view.parent as? android.view.ViewGroup)?.removeView(view)
-                runCatching { view.destroy() }
+                runCatching { view.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
             }
             webViewRef = null
         }
@@ -650,16 +674,36 @@ fun WebPreviewScreen(
         if (state.activeTab == ForgeTab.PROJECTS) {
             ForgeProjectHeader(
                 title = state.activeProject?.name ?: stringResource(R.string.launch_preview),
+                accentSeed = state.activeProject?.name,
                 subtitle = stringResource(R.string.launch_preview) + " · " + stringResource(R.string.launch_local_dev_server),
                 onBack = { viewModel.projectBack() },
             )
         } else {
-            ForgeLargeTitle(
+            // Opened from Tools: same header and Back as every other tool screen.
+            ForgeProjectHeader(
                 title = stringResource(R.string.launch_preview),
                 subtitle = stringResource(R.string.launch_local_dev_server),
+                onBack = { viewModel.selectTab(ForgeTab.TOOLS) },
             )
         }
 
+        var previewMode by rememberSaveable { mutableStateOf(0) } // 0 = Web Preview, 1 = UI Inspector
+        ForgePillTabs(
+            items = listOf(
+                stringResource(R.string.inspector_tab_web),
+                stringResource(R.string.inspector_tab_ui),
+            ),
+            selectedIndex = previewMode,
+            onSelect = { previewMode = it },
+        )
+
+        if (previewMode == 1) {
+            UiInspectorPanel(
+                state = state,
+                viewModel = viewModel,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        } else {
         // Address bar: status dot, URL, go arrow; refresh sits outside the bar.
         var opened by rememberSaveable { mutableStateOf(false) }
         val serverUp = state.activeLocalPorts.isNotEmpty() || opened
@@ -693,8 +737,11 @@ fun WebPreviewScreen(
                         keyboardOptions = ForgeFieldKind.URL.keyboardOptions(ImeAction.Go),
                         keyboardActions = KeyboardActions(onGo = { opened = true; openUrl(urlInput) }),
                         placeholder = { Text(stringResource(R.string.launch_preview_url), color = colors.onSurfaceVariant.copy(alpha = 0.6f)) },
-                        colors = TextFieldDefaults.textFieldColors(
-                            containerColor = Color.Transparent,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            errorContainerColor = Color.Transparent,
                             focusedIndicatorColor = Color.Transparent,
                             unfocusedIndicatorColor = Color.Transparent,
                             disabledIndicatorColor = Color.Transparent,
@@ -752,6 +799,11 @@ fun WebPreviewScreen(
                     glyph = ForgeGlyph.GLOBE,
                     title = stringResource(R.string.launch_preview_not_running),
                     message = stringResource(R.string.launch_preview_not_running_hint),
+                    actionLabel = stringResource(R.string.preview_open_terminal),
+                    onAction = {
+                        // Inside a project the terminal is a pane of that project; elsewhere it is the Terminal tab.
+                        if (state.activeTab == ForgeTab.PROJECTS) viewModel.selectProjectPane(ProjectPane.TERMINAL) else viewModel.selectTab(ForgeTab.TERMINAL)
+                    },
                 )
             }
         } else {
@@ -783,11 +835,11 @@ fun WebPreviewScreen(
                         ): Boolean {
                             if (webViewRef === view) webViewRef = null
                             (view.parent as? android.view.ViewGroup)?.removeView(view)
-                            runCatching { view.destroy() }
+                            runCatching { view.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
                             return true
                         }
                     }
-                    runCatching { loadUrl(state.previewUrl) }
+                    runCatching { loadUrl(state.previewUrl) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
                     webViewRef = this
                 } ?: android.view.View(context)
             },
@@ -797,7 +849,157 @@ fun WebPreviewScreen(
                     webViewRef = webView
                 }
             },
+            // The view leaves composition when the server stops; destroy it there, not only when the screen closes.
+            onRelease = { view ->
+                if (webViewRef === view) webViewRef = null
+                (view.parent as? android.view.ViewGroup)?.removeView(view)
+                (view as? WebView)?.let { runCatching { it.stopLoading(); it.destroy() } }
+            },
         )
+        }
+        }
+    }
+}
+
+@Composable
+private fun UiInspectorPanel(
+    state: ForgeUiState,
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = LocalForgeThemeTokens.current
+    var selectedNode by remember(state.uiInspectorNodes) { mutableStateOf<UiInspectorNode?>(null) }
+    var instruction by rememberSaveable { mutableStateOf("") }
+
+    Column(
+        modifier = modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(R.string.inspector_tab_ui),
+                fontSize = ForgeType.cardTitle,
+                fontWeight = FontWeight.SemiBold,
+            )
+            ForgePrimaryButton(
+                text = stringResource(R.string.inspector_scan_ui),
+                enabled = !state.uiInspectorBusy,
+                onClick = viewModel::captureUiInspectorHierarchy,
+            )
+        }
+
+        selectedNode?.let { node ->
+            ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = buildString {
+                            append(node.className)
+                            if (node.id.isNotBlank()) append(" #").append(node.id)
+                            append(" ").append(node.bounds)
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = ForgeType.caption,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tokens.accentText,
+                    )
+                    if (node.text.isNotBlank()) {
+                        Text(
+                            text = node.text,
+                            fontSize = ForgeType.secondary,
+                            maxLines = 2,
+                        )
+                    }
+                    ForgeTextField(
+                        kind = ForgeFieldKind.TEXT,
+                        imeAction = ImeAction.Done,
+                        value = instruction,
+                        onValueChange = { instruction = it },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.inspector_instruction_hint)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    ForgePrimaryButton(
+                        text = stringResource(R.string.inspector_edit_with_agent),
+                        enabled = instruction.isNotBlank(),
+                        onClick = {
+                            viewModel.editUiElementWithAgent(node, instruction)
+                            instruction = ""
+                            selectedNode = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+
+        if (state.uiInspectorNodes.isEmpty()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.inspector_empty_hint),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = ForgeType.secondary,
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(state.uiInspectorNodes) { node ->
+                    val isSelected = selectedNode == node
+                    ForgeThemedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.Button) { selectedNode = node },
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = buildString {
+                                        append(node.className)
+                                        if (node.id.isNotBlank()) append(" · #").append(node.id)
+                                    },
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = ForgeType.caption,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSelected) tokens.accentText else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = node.bounds,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = ForgeType.caption,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (node.text.isNotBlank()) {
+                                Text(
+                                    text = node.text,
+                                    fontSize = ForgeType.secondary,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

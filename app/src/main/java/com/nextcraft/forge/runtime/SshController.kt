@@ -49,6 +49,8 @@ class SshController(context: Context) {
     private val mutable = MutableStateFlow(SshState(hosts = readHosts()))
     val state: StateFlow<SshState> = mutable.asStateFlow()
     private val tunnelProcesses = java.util.concurrent.ConcurrentHashMap<String, Process>()
+    /** Hosts whose tunnel is being started: a second tap before the process exists must not start another one. */
+    private val tunnelStarting = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var job: Job? = null
 
     private fun workspace() = runner.toolWorkspace(SLUG)
@@ -82,7 +84,13 @@ class SshController(context: Context) {
     }
 
     fun installClient() = launchTask("Installing the OpenSSH client…") {
-        val result = exec("DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-client 2>&1 | tail -n 15", timeoutMillis = 15 * 60_000L)
+        // The log goes through a file so the exit status is apt's, not tail's; the package lists are refreshed first
+        // because the runtime removes them after every install.
+        val result = exec(
+            "{ DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-client; } " +
+                ">/tmp/forge-apt.log 2>&1; rc=\$?; tail -n 15 /tmp/forge-apt.log; exit \$rc",
+            timeoutMillis = 15 * 60_000L,
+        )
         mutable.update { it.copy(clientInstalled = result.ok) }
         checkClientInline()
     }
@@ -112,14 +120,16 @@ class SshController(context: Context) {
     }
 
     fun startTunnel(host: SshHost) {
-        if (host.forward.isEmpty() || tunnelProcesses.containsKey(host.id)) return
+        if (host.forward.isEmpty() || tunnelProcesses.containsKey(host.id) || !tunnelStarting.add(host.id)) return
         scope.launch {
             val command = "${sshBase(host)} -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L ${ChrootRunner.quote(host.forward)} ${target(host)}"
             val process = runCatching { runner.start(workspace(), SLUG, command) }.getOrElse { error ->
+                tunnelStarting.remove(host.id)
                 mutable.update { it.copy(log = append(it.log, "✕ ${error.message}\n")) }
                 return@launch
             }
             tunnelProcesses[host.id] = process
+            tunnelStarting.remove(host.id)
             mutable.update { it.copy(tunnels = it.tunnels + host.id, log = append(it.log, "▶ Tunnel ${host.forward} via ${host.alias}\n")) }
             runCatching {
                 process.inputStream.bufferedReader().use { reader ->
@@ -131,21 +141,25 @@ class SshController(context: Context) {
                         mutable.update { it.copy(log = append(it.log, text)) }
                     }
                 }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SshController", it) }
+            // Only this process's own entry: after Stop and a quick Start the map already holds the new tunnel.
+            tunnelProcesses.remove(host.id, process)
+            if (!tunnelProcesses.containsKey(host.id)) {
+                mutable.update { it.copy(tunnels = it.tunnels - host.id, log = append(it.log, "■ Tunnel ${host.alias} closed\n")) }
             }
-            tunnelProcesses.remove(host.id)
-            mutable.update { it.copy(tunnels = it.tunnels - host.id, log = append(it.log, "■ Tunnel ${host.alias} closed\n")) }
         }
     }
 
     fun stopTunnel(id: String) {
         val process = tunnelProcesses.remove(id) ?: return
-        process.destroyForcibly()
+        runner.stop(process)
         // Killing the su wrapper does not always reach the ssh client inside the chroot; stop it there as well.
         val forward = mutable.value.hosts.firstOrNull { it.id == id }?.forward.orEmpty()
         if (forward.isNotEmpty()) {
             scope.launch {
                 // "[s]sh" keeps pkill from matching this very shell command line.
-                runCatching { runner.run(workspace(), SLUG, "pkill -f ${ChrootRunner.quote("[s]sh .* -N .*-L $forward ")} || true", timeoutMillis = 15_000L) }
+                val escapedForward = Regex.escape(forward)
+                runCatching { runner.run(workspace(), SLUG, "pkill -f ${ChrootRunner.quote("[s]sh .* -N .*-L $escapedForward ")} || true", timeoutMillis = 15_000L) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SshController", it) }
             }
         }
     }

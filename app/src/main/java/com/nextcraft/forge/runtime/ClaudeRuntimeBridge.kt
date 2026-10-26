@@ -95,6 +95,12 @@ class ClaudeRuntimeBridge(
     private val autoApproveAllTools: () -> Boolean = {
         runCatching { com.nextcraft.forge.data.AppPreferences(context).autoApproveAllTools }.getOrDefault(true)
     },
+    private val claudeEffort: () -> String = {
+        runCatching { com.nextcraft.forge.data.AppPreferences(context).claudeEffort }.getOrDefault("")
+    },
+    /** The chat's saved Claude Code session ([SavedConversation.encode]), resumed so tool results stay in context. */
+    private val savedConversation: () -> String? = { null },
+    private val saveConversation: (String?) -> Unit = {},
     private val interactiveHighRiskApprovals: () -> Boolean = {
         runCatching { com.nextcraft.forge.data.AppPreferences(context).interactiveHighRiskApprovals }.getOrDefault(true)
     },
@@ -111,12 +117,24 @@ class ClaudeRuntimeBridge(
     private val seenToolCalls = ConcurrentHashMap.newKeySet<String>()
     private val finishedSessions = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var activeProcess: Process? = null
+
+    /**
+     * Steering: the prompt goes in as stream-json on stdin and stdin stays open, so a message sent while Claude works
+     * joins the running session (it is answered right after the current step) instead of stopping it. When a turn ends
+     * with no steering message waiting, stdin is closed and the CLI exits as before.
+     */
+    @Volatile private var steerInput: java.io.OutputStream? = null
+    @Volatile private var steersPending = 0
+    /** After a turn that had steering messages: when to give up waiting for the follow-up turn (0 = not waiting). */
+    @Volatile private var idleCloseAt = 0L
     @Volatile private var activeSessionId: String? = null
     @Volatile private var userStopRequested: Boolean = false
     @Volatile private var turnCompletedFromStream: Boolean = false
     private val foreground = ForegroundSession(context, "ClaudeBridge")
 
     @Volatile private var activeProjectSlug: String? = null
+    private var claudeConversationId = ""
+    private var resumedConversation = false
     private val streamedText = StringBuilder()
     private val streamedThinking = StringBuilder()
     private var lastReasoningTokens = 0
@@ -135,8 +153,12 @@ class ClaudeRuntimeBridge(
         val sessionId = UUID.randomUUID().toString()
         finishedSessions.remove(sessionId)
         activeSessionId = sessionId
+        liveSessions.add(sessionId)
         userStopRequested = false
         turnCompletedFromStream = false
+        steerInput = null
+        steersPending = 0
+        idleCloseAt = 0L
         activeProjectSlug = projectSlug
         foreground.begin()
         toolNames.clear()
@@ -159,6 +181,8 @@ class ClaudeRuntimeBridge(
             }
             eventBus.emit(RuntimeEvent.SessionFailed(sessionId, message))
             activeSessionId = null
+            liveSessions.remove(sessionId)
+            foreground.clearStart()
             return@withContext sessionId
         }
 
@@ -176,14 +200,19 @@ class ClaudeRuntimeBridge(
                             running.destroy()
                             Thread.sleep(500)
                             if (running.isAlive) running.destroyForcibly()
-                        }
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                     }, "forge-claude-stop").apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register(RuntimeTaskController.AGENT, it) }
+            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
             startForegroundRuntime(projectSlug)
             val installed = installer.installedRuntime()
             installer.ensureSettingsAndHooks()
+            // Requests left by a run that was killed before its watcher saw them would be shown as this session's.
+            // Only requests of sessions that are no longer running: another chat's live session may be waiting on one.
+            File(context.filesDir, "runtime-bridge")
+                .listFiles { f -> f.name.endsWith(".request") && !isLiveSessionRequest(f.name) }.orEmpty()
+                .forEach { runCatching { it.delete() } }
             val workspace = checkpoints.ensureWorkspace(projectId)
             checkpoints.createCheckpoint(projectId, workspace)
             val before = checkpoints.snapshot(workspace)
@@ -200,12 +229,21 @@ class ClaudeRuntimeBridge(
                 authToken = secret,
                 localGatewayUrl = formatGateway?.url ?: openRouterGateway?.url,
                 useStoredLogin = storedLogin,
+                claudeEffort = claudeEffort(),
             )
             Log.d("ClaudeBridge", "Provider: ${provider.kind}, Model: ${provider.model}")
             Log.d("ClaudeBridge", "Launch environment keys: ${launch.environment.keys}")
 
             val guestWorkspacePath = "/workspace/$projectSlug"
-            val contextPrompt = buildContextPrompt(prompt, conversationHistory, guestWorkspacePath, projectKind)
+            // Resume the chat's own Claude Code session (it keeps tool results and compacts itself when full); only a
+            // session made with the same provider in the same workspace, since another API may reject its history.
+            val conversationTag = "${provider.kind.name}:$guestWorkspacePath"
+            val saved = SavedConversation.decode(savedConversation())?.takeIf { it.tag == conversationTag }
+            resumedConversation = saved != null
+            claudeConversationId = saved?.id ?: UUID.randomUUID().toString()
+            val contextPrompt = buildContextPrompt(
+                prompt, conversationHistory.unseenBy(saved), guestWorkspacePath, projectKind, resumed = saved != null,
+            )
 
             val command = buildList {
                 add(launch.executable)
@@ -214,6 +252,8 @@ class ClaudeRuntimeBridge(
                 // Prompt goes through stdin: a single argv entry is capped at 128 KB by the kernel
                 // and the history budget is 160k chars; stdin also keeps it out of `ps`.
                 add("-p")
+                add("--input-format")
+                add("stream-json")
                 add("--output-format")
                 add("stream-json")
                 add("--include-partial-messages")
@@ -222,21 +262,25 @@ class ClaudeRuntimeBridge(
                 add(launch.environment["ANTHROPIC_MODEL"] ?: provider.model)
                 add("--max-turns")
                 add("25")
+                if (saved != null) addAll(listOf("--resume", saved.id)) else addAll(listOf("--session-id", claudeConversationId))
             }
             Log.d("ClaudeBridge", "Launching Claude Code (${command.size} args, prompt=${contextPrompt.length} chars)")
             val process = installer.process(
                 installed.chrootExec,
                 installed.rootfs,
                 workspace,
-                launch.environment,
+                // The permission hook reads this to tag its requests with this session (see requestPrefix).
+                launch.environment + ("NEXTCRAFT_SESSION_ID" to sessionId),
                 command,
                 guestWorkspacePath = guestWorkspacePath,
+                claudeMcpServers = runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull(),
             )
             activeProcess = process
             runCatching {
-                process.outputStream.write(contextPrompt.toByteArray(Charsets.UTF_8))
-                process.outputStream.close()
-            }
+                process.outputStream.write(streamJsonUserMessage(contextPrompt))
+                process.outputStream.flush()
+                steerInput = process.outputStream
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
             if (userStopRequested) process.destroy()
             coroutineScope {
                 val permissionWatcher = launch { watchPermissionRequests(sessionId) }
@@ -247,9 +291,17 @@ class ClaudeRuntimeBridge(
                 suspend fun processClaudeLine(rawLine: String) {
                     val line = rawLine.trimEnd('\r')
                     if (line.isBlank()) return
+                    idleCloseAt = 0L // the follow-up turn for a steering message has started
                     ProviderRuntimeErrorDetector.detect(line)?.let { reason ->
                         process.destroyForcibly()
                         throw ProviderSessionException(reason)
+                    }
+                    // The result frame repeats the whole answer; past the reader's line cap it is cut and no longer
+                    // parses, which would leave the turn running until the CLI exits on its own.
+                    if (line.endsWith("... [truncated]") && line.take(200).contains("\"type\":\"result\"")) {
+                        if (!line.take(400).contains("\"is_error\":true")) turnCompletedFromStream = true
+                        endTurnOrContinue()
+                        return
                     }
                     if (!consumeClaudeEvent(sessionId, line)) {
                         lastDiagnostic = sanitizeForDisplay(line.takeLast(500))
@@ -260,8 +312,15 @@ class ClaudeRuntimeBridge(
                 }
                 InotifyLogTailer(nativeProcess.outputFile).use { tailer ->
                     while (process.isAlive || tailer.hasUnreadBytes()) {
-                        for (line in tailer.readLines(timeoutMs = 50L)) {
+                        for (line in tailer.readLines(timeoutMs = 250L)) {
                             processClaudeLine(line)
+                        }
+                        // A steering message that Claude folded into the turn that just ended brings no new turn.
+                        val waitUntil = idleCloseAt
+                        if (waitUntil > 0L && android.os.SystemClock.elapsedRealtime() > waitUntil) {
+                            idleCloseAt = 0L
+                            closeSteerInput()
+                            terminateActiveProcessGracefully()
                         }
                     }
                     for (line in tailer.readLines(timeoutMs = 0L, flushIncomplete = true)) {
@@ -273,7 +332,7 @@ class ClaudeRuntimeBridge(
                 permissionWatcher.cancelAndJoin()
                 pending.values.filter { it.request.sessionId == sessionId }.forEach { permission ->
                     // A failed write here must not turn a finished run into a failure.
-                    runCatching { permission.response.writeText("deny") }
+                    runCatching { permission.response.writeText("deny") }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                     pending.remove(permission.request.approvalId)
                     eventBus.emit(RuntimeEvent.ToolRejected(sessionId, permission.request.approvalId))
                 }
@@ -287,14 +346,17 @@ class ClaudeRuntimeBridge(
                     acceptLastChanges(projectId)
                 }
                 if (exit == 0 || (turnCompletedFromStream && !userStopRequested)) {
+                    // The chat now holds the history plus this answer, all of which the session has seen.
+                    saveConversation(SavedConversation(claudeConversationId, conversationHistory.size + 1, conversationTag).encode())
                     emitCompletedOnce(sessionId)
-                    finishForegroundRuntime(
-                        completed = true,
-                        projectName = projectSlug,
-                        detail = "Claude Code finished in $projectSlug",
-                    )
+                    finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Claude Code", projectSlug)
                 } else {
                     if (userStopRequested) throw ProviderSessionException("Stopped by user")
+                    if (resumedConversation && lastDiagnostic.contains("No conversation found", ignoreCase = true)) {
+                        // Gone (runtime reinstalled, workspace moved): the retry sends the chat history instead.
+                        saveConversation(null)
+                        throw ProviderSessionException(SESSION_LOST_MESSAGE)
+                    }
                     error(lastDiagnostic.ifBlank { "Claude Code stopped with exit code $exit" })
                 }
             }
@@ -303,7 +365,7 @@ class ClaudeRuntimeBridge(
             // A failure after launch (parser/IO/provider error) must not leave the agent running unattended in the chroot.
             activeProcess?.let { running -> runCatching { if (running.isAlive) running.destroyForcibly() } }
             pending.values.filter { it.request.sessionId == sessionId }.forEach { permission ->
-                runCatching { permission.response.writeText("deny") }
+                runCatching { permission.response.writeText("deny") }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                 pending.remove(permission.request.approvalId)
                 eventBus.emit(RuntimeEvent.ToolRejected(sessionId, permission.request.approvalId))
             }
@@ -319,11 +381,12 @@ class ClaudeRuntimeBridge(
                 )
             }
         }
-        runCatching { formatGateway?.close() }
-        runCatching { openRouterGateway?.close() }
-        runCatching { spawnedOutputFile?.delete() }
+        runCatching { formatGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+        runCatching { openRouterGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+        runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
         activeProcess = null
         activeSessionId = null
+        liveSessions.remove(sessionId)
         RuntimeTaskController.release(stopHandler)
         sessionId
     }
@@ -350,9 +413,11 @@ class ClaudeRuntimeBridge(
         val secret = if (storedLogin) "" else secretFor(provider).orEmpty().ifBlank { localServerPlaceholderKey(provider) }
         check(secret.isNotBlank() || storedLogin) { "Not signed in to Claude." }
         val installed = installer.installedRuntime()
-        val probeDir = File(context.cacheDir, "claude-hello").apply { mkdirs() }
+        // chroot-exec.sh bind-mounts this directory once and keeps the mount: deleting it after a test left a stale mount
+        // ("current working directory was deleted"), so it is created once and only emptied, never removed.
+        val probeDir = File(context.filesDir, "runtime-probes/claude-check").apply { mkdirs() }
         val outputFile = File(context.cacheDir, "claude-hello-${System.nanoTime()}.log")
-        val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret, useStoredLogin = storedLogin)
+        val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret, useStoredLogin = storedLogin, claudeEffort = claudeEffort())
         val command = listOf(
             launch.executable,
             "-p", "Reply with exactly: ok",
@@ -366,12 +431,12 @@ class ClaudeRuntimeBridge(
             probeDir,
             launch.environment,
             command,
-            guestWorkspacePath = "/workspace/claude-hello",
+            guestWorkspacePath = "/workspace/claude-check",
             emulateHardLinks = false,
             outputFile = outputFile,
         )
         try {
-            runCatching { process.outputStream.close() }
+            runCatching { process.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
             withTimeout(timeoutMillis) {
                 while (process.isAlive) delay(200)
             }
@@ -389,10 +454,10 @@ class ClaudeRuntimeBridge(
         } catch (e: TimeoutCancellationException) {
             error("Claude Code did not answer in time. Check your connection and try again.")
         } finally {
-            runCatching { process.destroy() }
-            runCatching { if (process.isAlive) process.destroyForcibly() }
-            runCatching { outputFile.delete() }
-            runCatching { probeDir.deleteRecursively() }
+            runCatching { process.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+            runCatching { if (process.isAlive) process.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+            runCatching { outputFile.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+            runCatching { probeDir.listFiles()?.forEach { it.deleteRecursively() } }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
             Log.d("ClaudeBridge", "Connection test took ${android.os.SystemClock.elapsedRealtime() - startedAt} ms")
         }
     }
@@ -452,10 +517,12 @@ class ClaudeRuntimeBridge(
         val handledApprovals = HashSet<String>()
         while (kotlin.coroutines.coroutineContext.isActive) {
             expirePendingPermissions(sessionId)
-            bridge.listFiles { file -> file.name.endsWith(".request") }.orEmpty().forEach { file ->
+            // The permission hook prefixes every request with the id of the session that raised it, so parallel
+            // sessions never pick up (or answer) each other's requests.
+            bridge.listFiles { file -> file.name.endsWith(".request") && file.name.startsWith(requestPrefix(sessionId)) }.orEmpty().forEach { file ->
                 val approvalId = file.name.removeSuffix(".request")
                 if (!handledApprovals.add(approvalId)) {
-                    runCatching { file.delete() }
+                    runCatching { file.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                     return@forEach
                 }
                 processPermissionRequestFile(sessionId, file)
@@ -486,7 +553,7 @@ class ClaudeRuntimeBridge(
             .filter { it.request.sessionId == sessionId && nowElapsedRealtime - it.requestedAtElapsedRealtime >= timeoutMs }
             .forEach { expired ->
                 if (pending.remove(expired.request.approvalId, expired)) {
-                    runCatching { expired.response.writeText("deny") }
+                    runCatching { expired.response.writeText("deny") }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                     eventBus.emit(RuntimeEvent.ToolRejected(sessionId, expired.request.approvalId))
                     eventBus.emit(RuntimeEvent.PermissionDenied(sessionId, expired.request.toolName, "no answer was given in time"))
                 }
@@ -520,13 +587,13 @@ class ClaudeRuntimeBridge(
                         risk = risk,
                     )
                     pending[approvalId] = PendingPermission(toolRequest, response)
-                    runCatching { file.delete() }
+                    runCatching { file.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                     Log.i("ClaudeBridge", "Requesting interactive user approval $approvalId for high-risk $toolName ($paths)")
                     eventBus.emit(RuntimeEvent.ToolRequested(sessionId, toolRequest))
                 } else {
                     Log.w("ClaudeBridge", "Denied high-risk permission request $approvalId for $toolName ($paths)")
                     response.writeText("deny")
-                    runCatching { file.delete() }
+                    runCatching { file.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                     eventBus.emit(
                         RuntimeEvent.PermissionDenied(
                             sessionId,
@@ -538,15 +605,15 @@ class ClaudeRuntimeBridge(
             } else {
                 Log.d("ClaudeBridge", "Approving permission request $approvalId for $toolName ($paths, risk=$risk)")
                 response.writeText("allow")
-                runCatching { file.delete() }
+                runCatching { file.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
                 // Completion is reported by the stream's tool_result; emitting it at approval time marked long
                 // commands as finished before they had run and produced a duplicate row later.
             }
         }.onFailure {
             // With auto-approve on, a request this app failed to parse must not become a refusal for the agent.
             val decision = if (autoApproveAllTools()) "allow" else "deny"
-            runCatching { responseFile(file, approvalId).writeText(decision) }
-            runCatching { file.delete() }
+            runCatching { responseFile(file, approvalId).writeText(decision) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+            runCatching { file.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
         }
     }
 
@@ -679,9 +746,47 @@ class ClaudeRuntimeBridge(
                     }
                 }
                 turnCompletedFromStream = true
-                terminateActiveProcessGracefully()
+                endTurnOrContinue()
             }
         }
+    }
+
+    /** A turn ended: run the steering messages that arrived meanwhile, otherwise close stdin so the CLI exits. */
+    private fun endTurnOrContinue() {
+        synchronized(this) {
+            if (steersPending > 0) {
+                steersPending = 0
+                idleCloseAt = android.os.SystemClock.elapsedRealtime() + STEER_FOLLOW_UP_WAIT_MS
+                return
+            }
+        }
+        closeSteerInput()
+        terminateActiveProcessGracefully()
+    }
+
+    private fun closeSteerInput() {
+        synchronized(this) {
+            val input = steerInput ?: return
+            steerInput = null
+            runCatching { input.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
+        }
+    }
+
+    /**
+     * Adds [text] to the running Claude Code session without stopping it. False when no session takes input (none is
+     * running, or its turn already ended): the caller then starts a new turn instead.
+     */
+    fun steer(text: String): Boolean = synchronized(this) {
+        val input = steerInput ?: return false
+        if (activeProcess?.isAlive != true || text.isBlank()) return false
+        val guarded = "$text\n\n[Reminder: ${ANTI_HALLUCINATION_RULES.first()} ${ANTI_HALLUCINATION_RULES[1]} ${ANTI_HALLUCINATION_RULES[3]}]"
+        runCatching {
+            input.write(streamJsonUserMessage(guarded))
+            input.flush()
+        }.onFailure { return false }
+        steersPending++
+        idleCloseAt = 0L
+        true
     }
 
     private suspend fun emitReasoningSummary(
@@ -746,11 +851,12 @@ class ClaudeRuntimeBridge(
     private suspend fun emitCompletedOnce(sessionId: String) {
         if (finishedSessions.add(sessionId)) {
             eventBus.emit(RuntimeEvent.SessionCompleted(sessionId))
-            finishForegroundRuntime(
-                completed = true,
-                projectName = activeProjectSlug ?: "Project",
-                detail = "Claude Code finished",
-            )
+            val slug = activeProjectSlug?.takeIf { it.isNotBlank() }
+            if (slug != null) {
+                finishForegroundRuntimeRes(true, slug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Claude Code", slug)
+            } else {
+                finishForegroundRuntimeRes(true, "Project", com.nextcraft.forge.R.string.notif_agent_finished, "Claude Code")
+            }
         }
     }
 
@@ -782,63 +888,19 @@ class ClaudeRuntimeBridge(
 
     private fun buildContextPrompt(
         currentPrompt: String,
-        history: List<ChatMessage>,
+        priorMessages: List<ChatMessage>,
         guestWorkspacePath: String,
         projectKind: ProjectKind,
-    ): String {
-        val priorMessages = history
-            .filter { msg ->
-                (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
-                    !msg.text.startsWith("Failed to") &&
-                    !msg.text.startsWith("Error:") &&
-                    !msg.text.contains("API Error")
-            }
-            .dropLast(1)
-            .recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
-
-        val sb = StringBuilder()
-        sb.appendLine("<project_workspace>")
-        if (projectKind == ProjectKind.QUICK_PROJECT) {
-            sb.appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
-            sb.appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
-            sb.appendLine("Keep every file and command inside this project workspace.")
-        } else {
-            sb.appendLine("The current working directory $guestWorkspacePath is the project root.")
-            sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
-            sb.appendLine("When giving commands to the user, make them runnable from this project root.")
-        }
-        if (installer.isStackInstalled(DevStack.ANDROID)) {
-            AndroidToolchain.AGENT_PROMPT_LINES.forEach(sb::appendLine)
-        } else {
-            sb.appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
-        }
-        sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
-        sb.appendLine("</project_workspace>")
-        sb.appendLine()
-        if (priorMessages.isEmpty()) {
-            sb.appendLine(currentPrompt)
-            return sb.toString()
-        }
-        sb.appendLine("<conversation_history>")
-        sb.appendLine("The following is our prior conversation in this project. Continue naturally from where we left off.")
-        sb.appendLine()
-        for (msg in priorMessages) {
-            val role = if (msg.fromUser) "User" else "Assistant"
-            sb.appendLine("$role: ${msg.text}")
-            if (msg.attachments.isNotEmpty()) {
-                sb.appendLine("Attached files:")
-                msg.attachments.forEach { attachment ->
-                    sb.appendLine("- ${attachment.displayName}: $guestWorkspacePath/${attachment.relativePath} (${attachment.mimeType})")
-                }
-            }
-            sb.appendLine()
-        }
-        sb.appendLine("</conversation_history>")
-        sb.appendLine()
-        sb.appendLine("Now, respond to this new message from the user:")
-        sb.appendLine(currentPrompt)
-        return sb.toString()
-    }
+        resumed: Boolean = false,
+    ): String = buildAgentWorkspacePrompt(
+        currentPrompt = currentPrompt,
+        priorMessages = priorMessages,
+        guestWorkspacePath = guestWorkspacePath,
+        projectKind = projectKind,
+        androidStackInstalled = installer.isStackInstalled(DevStack.ANDROID),
+        maxHistoryChars = MAX_CONVERSATION_HISTORY_CHARACTERS,
+        resumed = resumed,
+    )
 
     fun configureProjectRoot(projectId: String, rootPath: String) {
         checkpoints.configureProjectRoot(projectId, rootPath)
@@ -864,6 +926,15 @@ class ClaudeRuntimeBridge(
         foreground.progress(activeProjectSlug, detailRaw)
     }
 
+    /** One stream-json input line: a user message with [text]. */
+    private fun streamJsonUserMessage(text: String): ByteArray =
+        (
+            JSONObject()
+                .put("type", "user")
+                .put("message", JSONObject().put("role", "user").put("content", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", text))))
+                .toString() + "\n"
+            ).toByteArray(Charsets.UTF_8)
+
     private fun terminateActiveProcessGracefully() {
         val running = activeProcess ?: return
         Thread {
@@ -872,7 +943,7 @@ class ClaudeRuntimeBridge(
                 if (running.isAlive) running.destroy()
                 Thread.sleep(3_000)
                 if (running.isAlive) running.destroyForcibly()
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
         }.apply { isDaemon = true }.start()
     }
 
@@ -880,6 +951,9 @@ class ClaudeRuntimeBridge(
 
     private fun finishForegroundRuntime(completed: Boolean, projectName: String, detail: String) =
         foreground.finish(completed, projectName, detail)
+
+    private fun finishForegroundRuntimeRes(completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, vararg args: String) =
+        foreground.finishRes(completed, projectName, detailRes, *args)
 
     private fun cancelForegroundRuntime() = foreground.cancel()
 
@@ -891,9 +965,20 @@ class ClaudeRuntimeBridge(
     private class ProviderSessionException(message: String) : IllegalStateException(message)
 
     companion object {
+        /** Sessions running right now in any ClaudeRuntimeBridge instance (one instance per parallel chat). */
+        private val liveSessions: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /** Request files are named `<sessionId>_<uuid>.request` by the permission hook. */
+        internal fun requestPrefix(sessionId: String): String = "${sessionId}_"
+
+        /** True when a request file belongs to a session that is still running (so it must not be cleaned up). */
+        internal fun isLiveSessionRequest(fileName: String): Boolean =
+            liveSessions.any { fileName.startsWith(requestPrefix(it)) }
+
         private const val HIGH_RISK_APPROVAL_TIMEOUT_MS = 40_000L
         private const val STALE_RESPONSE_MS = 600_000L
         private const val MAX_CONVERSATION_HISTORY_CHARACTERS = 160_000
+        const val SESSION_LOST_MESSAGE = "The saved agent session was not found; continuing from the chat history."
     }
 }
 
@@ -909,7 +994,11 @@ private val DANGEROUS_PATTERNS = listOf(
     "git push", "git reset", "git clean", "git checkout --", "sudo", "curl ", "wget ", "chmod ", "chown ", "mkfs",
     "dd if=", "/dev/block", "/dev/loop", "/dev/sd", "/dev/zero", "/dev/mem", "/dev/kmem", "/proc/", "umount",
     "| sh", "| bash", "find -exec", "find -delete", "pocketdev-bridge", "nextcraft-bridge", "pocket-bridge",
-    "/opt/pocket", ".claude", ".git-credentials",
+    "/opt/pocket", "/opt/nextcraft", ".claude", ".git-credentials",
+    // Root shell on Android itself (Settings → Android system access).
+    "android-shell", "android-screencap", "android-dumpsys", "nsenter",
+    // Credential stores the Bash route could cat: the SSH keys and the GitHub CLI token.
+    ".ssh/", "/.ssh", ".config/gh",
 )
 
 private val SAFE_STREAM_REDIRECT_REGEX =
@@ -944,13 +1033,19 @@ private fun scriptCanEscapeSandbox(text: String): Boolean =
         (SED_WORD_REGEX.containsMatchIn(text) && SED_EXEC_OR_WRITE_REGEX.containsMatchIn(text))
 
 /** Commands that create, overwrite or move files; their path arguments must stay inside the project. */
+/** The option letters of a short-option cluster (`-Ei` gives "Ei"); empty for a long option or a non-option word. */
+private fun String.shortFlagCluster(): String =
+    if (startsWith("-") && !startsWith("--")) drop(1).takeWhile { it.isLetter() } else ""
+
 private fun mutatesFiles(first: String, words: List<String>): Boolean =
-    first in setOf("cp", "mv", "mkdir", "touch") ||
-        (first == "sed" && words.any { it == "--in-place" || (it.startsWith("-i") && !it.startsWith("--")) })
+    first in setOf("cp", "mv", "mkdir", "touch", "uniq") ||
+        (first == "sed" && words.any { it.startsWith("--in-place") || it.trim('\'', '"').shortFlagCluster().contains('i') })
 
 private fun isOutsideWorkspacePath(word: String): Boolean {
     val arg = word.trim('\'', '"')
     if (arg.startsWith("-") || arg.isEmpty()) return false
+    // ~/.bashrc and friends: the tilde expands to the home of root, which is outside the project.
+    if (arg == "~" || arg.startsWith("~/")) return true
     if (isSensitivePath(arg)) return true
     return arg.startsWith("/") && !arg.startsWith("/workspace/") && !arg.startsWith("/tmp/")
 }
@@ -963,10 +1058,46 @@ private val SENSITIVE_PATH_PREFIXES = listOf(
     "/opt/", "/etc/", "/proc/", "/sys/", "/dev/", "/usr/", "/bin", "/sbin", "/lib", "/var/",
     "/pocketdev-bridge", "/nextcraft-bridge", "/pocket-bridge",
 )
-private val SENSITIVE_PATH_PARTS = listOf("..", "/.claude", "/.ssh", ".git-credentials", "/.config/gh", "permission-hook")
+private val SENSITIVE_PATH_PARTS = listOf("..", "/.claude", "/.ssh", ".git-credentials", "/.config/gh", "permission-hook", "/.git/")
 
+// A file written under .git/ (hooks, config with core.fsmonitor / diff.external) runs the next time git is auto-approved.
 private fun isSensitivePath(path: String): Boolean =
-    SENSITIVE_PATH_PREFIXES.any(path::startsWith) || SENSITIVE_PATH_PARTS.any(path::contains)
+    SENSITIVE_PATH_PREFIXES.any(path::startsWith) || SENSITIVE_PATH_PARTS.any(path::contains) || path.startsWith(".git/")
+
+/** Files whose content must never reach the model; a glob or quote trick in a command is matched against them. */
+private val PROTECTED_LITERAL_PATHS = listOf(
+    "/proc/self/environ", "/proc/1/environ", "/proc/thread-self/environ",
+    "/root/.claude/.credentials.json", "~/.claude/.credentials.json", "/root/.claude.json", "~/.claude.json",
+    "/root/.ssh/id_ed25519", "~/.ssh/id_ed25519", "/root/.ssh/id_rsa", "~/.ssh/id_rsa",
+    "/root/.git-credentials", "~/.git-credentials", "/root/.config/gh/hosts.yml", "~/.config/gh/hosts.yml",
+)
+
+// A word with glob characters that can expand to a protected file (a '?' standing in for a letter of /proc/self/environ, or a
+// '*' inside the name of the Claude credentials folder).
+private fun commandTargetsProtectedFile(command: String): Boolean {
+    val words = command.split(Regex("\\s+")).map { it.trim('\'', '"') }
+    return words.any { word ->
+        if (word.none { it == '*' || it == '?' || it == '[' }) return@any false
+        val regex = runCatching {
+            Regex(buildString {
+                var i = 0
+                while (i < word.length) {
+                    when (val c = word[i]) {
+                        '*' -> append("[^/]*")
+                        '?' -> append("[^/]")
+                        '[' -> {
+                            val end = word.indexOf(']', i + 1)
+                            if (end > i) { append(word.substring(i, end + 1)); i = end } else append("\\[")
+                        }
+                        else -> append(Regex.escape(c.toString()))
+                    }
+                    i++
+                }
+            })
+        }.getOrNull() ?: return@any true
+        PROTECTED_LITERAL_PATHS.any(regex::matches)
+    }
+}
 
 private val CREDENTIAL_PATH_PARTS = listOf(
     "/proc/", "/.claude", "/.ssh", ".git-credentials", "/.config/gh", "permission-hook",
@@ -1010,14 +1141,32 @@ private fun maskQuotedAndEscapedSeparators(input: String): String {
     return out.toString()
 }
 
+/** System directories whose programs may be named by full path; any other path could point at a file the agent wrote. */
+/** Options of env/xargs that take a value as the next word. */
+private val WRAPPER_OPTIONS_WITH_VALUE = setOf("-u", "-C", "-S", "-I", "-i", "-E", "-e", "-d", "-L", "-l", "-n", "-P", "-s", "-a")
+private val WRAPPER_LONG_OPTIONS_WITH_VALUE = setOf("unset", "chdir", "split-string", "replace", "eof", "delimiter", "max-lines", "max-args", "max-procs", "max-chars", "arg-file")
+
+private val TRUSTED_COMMAND_DIRS = listOf("/usr/bin/", "/bin/", "/usr/local/bin/")
+
 private fun isSafeBashSegment(segment: String): Boolean {
     val words = segment.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
-        .dropWhile { it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*=\\S*")) }
-    val first = words.firstOrNull()?.trim('\'', '"')?.substringAfterLast('/') ?: return false
+    // A leading VAR=value (LD_PRELOAD=./x.so cat f, PATH=./bin ls) changes what the "safe" command really runs.
+    if (words.firstOrNull()?.matches(ENV_ASSIGNMENT_REGEX) == true) return false
+    val firstWord = words.firstOrNull()?.trim('\'', '"') ?: return false
+    // `./ls` or `/workspace/cat` is a program the agent may have just written, not the allowlisted tool of that name.
+    if ('/' in firstWord && TRUSTED_COMMAND_DIRS.none(firstWord::startsWith)) return false
+    // `/usr/bin/../../workspace/x/cat` starts with a trusted directory but runs a file of the project.
+    if (".." in firstWord) return false
+    val first = firstWord.substringAfterLast('/')
     if (first == "env" || first == "xargs") {
         // Wrappers run another command, so judge that command. A bare `env` dumps every exported
         // variable (including provider API keys) into the model context and is never auto-approved.
-        val wrapped = words.drop(1).dropWhile { it.startsWith("-") || it.matches(ENV_ASSIGNMENT_REGEX) }
+        // `env VAR=value cmd` is refused for the same reason as a leading assignment.
+        if (words.drop(1).any { it.matches(ENV_ASSIGNMENT_REGEX) }) return false
+        val options = words.drop(1).takeWhile { it.startsWith("-") }
+        // `env -u cat sh -c ...` / `xargs -I cat sh -c ...`: an option's value would be mistaken for the wrapped command.
+        if (options.any { it in WRAPPER_OPTIONS_WITH_VALUE || (it.startsWith("--") && '=' !in it && it.removePrefix("--") in WRAPPER_LONG_OPTIONS_WITH_VALUE) }) return false
+        val wrapped = words.drop(1).dropWhile { it.startsWith("-") }
         if (wrapped.isEmpty()) return first == "xargs"
         return isSafeBashSegment(wrapped.joinToString(" "))
     }
@@ -1025,7 +1174,10 @@ private fun isSafeBashSegment(segment: String): Boolean {
     // (find -fprint, git diff --output, sort/tree -o): never auto-approved.
     val args = words.drop(1).map { it.trim('\'', '"') }
     if (args.any { UNSAFE_TOOL_FLAG_REGEX.matches(it) }) return false
-    if ((first == "sort" || first == "tree") && args.any { it == "-o" || (first == "tree" && it.startsWith("-o") && it.length > 2) }) return false
+    // -o may sit inside a cluster (-uo out) and getopt_long accepts prefixes of --output.
+    if ((first == "sort" || first == "tree") && args.any { it.startsWith("--out") || it.shortFlagCluster().contains('o') }) return false
+    // `date -s` sets the system clock.
+    if (first == "date" && args.any { it.shortFlagCluster().contains('s') || it.startsWith("--set") }) return false
     if (mutatesFiles(first, words) && words.drop(1).any(::isOutsideWorkspacePath)) return false
     if (first == "git") return words.getOrNull(1)?.trim('\'', '"') in SAFE_GIT_SUBCOMMANDS
     if (first == "find" && words.any { it.trim('\'', '"') in setOf("-exec", "-execdir", "-delete", "-ok", "-okdir") }) return false
@@ -1039,6 +1191,12 @@ private fun isSafeBashSegment(segment: String): Boolean {
 internal fun classifyToolRisk(tool: String, command: String?, paths: List<String> = emptyList()): RiskLevel {
     val preview = "${tool.lowercase()} ${command.orEmpty().lowercase()}"
     if (DANGEROUS_PATTERNS.any(preview::contains)) return RiskLevel.HIGH
+    if (tool == "Bash") {
+        // `cat /pro''c/self/environ` and `cat $'/proc/self/environ'` read the same file as the plain spelling.
+        val unquoted = preview.replace(Regex("""\$?['"\\]"""), "")
+        if (unquoted != preview && DANGEROUS_PATTERNS.any(unquoted::contains)) return RiskLevel.HIGH
+        if (commandTargetsProtectedFile(command.orEmpty())) return RiskLevel.HIGH
+    }
     if (tool in setOf("Write", "Edit", "NotebookEdit") && paths.any(::isSensitivePath)) return RiskLevel.HIGH
     // Reads and searches must not reach credentials or the process environment either (/proc/self/environ, ~/.claude).
     if (tool != "Bash" && paths.any(::isCredentialPath)) return RiskLevel.HIGH
@@ -1060,3 +1218,6 @@ internal fun classifyToolRisk(tool: String, command: String?, paths: List<String
         else -> RiskLevel.SAFE
     }
 }
+
+/** How long to wait for the follow-up turn of a steering message before ending the session. */
+private const val STEER_FOLLOW_UP_WAIT_MS = 20_000L

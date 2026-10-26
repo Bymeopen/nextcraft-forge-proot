@@ -1,0 +1,1 @@
+"""Emulasi potongan kode (Unicorn)."""

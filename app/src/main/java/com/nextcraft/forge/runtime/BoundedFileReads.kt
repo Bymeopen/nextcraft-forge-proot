@@ -122,7 +122,7 @@ internal class InotifyLogTailer(
             }
             observer.startWatching()
         } catch (t: Throwable) {
-            runCatching { raf.close() }
+            runCatching { raf.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
             throw t
         }
     }
@@ -184,12 +184,22 @@ internal class InotifyLogTailer(
     }
 
     override fun close() {
-        runCatching { observer.stopWatching() }
-        runCatching { channel.close() }
-        runCatching { raf.close() }
+        runCatching { observer.stopWatching() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
+        runCatching { channel.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
+        runCatching { raf.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("BoundedFileReads", it) }
     }
 
     companion object {
         private const val MAX_TAIL_LINE_BYTES = 512 * 1024
     }
+}
+
+/**
+ * Deletes this file or directory tree without following symlinks. Kotlin's deleteRecursively() descends into a
+ * symlinked directory, so a link an agent made to another project would delete that project's files.
+ */
+internal fun java.io.File.deleteRecursivelyNoFollow(): Boolean {
+    val isLink = java.nio.file.Files.isSymbolicLink(toPath())
+    if (!isLink && isDirectory) listFiles()?.forEach { it.deleteRecursivelyNoFollow() }
+    return delete() || (!exists() && !java.nio.file.Files.isSymbolicLink(toPath()))
 }

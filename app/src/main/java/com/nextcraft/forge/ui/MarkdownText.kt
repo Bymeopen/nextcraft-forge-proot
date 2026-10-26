@@ -60,6 +60,8 @@ private sealed interface MarkdownBlock {
     data class Table(val rows: List<List<String>>) : MarkdownBlock
     object HorizontalRule : MarkdownBlock
     data class Paragraph(val text: String) : MarkdownBlock
+    data class Image(val alt: String, val src: String) : MarkdownBlock
+    data class Video(val src: String) : MarkdownBlock
 }
 
 @Composable
@@ -86,6 +88,8 @@ fun MarkdownText(
                     is MarkdownBlock.NumberedItem -> NumberedBlock(block, resolvedColor, tokens)
                     is MarkdownBlock.BlockQuote -> BlockQuoteView(block, resolvedColor, tokens)
                     is MarkdownBlock.Table -> TableBlockView(block, resolvedColor, tokens)
+                    is MarkdownBlock.Image -> ChatImage(alt = block.alt, src = block.src)
+                    is MarkdownBlock.Video -> ChatVideo(src = block.src)
                     MarkdownBlock.HorizontalRule -> Divider(
                         modifier = Modifier.padding(vertical = 4.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
@@ -201,7 +205,7 @@ private fun BlockQuoteView(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(tokens.cardElevatedColor.copy(alpha = 0.65f))
+            .background(tokens.cardElevatedColor.withAlphaScaled(0.65f))
             .padding(8.dp),
     ) {
         Box(
@@ -336,11 +340,11 @@ private fun TableBlockView(
                     modifier = Modifier
                         .background(
                             if (isHeader) {
-                                tokens.cardElevatedColor.copy(alpha = 0.78f)
+                                tokens.cardElevatedColor.withAlphaScaled(0.78f)
                             } else if (rowIdx % 2 == 1) {
                                 Color.Transparent
                             } else {
-                                tokens.cardElevatedColor.copy(alpha = 0.25f)
+                                tokens.cardElevatedColor.withAlphaScaled(0.25f)
                             },
                         )
                         .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -444,8 +448,18 @@ private fun parseMarkdown(raw: String): List<MarkdownBlock> {
             flushTable()
         }
 
+        val image = imageRefOfLine(line)
+        val video = if (image == null) videoPathOfLine(line) else null
         when {
             line.isBlank() -> flushParagraph()
+            video != null -> {
+                flushParagraph()
+                blocks += MarkdownBlock.Video(video)
+            }
+            image != null -> {
+                flushParagraph()
+                blocks += MarkdownBlock.Image(image.alt, image.src)
+            }
             trimmed == "---" || trimmed == "***" -> {
                 flushParagraph()
                 blocks += MarkdownBlock.HorizontalRule
@@ -585,3 +599,6 @@ private fun parseInlineMarkdown(
         }
     }
 }
+
+/** Scales the colour's own alpha; `copy(alpha = x)` would replace it and turn translucent Glass tokens bright. */
+internal fun Color.withAlphaScaled(factor: Float): Color = copy(alpha = alpha * factor)

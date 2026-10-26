@@ -43,5 +43,71 @@ internal fun disablePhantomProcessKillerViaRoot() {
         } else {
             runCatching { proc.inputStream.bufferedReader().use { it.readText() } }
         }
+    }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeCompatibility", it) }
+}
+
+/**
+ * Root managers differ in what `su` accepts. Magisk, KernelSU and APatch understand `-mm` (run in the global/master
+ * mount namespace, so chroot mounts are shared and can be unmounted later); older SuperSU/ROM-integrated `su`
+ * builds reject it and would fail every chroot launch. The result is probed once per process.
+ */
+internal object SuCompat {
+    @Volatile private var masterMount: Boolean? = null
+
+    /** `su -mm -c <command>` when supported, otherwise plain `su -c <command>`. */
+    fun argv(command: String): List<String> =
+        if (supportsMasterMount()) listOf("su", "-mm", "-c", command) else listOf("su", "-c", command)
+
+    fun supportsMasterMount(): Boolean {
+        masterMount?.let { return it }
+        val supported = runCatching {
+            val proc = ProcessBuilder("su", "-mm", "-c", "true").redirectErrorStream(true).start()
+            if (!proc.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                // Most likely the grant dialog is still open: not evidence either way, so do not cache.
+                proc.destroyForcibly()
+                return true
+            }
+            runCatching { proc.inputStream.bufferedReader().use { it.readText() } }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeCompatibility", it) }
+            proc.exitValue() == 0
+        }.getOrElse { return true }
+        masterMount = supported
+        return supported
     }
+
+    private const val PROBE_TIMEOUT_SECONDS = 10L
+}
+
+/** Facts about the ROM and root manager that explain most "works on one phone, not on another" reports. */
+internal data class RomInfo(val rom: String, val rootManager: String, val selinux: String)
+
+internal fun detectRomInfo(): RomInfo {
+    val props = runCatching {
+        val proc = ProcessBuilder("getprop").redirectErrorStream(true).start()
+        val text = proc.inputStream.bufferedReader().use { it.readText() }
+        proc.waitFor(5L, TimeUnit.SECONDS)
+        Regex("""\[([^\]]+)]: \[([^\]]*)]""").findAll(text).associate { it.groupValues[1] to it.groupValues[2] }
+    }.getOrDefault(emptyMap())
+    fun prop(key: String) = props[key].orEmpty()
+    val rom = when {
+        prop("ro.mi.os.version.name").isNotBlank() -> "HyperOS ${prop("ro.mi.os.version.name")}"
+        prop("ro.miui.ui.version.name").isNotBlank() -> "MIUI ${prop("ro.miui.ui.version.name")}"
+        prop("ro.build.version.oneui").isNotBlank() -> "One UI ${prop("ro.build.version.oneui")}"
+        prop("ro.build.version.opporom").isNotBlank() -> "ColorOS/OxygenOS ${prop("ro.build.version.opporom")}"
+        prop("ro.build.version.emui").isNotBlank() -> prop("ro.build.version.emui")
+        prop("ro.lineage.version").isNotBlank() -> "LineageOS ${prop("ro.lineage.version")}"
+        prop("ro.crdroid.version").isNotBlank() -> "crDroid ${prop("ro.crdroid.version")}"
+        prop("ro.pixelexperience.version").isNotBlank() -> "PixelExperience ${prop("ro.pixelexperience.version")}"
+        else -> prop("ro.build.display.id").ifBlank { "AOSP/unknown" }
+    }
+    val rootManager = runCatching {
+        val proc = ProcessBuilder("su", "-c", "su -v; getenforce").redirectErrorStream(true).start()
+        if (!proc.waitFor(8L, TimeUnit.SECONDS)) {
+            proc.destroyForcibly()
+            return@runCatching "su unresponsive" to "unknown"
+        }
+        val lines = proc.inputStream.bufferedReader().use { it.readText() }.lines().map(String::trim).filter(String::isNotEmpty)
+        (lines.getOrNull(0) ?: "unknown") to (lines.getOrNull(1) ?: "unknown")
+    }.getOrDefault("unavailable" to "unknown")
+    val masterMount = if (SuCompat.supportsMasterMount()) "su -mm: yes" else "su -mm: NO (fallback to plain su)"
+    return RomInfo(rom, "${rootManager.first} ($masterMount)", rootManager.second)
 }

@@ -1,0 +1,47 @@
+name: Sample Mini Sekolah
+
+# The sample is a small school database app used to test the on-device Android toolchain end to end.
+# CI proves it builds with the same AGP/Gradle as the app, and that make-project.sh (the script pasted into a prompt
+# for the in-app agent) recreates exactly the files in the repository.
+on:
+  push:
+    branches: [main, "ccr-**"]
+    paths: ["samples/mini-sekolah/**", ".github/workflows/sample-sekolah.yml", "scripts/make-mini-sekolah-script.py"]
+  pull_request:
+    paths: ["samples/mini-sekolah/**", ".github/workflows/sample-sekolah.yml", "scripts/make-mini-sekolah-script.py"]
+  workflow_dispatch:
+
+jobs:
+  sample:
+    name: Mini Sekolah sample
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.2"
+      - name: Script reproduces the project
+        run: |
+          bash -n samples/mini-sekolah/make-project.sh
+          bash samples/mini-sekolah/make-project.sh "$RUNNER_TEMP/generated" > /dev/null
+          diff -r -x make-project.sh samples/mini-sekolah "$RUNNER_TEMP/generated"
+      - name: Script is up to date with the files
+        run: |
+          python3 scripts/make-mini-sekolah-script.py
+          git diff --exit-code samples/mini-sekolah/make-project.sh
+      - name: Assemble debug APK
+        run: gradle --no-daemon -p samples/mini-sekolah :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mini-sekolah-debug
+          path: samples/mini-sekolah/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mini-sekolah-script
+          path: samples/mini-sekolah/make-project.sh

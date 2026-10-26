@@ -364,3 +364,15 @@ Branch: `ccr-a85f0c92-q5dlfw`. Build: `ANDROID_HOME=/root/android-sdk gradle :ap
 - Batch A (reset): shared ForgeProjectHeader / ForgeListRow / ForgeEmptyState (ForgeShared.kt); project header on Chats, Files, Terminal, Preview and tool screens; Tools launcher single-accent stroke tiles; uniform empty states (Projects, Chats, Preview); diff review buttons 48dp.
 
 - UX audit fixes: removed doubled status-bar inset, compact user bubbles (long-press copy), Agent endpoint/credentials subtitles, localised model/auth/project strings, borderless GitHub dialog, auto-approve warning, aligned settings toggles, Android-only run button, active chat marked by weight, Editor duplicate removed from Tools, nav pill fits Pengaturan.
+
+- Phone sizes 6.1-6.9in: real Compose renders at 360/393/412/440dp (opt-in harness: gradle :app:testDebugUnitTest -PforgeScreenshots -PforgeRoboDir=<dir with android-all-instrumented-14-robolectric-10818077-i6.jar>, output app/build/screenshots). Fixed: two-line list subtitles, project card meta line + compact tile under 400dp, chat copy button no longer overlaps text, 10.5sp nav labels when 5 tabs share <76dp slots.
+
+- Batch B (chat): grouped tool steps (3+ fold into one row, live step shown), inline diff card with keep/revert under the last finished reply, approval as non-dismissable bottom sheet with risk label and affected files, contextual quick-action chips plus starter ideas, "N new" pill. Components in ChatExtras.kt; renders in the phone-size harness (chatB, approval).
+
+- Round to 8.5: theme-level dialog/sheet/menu surfaces and one shape scale, fading edges on scrolling tabs, project card status pills (agent working, N files changed), landscape compact bar/header and no two-pane on landscape phones, diff actions wrap. Verified in renders: dark/white/glass at 393dp, landscape 932x430.
+
+- Visual fixes round: onboarding actions pinned (install button no longer below the fold on 360dp), English default runtime message mapped through runtimeText, composer short hint (TalkBack keeps the agent name), fading edges on quick chips and terminal keys, workspace error banners localised. Harness gained composer, terminal and onboarding scenarios.
+
+- Language round: in-app language now reaches the ViewModel (str()/quantity() wrap the application context) and foreground-service notifications (LocaleHelper); notification texts, auth errors, provider/build/diff/installer sentences are translated at display through MessageText (central UiText.Raw path, messageText() in Compose). MessageTextTest keeps table, English and Indonesian resources in sync and scans sources for unmapped sentences. Opt-in Robolectric tests start the real service and check Indonesian and in-app-English output.
+
+- Files search: header search toggle, capsule field with result count, matches in tree order with the folders that lead to them (dimmed), empty state. Pure filter tested in FileSearchTest; renders in the harness (filesSearch, filesSearchEmpty).

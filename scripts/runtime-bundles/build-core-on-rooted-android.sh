@@ -24,12 +24,18 @@ adb_cmd wait-for-device
 adb_cmd shell "su -c 'id -u'" | grep -qx 0 || { echo "ADB root is unavailable" >&2; exit 1; }
 
 temp_dir="$(mktemp -d)"
-trap 'rm -rf "$temp_dir"' EXIT
+# The rootfs gets /dev, /dev/pts, proc and sys bind-mounted below. If a run fails with those still mounted, the next
+# run's `rm -rf` would walk into the real /dev of the phone, so unmount everything under the rootfs first and on exit.
+unmount_rootfs() {
+  adb_cmd shell "su -c 'for m in \$(grep \" $REMOTE/rootfs/\" /proc/mounts | cut -d\" \" -f2 | sort -r); do umount -l \$m 2>/dev/null; done'" || true
+}
+trap 'unmount_rootfs; rm -rf "$temp_dir"' EXIT
 curl -fL --retry 3 -o "$temp_dir/$ROOTFS_FILE" "$ROOTFS_URL"
 printf '%s  %s\n' "$ROOTFS_SHA256" "$temp_dir/$ROOTFS_FILE" | shasum -a 256 -c -
 adb_cmd push "$temp_dir/$ROOTFS_FILE" /data/local/tmp/"$ROOTFS_FILE"
 
-adb_cmd shell "su -c 'rm -rf $REMOTE; mkdir -p $REMOTE/rootfs $REMOTE/output; toybox tar -xzf /data/local/tmp/$ROOTFS_FILE -C $REMOTE/rootfs; rm -f /data/local/tmp/$ROOTFS_FILE'"
+unmount_rootfs
+adb_cmd shell "su -c 'rm -rf --one-file-system $REMOTE 2>/dev/null || rm -rf $REMOTE; mkdir -p $REMOTE/rootfs $REMOTE/output; toybox tar -xzf /data/local/tmp/$ROOTFS_FILE -C $REMOTE/rootfs; rm -f /data/local/tmp/$ROOTFS_FILE'"
 adb_cmd shell "su -c 'mount --bind /dev $REMOTE/rootfs/dev; mount --bind /dev/pts $REMOTE/rootfs/dev/pts; mount -t proc proc $REMOTE/rootfs/proc; mount -t sysfs sysfs $REMOTE/rootfs/sys'"
 
 # Run a command inside the rootfs. The command is base64-encoded so it reaches bash byte-for-byte:
@@ -49,17 +55,17 @@ guest "printf 'APT::Sandbox::User \"root\";\nAcquire::Retries \"3\";\n' > /etc/a
 guest "printf 'nameserver $DNS_SERVER\\n' > /etc/resolv.conf; apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"
 guest "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl wget unzip zip xz-utils zstd jq ripgrep"
 
-# 3. Instal Node.js v24.19.0 ARM64 dengan verifikasi SHA256 resmi
-guest "set -e; NODE_VERSION=v24.19.0; NODE_FILE=node-\${NODE_VERSION}-linux-arm64.tar.gz; cd /tmp; curl -fsSLO https://nodejs.org/dist/\${NODE_VERSION}/\${NODE_FILE}; curl -fsSL https://nodejs.org/dist/\${NODE_VERSION}/SHASUMS256.txt | grep \"  \${NODE_FILE}\" | sha256sum -c -; mkdir -p /usr/local/lib/nodejs; tar -xzf \${NODE_FILE} -C /usr/local/lib/nodejs; ln -sfn node-\${NODE_VERSION}-linux-arm64 /usr/local/lib/nodejs/current; for c in node npm npx corepack; do ln -sfn ../lib/nodejs/current/bin/\$c /usr/local/bin/\$c; done; rm -f /tmp/\${NODE_FILE}"
+# 3. Instal Node.js v24.22.1 ARM64 dengan verifikasi SHA256 resmi
+guest "set -e; NODE_VERSION=v24.22.1; NODE_FILE=node-\${NODE_VERSION}-linux-arm64.tar.gz; cd /tmp; curl -fsSLO https://nodejs.org/dist/\${NODE_VERSION}/\${NODE_FILE}; curl -fsSL https://nodejs.org/dist/\${NODE_VERSION}/SHASUMS256.txt | grep \"  \${NODE_FILE}\" | sha256sum -c -; mkdir -p /usr/local/lib/nodejs; tar -xzf \${NODE_FILE} -C /usr/local/lib/nodejs; ln -sfn node-\${NODE_VERSION}-linux-arm64 /usr/local/lib/nodejs/current; for c in node npm npx corepack; do ln -sfn ../lib/nodejs/current/bin/\$c /usr/local/bin/\$c; done; rm -f /tmp/\${NODE_FILE}"
 guest "apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*"
 
 # 4. Siapkan direktori mount (/workspace/nextcraft, /nextcraft-bridge) & version markers
-guest "mkdir -p /workspace /workspace/nextcraft /nextcraft-bridge /pocket-bridge /opt/nextcraft /opt/pocketdev /root/.gradle/init.d /system /apex /vendor /product"
-guest "printf 'ubuntu-24.04.5-arm64\\n' > /.nextcraft-rootfs-version && cp /.nextcraft-rootfs-version /.pocket-rootfs-version"
-guest "printf 'nextcraft-core-$VERSION\\n' > /.nextcraft-core-tools-version && cp /.nextcraft-core-tools-version /.pocket-core-tools-version"
-guest "printf 'core-bundle-$VERSION\\n' > /.nextcraft-runtime-ready && cp /.nextcraft-runtime-ready /.pocket-runtime-ready"
-guest "printf 'ubuntu-maintenance-v1\\n' > /.nextcraft-system-upgrade-version && cp /.nextcraft-system-upgrade-version /.pocket-system-upgrade-version"
-guest "printf '{\"WEB\":true,\"PYTHON\":false,\"CPP\":false,\"PHP\":false,\"ANDROID\":false}\\n' > /.nextcraft-dev-stacks.json && cp /.nextcraft-dev-stacks.json /.pocket-dev-stacks.json"
+guest "mkdir -p /workspace /workspace/nextcraft /nextcraft-bridge /opt/nextcraft /root/.gradle/init.d /system /apex /vendor /product"
+guest "printf 'ubuntu-24.04.5-arm64\\n' > /.nextcraft-rootfs-version"
+guest "printf 'nextcraft-core-$VERSION\\n' > /.nextcraft-core-tools-version"
+guest "printf 'core-bundle-$VERSION\\n' > /.nextcraft-runtime-ready"
+guest "printf 'ubuntu-maintenance-v1\\n' > /.nextcraft-system-upgrade-version"
+guest "printf '{\"WEB\":true,\"PYTHON\":false,\"CPP\":false,\"PHP\":false,\"ANDROID\":false}\\n' > /.nextcraft-dev-stacks.json"
 guest "rm -rf /root/.cache /root/.npm /root/.composer /root/.gradle/caches /root/.ssh; find /var/log -type f -delete; rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id /root/.bash_history"
 
 # 5. Unmount virtual filesystems secara bersih sebelum membuat arsip deterministik .tar.zst

@@ -7,9 +7,14 @@ Status per 2026-10-18, dari uji di perangkat root (kernel 5.10 GKI, Ubuntu 24.04
 
 | # | Masalah | Status |
 |---|---|---|
-| 1 | `/apex` tanpa submount, `aapt2`/`zipalign` gagal | Diperbaiki di kode, belum diverifikasi di perangkat |
+| 1 | `/apex` tanpa submount, `aapt2`/`zipalign` gagal | Diperbaiki, **diverifikasi di perangkat 2026-10-22** (lihat di bawah) |
 | 2 | Satu stack gagal menghentikan stack lain | Diperbaiki |
 | 3 | Skrip init Gradle rusak di bundle Android | Diperbaiki di bundle `nextcraft-android-arm64-2026.10.1` |
+
+> **Verifikasi 2026-10-22 (build debug, proyek sampel `samples/mini-sekolah`):** di chroot, `/apex` berisi 80 submount;
+> `gradle --no-daemon :app:assembleDebug` selesai (build dingin sekitar 99 detik pada uji sebelumnya, 16 detik dengan
+> cache), tanpa "Killed" atau OutOfMemoryError. APK 894.097 byte lolos `aapt2 dump badging`, `zipalign -c 4`, dan
+> `apksigner verify`. Heap Gradle terkelola: `-Xmx1280m` (RAM 11 GB). Memori available terendah sekitar 5,0 GB.
 
 ### 1. `aapt2` dan `zipalign` tidak bisa jalan: `/apex` di-bind tanpa submount (kritis)
 

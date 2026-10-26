@@ -41,14 +41,19 @@ fun NavGlyph(
     size: Dp = 24.dp,
 ) {
     val animate = live && !reduceMotion
-    val transition = rememberInfiniteTransition()
-    // One shared 0..1 clock; each glyph reads it differently (blink vs orbit).
-    val clock by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
-    )
-    val t = if (animate) clock else 0f
+    // One shared 0..1 clock; each glyph reads it differently (blink vs orbit). It only exists while the glyph is
+    // live: an infinite transition requests a frame on every vsync, so an idle bottom bar kept the app busy.
+    val t = if (animate) {
+        val transition = rememberInfiniteTransition()
+        val clock by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
+        )
+        clock
+    } else {
+        0f
+    }
     Canvas(modifier = modifier.size(size)) {
         val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         when (tab) {
@@ -56,7 +61,7 @@ fun NavGlyph(
             ForgeTab.TERMINAL -> drawPrompt(tint, stroke, progress, blink = animate && t < 0.5f)
             ForgeTab.AGENT -> drawSpark(tint, stroke, progress, orbit = if (animate) t else null)
             ForgeTab.TOOLS, ForgeTab.ANDROID, ForgeTab.TOOLCHAINS, ForgeTab.DIAGNOSTICS, ForgeTab.BUILD_MATRIX,
-            ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS -> drawWrench(tint, stroke, progress)
+            ForgeTab.SSH, ForgeTab.CICD, ForgeTab.ROM, ForgeTab.CHECKPOINTS, ForgeTab.CODE_VIEWER, ForgeTab.FILE_BROWSER, ForgeTab.REA, ForgeTab.BACKUP -> drawWrench(tint, stroke, progress)
             ForgeTab.FILES -> drawFile(tint, stroke, progress)
             ForgeTab.PREVIEW -> drawPreview(tint, stroke, progress)
             ForgeTab.SETTINGS -> drawSliders(tint, stroke, progress)

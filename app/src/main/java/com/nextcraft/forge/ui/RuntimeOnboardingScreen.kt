@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
@@ -136,13 +135,13 @@ internal fun RuntimeOnboardingScreen(
         contentColor = scheme.onBackground,
         modifier = Modifier.fillMaxSize(),
     ) {
+    Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .weight(1f)
             .verticalScroll(rememberScrollState())
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .statusBarsPadding()
-            .padding(top = 12.dp, bottom = 24.dp),
+            .padding(top = 12.dp, bottom = 12.dp),
     ) {
         ForgeLargeTitle(
             title = stringResource(R.string.onb_title),
@@ -178,7 +177,7 @@ internal fun RuntimeOnboardingScreen(
         StatusCheckRow(
             label = stringResource(R.string.shell_check_rootfs),
             ok = state.runtimeInstalled,
-            detail = if (state.runtimeInstalled) stringResource(R.string.shell_installed_ready) else snap.message,
+            detail = if (state.runtimeInstalled) stringResource(R.string.shell_installed_ready) else runtimeText(snap.message),
             inProgress = !state.runtimeInstalled && snap.status == RuntimeSetupStatus.RUNNING,
         )
 
@@ -229,7 +228,7 @@ internal fun RuntimeOnboardingScreen(
                         ForgeStatusIcon(status = progressStatus, iconSize = 20.dp)
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(snap.message, fontSize = ForgeType.body, fontWeight = FontWeight.Medium, maxLines = 2)
+                            Text(runtimeText(snap.message), fontSize = ForgeType.body, fontWeight = FontWeight.Medium, maxLines = 2)
                             Text(
                                 text = snap.errorMessage ?: stringResource(progressStatus.labelRes),
                                 fontSize = ForgeType.secondary,
@@ -263,7 +262,11 @@ internal fun RuntimeOnboardingScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+    }
+    // The actions stay pinned: on 360dp phones the install button used to sit below the fold of a long checklist.
+    Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp)) {
+        Divider(color = scheme.outlineVariant, thickness = 0.5.dp)
+        Spacer(modifier = Modifier.height(12.dp))
         // One primary capsule (install / resume / pause), then quiet text actions, then the escape link.
         if (isInstalling) {
             OutlinedButton(
@@ -285,25 +288,20 @@ internal fun RuntimeOnboardingScreen(
                     .heightIn(min = 48.dp),
             )
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp),
+        // The three quiet actions share one wrapping row: a separate row for each cost ~100dp of the checklist's height.
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.Center,
         ) {
             ForgeTextButton(onClick = onRepairRootfs, enabled = !isInstalling) { Text(stringResource(R.string.onb_repair)) }
-            Text("·", color = scheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterVertically))
             ForgeTextButton(onClick = onRefreshStatus) { Text(stringResource(R.string.onb_recheck)) }
+            ForgeTextButton(onClick = onEnterWorkspaceAnyway) {
+                Text(stringResource(R.string.onb_continue_anyway), color = scheme.onSurfaceVariant)
+            }
         }
-        Divider(
-            color = scheme.outlineVariant,
-            thickness = 0.5.dp,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-        )
-        ForgeTextButton(
-            onClick = onEnterWorkspaceAnyway,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        ) { Text(stringResource(R.string.onb_continue_anyway), color = scheme.onSurfaceVariant) }
+    }
     }
     }
 }

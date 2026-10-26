@@ -52,7 +52,7 @@ internal class NativeSpawnProcess private constructor(
             }
             polled
         }
-        runCatching { stdin.close() }
+        runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
         outputPump?.join(1_000)
         return exitCode
     }
@@ -62,11 +62,11 @@ internal class NativeSpawnProcess private constructor(
         if (delegateProcess != null) {
             val code = delegateProcess.exitValue()
             result = code
-            runCatching { stdin.close() }
+            runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
             return code
         }
         val status = pollExit() ?: throw IllegalThreadStateException("Process is still running")
-        runCatching { stdin.close() }
+        runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
         return status
     }
 
@@ -77,8 +77,12 @@ internal class NativeSpawnProcess private constructor(
     private fun hasExited(): Boolean =
         if (delegateProcess != null) !delegateProcess.isAlive else pollExit() != null
 
+    /** chroot-exec's pid on the root side (see [GuestProcess]); signalled together with the su client. */
+    @Volatile internal var guestPidFile: File? = null
+
     override fun destroy() {
         if (hasExited()) return
+        GuestProcess.signal(guestPidFile, 15)
         if (delegateProcess != null) {
             delegateProcess.destroy()
             killViaRootIfNeeded(pid, 15)
@@ -91,6 +95,7 @@ internal class NativeSpawnProcess private constructor(
     /** Send the same interrupt signal produced by Ctrl+C in a real terminal. */
     internal fun interrupt() {
         if (hasExited()) return
+        GuestProcess.signal(guestPidFile, 2)
         if (delegateProcess != null) {
             killViaRootIfNeeded(pid, 2)
             return
@@ -100,17 +105,18 @@ internal class NativeSpawnProcess private constructor(
 
     override fun destroyForcibly(): Process {
         if (hasExited()) {
-            runCatching { stdin.close() }
+            runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
             return this
         }
+        GuestProcess.signal(guestPidFile, 15, forceAfterSeconds = 3)
         if (delegateProcess != null) {
             delegateProcess.destroyForcibly()
             killViaRootIfNeeded(pid, 9)
-            runCatching { stdin.close() }
+            runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
             return this
         }
         NativeSpawn.kill(pid, 9)
-        runCatching { stdin.close() }
+        runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
         return this
     }
 
@@ -122,7 +128,7 @@ internal class NativeSpawnProcess private constructor(
             if (!proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
                 proc.destroyForcibly()
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
     }
 
     /** Dynamically resize the pseudo-terminal window when soft-keyboard or orientation changes. */
@@ -213,7 +219,7 @@ internal class NativeSpawnProcess private constructor(
                     } finally {
                         synchronized(ptyLock) {
                             ptyOpen = false
-                            runCatching { pfd.close() }
+                            runCatching { pfd.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
                         }
                     }
                 }, "nextcraft-pty-output").apply {

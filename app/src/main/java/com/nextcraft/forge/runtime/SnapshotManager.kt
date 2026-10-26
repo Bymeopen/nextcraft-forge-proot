@@ -1,6 +1,7 @@
 package com.nextcraft.forge.runtime
 
 import java.io.File
+import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -41,7 +42,8 @@ class SnapshotManager(private val filesDir: File) {
             ZipOutputStream(partial.outputStream().buffered()).use { zip ->
                 val root = workspace.canonicalFile
                 root.walkTopDown()
-                    .onEnter { it == root || it.name !in EXCLUDED_DIRS }
+                    // walkTopDown follows a symlinked folder (it only asks isDirectory), so links are refused here, not just filtered.
+                    .onEnter { it == root || (it.name !in EXCLUDED_DIRS && !Files.isSymbolicLink(it.toPath())) }
                     .filter { it != root && !java.nio.file.Files.isSymbolicLink(it.toPath()) }
                     .forEach { file ->
                         val name = file.relativeTo(root).invariantSeparatorsPath
@@ -81,9 +83,7 @@ class SnapshotManager(private val filesDir: File) {
             }
         }
         val safety = create(projectId, workspace, "Before restore")
-        root.listFiles().orEmpty().filter { it.name !in EXCLUDED_DIRS }.forEach { entry ->
-            check(entry.deleteRecursively()) { "Could not clear ${entry.name}; a build or terminal may still be using it." }
-        }
+        check(clearRestorable(root)) { "Could not clear the project folder; a build or terminal may still be using it." }
         ZipInputStream(snapshot.file.inputStream().buffered()).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
@@ -106,9 +106,31 @@ class SnapshotManager(private val filesDir: File) {
 
     fun delete(snapshot: WorkspaceSnapshot): Boolean = snapshot.file.delete()
 
+    /**
+     * Deletes what [create] would have archived, and only that. Folders named in [EXCLUDED_DIRS] are never archived, so
+     * they are kept at every depth (not just at the top): a `scripts/build` or `packages/a/node_modules` the snapshot
+     * never saw must survive a restore. Symbolic links are not archived either and are left alone.
+     */
+    private fun clearRestorable(dir: File): Boolean {
+        var ok = true
+        for (child in dir.listFiles().orEmpty()) {
+            when {
+                Files.isSymbolicLink(child.toPath()) -> Unit
+                child.isDirectory && child.name in EXCLUDED_DIRS -> Unit
+                child.isDirectory -> {
+                    ok = clearRestorable(child) && ok
+                    // A folder that still holds an excluded subfolder stays; one that was emptied goes.
+                    if (child.list().isNullOrEmpty()) ok = child.delete() && ok
+                }
+                else -> ok = child.delete() && ok
+            }
+        }
+        return ok
+    }
+
     private companion object {
         val NAME = Regex("^(\\d{10,})-(.*)\\.zip$")
-        val EXCLUDED_DIRS = setOf("node_modules", ".gradle", "build", "__pycache__", ".cxx", ".venv")
+        val EXCLUDED_DIRS = setOf("node_modules", ".gradle", "build", "__pycache__", ".cxx", ".venv", ".forge", ".rea")
         const val MAX_TOTAL_BYTES = 500L * 1024 * 1024
     }
 }

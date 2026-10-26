@@ -126,7 +126,7 @@ fun GitHubSection(state: ForgeUiState, viewModel: MainViewModel) {
                                 text = stringResource(R.string.settings_copy_code_open_github),
                                 onClick = {
                                     clipboard.setText(AnnotatedString(dc.userCode))
-                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dc.verificationUri))) }
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dc.verificationUri))) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("GitHubSection", it) }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -187,7 +187,7 @@ fun GitHubSection(state: ForgeUiState, viewModel: MainViewModel) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ForgePrimaryButton(
                             text = stringResource(R.string.settings_push_workspace),
-                            onClick = { viewModel.syncProjectWithGitHub() },
+                            onClick = { viewModel.syncProjectWithGitHub(reportStatus = true) },
                             modifier = Modifier.weight(1f),
                         )
                         OutlinedButton(

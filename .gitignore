@@ -21,3 +21,19 @@ attachments/
 
 # Runtime bundles produced by scripts/runtime-bundles (published as release assets, not committed)
 dist/
+
+# Python bytecode (REA package and its tests)
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# REA writes its consent marker to $HOME/.rea (tests use the repo root as HOME)
+.rea/
+
+# Native build output (CMake/Ninja)
+.cxx/
+
+# Key material (the shared debug.keystore is tracked deliberately)
+*.jks
+*.p12
+*.pem

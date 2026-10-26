@@ -46,8 +46,15 @@ fun ProviderKind.displaySubtitle(): String = stringResource(subtitleRes())
 
 fun AgentKind.displayTitle(): String = when (this) {
     AgentKind.CLAUDE_CODE -> "Claude Code"
-    AgentKind.DEEPSEEK_HARNESS -> "DeepSeek Harness"
+    AgentKind.DEEPSEEK_HARNESS -> "DeepSeek"
     AgentKind.ANTIGRAVITY -> "Antigravity CLI"
+}
+
+/** Short name for segmented controls, where three labels share one row and "Antigravity CLI" does not fit. */
+fun AgentKind.shortTitle(): String = when (this) {
+    AgentKind.CLAUDE_CODE -> "Claude"
+    AgentKind.DEEPSEEK_HARNESS -> "DeepSeek"
+    AgentKind.ANTIGRAVITY -> "Antigravity"
 }
 
 @StringRes
@@ -134,4 +141,6 @@ private fun relativeTime(atMillis: Long, nowMillis: Long, fallback: String): Str
 }
 
 @Composable
-fun ProjectChat.displayTitle(): String = title.ifBlank { stringResource(R.string.chat_main) }
+fun ProjectChat.displayTitle(): String =
+    // "Main chat" is the English default stored in older data; show it in the app language.
+    if (title.isBlank() || title == "Main chat") stringResource(R.string.chat_main) else title

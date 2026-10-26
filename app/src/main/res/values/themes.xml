@@ -5,4 +5,11 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+
+    <!-- Splash screen (Android 8+ lewat core-splashscreen); setelah selesai beralih ke Theme.NextCraftForge -->
+    <style name="Theme.NextCraftForge.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#000000</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.NextCraftForge</item>
+    </style>
 </resources>

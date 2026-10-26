@@ -14,6 +14,11 @@ class ForgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CrashReporter.install(this)
+        com.nextcraft.forge.schedule.ScheduleTickWorker.sync(this, com.nextcraft.forge.schedule.ScheduleStore(this).load().any { it.enabled })
+        val updatePrefs = com.nextcraft.forge.data.AppPreferences(this)
+        if (updatePrefs.updateNotifications || updatePrefs.autoInstallUpdates) {
+            com.nextcraft.forge.update.UpdateCheckWorker.schedule(this)
+        }
     }
 }
 
@@ -41,7 +46,7 @@ object CrashReporter {
                     append(Log.getStackTraceString(error))
                 }
                 file.writeText(report.take(MAX_CHARS))
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ForgeApplication", it) }
             previous?.uncaughtException(thread, error)
         }
     }
@@ -50,6 +55,29 @@ object CrashReporter {
 
     fun clear(context: Context) {
         reportFile(context).delete()
+    }
+
+    private fun prefs(context: Context) = context.getSharedPreferences("forge_crash", Context.MODE_PRIVATE)
+
+    /** True when a report exists that the person has not yet been asked about. */
+    fun hasUnseen(context: Context): Boolean {
+        val file = reportFile(context)
+        return file.isFile && file.lastModified() != prefs(context).getLong("seen_modified", 0L)
+    }
+
+    /** Remembers that this report was shown, so the prompt appears once per crash. */
+    fun markSeen(context: Context) {
+        prefs(context).edit().putLong("seen_modified", reportFile(context).lastModified()).apply()
+    }
+
+    /** Share sheet for the report. Nothing leaves the phone unless the person picks an app and sends it. */
+    fun shareIntent(context: Context): android.content.Intent? {
+        val report = read(context) ?: return null
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(android.content.Intent.EXTRA_SUBJECT, "NextCraft Forge crash report")
+            .putExtra(android.content.Intent.EXTRA_TEXT, report)
+        return android.content.Intent.createChooser(send, null)
     }
 
     private fun reportFile(context: Context) = File(context.filesDir, "crash/$FILE_NAME")

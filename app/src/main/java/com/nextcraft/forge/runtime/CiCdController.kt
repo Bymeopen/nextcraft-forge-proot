@@ -1,9 +1,14 @@
 package com.nextcraft.forge.runtime
 
+import com.nextcraft.forge.ui.UiText
+import com.nextcraft.forge.ui.UiTextException
+import com.nextcraft.forge.ui.toUiText
+import com.nextcraft.forge.R
 import android.content.Context
 import com.nextcraft.forge.data.ApiKeyVault
 import com.nextcraft.forge.model.Project
 import com.nextcraft.forge.network.GitHubClient
+import com.nextcraft.forge.network.GitHubPullRequest
 import com.nextcraft.forge.network.GitHubWorkflow
 import com.nextcraft.forge.network.GitHubWorkflowRun
 import java.io.File
@@ -21,9 +26,10 @@ data class CiCdState(
     val repository: String? = null,
     val workflows: List<GitHubWorkflow> = emptyList(),
     val runs: List<GitHubWorkflowRun> = emptyList(),
+    val pullRequests: List<GitHubPullRequest> = emptyList(),
     val branch: String = "main",
     val loading: Boolean = false,
-    val message: String? = null,
+    val message: UiText? = null,
 )
 
 /** Owner and repo of the `origin` remote in a workspace's .git/config, for github.com remotes only. */
@@ -46,30 +52,114 @@ class CiCdController(
     private val vault = ApiKeyVault(appContext)
     private val mutable = MutableStateFlow(CiCdState())
     val state: StateFlow<CiCdState> = mutable.asStateFlow()
+    @Volatile
+    private var lastProjectId: String? = null
 
-    fun refresh() {
+    fun refresh(preserveMessage: Boolean = false) {
         val project = activeProject()
         if (project == null) {
-            mutable.update { CiCdState(message = "Open a project first.") }
+            lastProjectId = null
+            mutable.update { CiCdState(message = UiText.res(R.string.rt_open_project_first)) }
             return
         }
+        val switchedProject = lastProjectId != project.id
+        lastProjectId = project.id
+        mutable.update {
+            if (switchedProject) {
+                CiCdState(loading = true, message = if (preserveMessage) it.message else null)
+            } else {
+                it.copy(loading = true, message = if (preserveMessage) it.message else null)
+            }
+        }
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val token = vault.get("GITHUB_TOKEN").orEmpty()
+                    if (token.isBlank()) throw UiTextException(UiText.res(R.string.rt_cicd_connect_github))
+                    val (owner, repo) = githubRepositoryOf(workspaceFor(project.id))
+                        ?: error("This project has no GitHub remote. Push it to GitHub or clone a GitHub repository.")
+                    val prs = runCatching { client.pullRequests(token, owner, repo) }.getOrDefault(emptyList())
+                    val wfs = runCatching { client.workflows(token, owner, repo) }.getOrDefault(emptyList())
+                    val rns = runCatching { client.workflowRuns(token, owner, repo) }.getOrDefault(emptyList())
+                    listOf("$owner/$repo", wfs, rns, prs)
+                }
+            }
+            if (lastProjectId != project.id) return@launch
+            @Suppress("UNCHECKED_CAST")
+            mutable.update { current ->
+                result.fold(
+                    onSuccess = { tuple ->
+                        current.copy(
+                            repository = tuple[0] as String,
+                            workflows = tuple[1] as List<GitHubWorkflow>,
+                            runs = tuple[2] as List<GitHubWorkflowRun>,
+                            pullRequests = tuple[3] as List<GitHubPullRequest>,
+                            loading = false,
+                        )
+                    },
+                    onFailure = {
+                        current.copy(
+                            repository = null,
+                            workflows = emptyList(),
+                            runs = emptyList(),
+                            pullRequests = emptyList(),
+                            loading = false,
+                            message = it.toUiText(R.string.rt_cicd_load_failed),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    fun createPullRequest(title: String, head: String, base: String = "main", body: String = "") {
+        val project = activeProject() ?: return
+        if (title.isBlank() || head.isBlank()) return
         mutable.update { it.copy(loading = true, message = null) }
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     val token = vault.get("GITHUB_TOKEN").orEmpty()
-                    check(token.isNotBlank()) { "Connect GitHub in Settings first." }
-                    val (owner, repo) = githubRepositoryOf(workspaceFor(project.id))
-                        ?: error("This project has no GitHub remote. Push it to GitHub or clone a GitHub repository.")
-                    Triple("$owner/$repo", client.workflows(token, owner, repo), client.workflowRuns(token, owner, repo))
+                    if (token.isBlank()) throw UiTextException(UiText.res(R.string.rt_cicd_connect_github))
+                    val (owner, repo) = githubRepositoryOf(workspaceFor(project.id)) ?: error("No GitHub remote.")
+                    client.createPullRequest(token, owner, repo, title, head, base, body)
                 }
             }
-            mutable.update { current ->
-                result.fold(
-                    onSuccess = { (name, workflows, runs) -> current.copy(repository = name, workflows = workflows, runs = runs, loading = false) },
-                    onFailure = { current.copy(loading = false, message = it.message ?: "Could not load the pipeline.") },
+            mutable.update {
+                it.copy(
+                    loading = false,
+                    message = result.fold(
+                        { pr -> UiText.Raw("PR #${pr.number} created: ${pr.title}") },
+                        { e -> e.toUiText(R.string.rt_cicd_start_failed) },
+                    ),
                 )
             }
+            if (result.isSuccess) refresh(preserveMessage = true)
+        }
+    }
+
+    fun mergePullRequest(number: Int) {
+        val project = activeProject() ?: return
+        mutable.update { it.copy(loading = true, message = null) }
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val token = vault.get("GITHUB_TOKEN").orEmpty()
+                    if (token.isBlank()) throw UiTextException(UiText.res(R.string.rt_cicd_connect_github))
+                    val (owner, repo) = githubRepositoryOf(workspaceFor(project.id)) ?: error("No GitHub remote.")
+                    client.mergePullRequest(token, owner, repo, number)
+                }
+            }
+            mutable.update {
+                it.copy(
+                    loading = false,
+                    message = result.fold(
+                        { UiText.Raw("PR #$number merged") },
+                        { e -> e.toUiText(R.string.rt_cicd_start_failed) },
+                    ),
+                )
+            }
+            if (result.isSuccess) refresh(preserveMessage = true)
         }
     }
 
@@ -83,7 +173,7 @@ class CiCdController(
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     val token = vault.get("GITHUB_TOKEN").orEmpty()
-                    check(token.isNotBlank()) { "Connect GitHub in Settings first." }
+                    if (token.isBlank()) throw UiTextException(UiText.res(R.string.rt_cicd_connect_github))
                     val (owner, repo) = githubRepositoryOf(workspaceFor(project.id)) ?: error("No GitHub remote.")
                     client.dispatchWorkflow(token, owner, repo, workflow.id, branch)
                 }
@@ -91,7 +181,7 @@ class CiCdController(
             mutable.update {
                 it.copy(
                     loading = false,
-                    message = result.fold({ "Started ${workflow.name} on $branch. Refresh in a few seconds." }, { e -> e.message ?: "Could not start the workflow." }),
+                    message = result.fold({ UiText.res(R.string.rt_cicd_started, workflow.name, branch) }, { e -> e.toUiText(R.string.rt_cicd_start_failed) }),
                 )
             }
         }

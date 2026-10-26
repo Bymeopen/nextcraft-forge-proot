@@ -15,10 +15,26 @@ class RuntimeExecutionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var projectNameOverride: String? = null
     private var notificationTitleOverride: String? = null
+    /** Resources in the language chosen inside the app; the service's own context follows the system language. */
+    private fun t(@androidx.annotation.StringRes id: Int, vararg args: Any): String =
+        com.nextcraft.forge.ui.LocaleHelper.wrapContext(this).getString(id, *args)
+
+    private fun extraText(intent: Intent?, resKey: String, argsKey: String, vararg rawKeys: String): String? {
+        if (intent == null) return null
+        if (intent.hasExtra(resKey)) {
+            val id = intent.getIntExtra(resKey, 0)
+            if (id != 0) {
+                val args: Array<String> = intent.getStringArrayExtra(argsKey) ?: emptyArray()
+                runCatching { t(id, *args) }.getOrNull()?.let { return it }
+            }
+        }
+        return rawKeys.firstNotNullOfOrNull { intent.getStringExtra(it) }
+    }
+
     private val projectName: String
-        get() = projectNameOverride ?: "Forge Workspace"
+        get() = projectNameOverride ?: t(com.nextcraft.forge.R.string.notif_default_project)
     private val notificationTitle: String
-        get() = notificationTitleOverride ?: "Forge Runtime Active"
+        get() = notificationTitleOverride ?: t(com.nextcraft.forge.R.string.notif_runtime_active)
     private var canStop: Boolean = true
     /**
      * The agent and the Android build share this service and can run at the same time. Each START counts one
@@ -38,10 +54,8 @@ class RuntimeExecutionService : Service() {
         val action = intent?.action ?: ACTION_START
         val incomingProjectName = intent?.getStringExtra(EXTRA_PROJECT_NAME)
             ?: intent?.getStringExtra(LEGACY_EXTRA_PROJECT_NAME)
-        val incomingTitle = intent?.getStringExtra(EXTRA_TITLE)
-            ?: intent?.getStringExtra(LEGACY_EXTRA_TITLE)
-        val incomingDetail = intent?.getStringExtra(EXTRA_DETAIL)
-            ?: intent?.getStringExtra(LEGACY_EXTRA_DETAIL)
+        val incomingTitle = extraText(intent, EXTRA_TITLE_RES, EXTRA_DETAIL_ARGS, EXTRA_TITLE, LEGACY_EXTRA_TITLE)
+        val incomingDetail = extraText(intent, EXTRA_DETAIL_RES, EXTRA_DETAIL_ARGS, EXTRA_DETAIL, LEGACY_EXTRA_DETAIL)
 
         incomingProjectName?.takeIf(String::isNotBlank)?.let { projectNameOverride = it }
 
@@ -56,7 +70,7 @@ class RuntimeExecutionService : Service() {
                 }
                 getSystemService(NotificationManager::class.java)?.notify(
                     RUNNING_NOTIFICATION_ID,
-                    runningNotification("Stopping active task…", includeStop = false),
+                    runningNotification(t(com.nextcraft.forge.R.string.notif_stopping), includeStop = false),
                 )
             }
             ACTION_PROGRESS, LEGACY_ACTION_PROGRESS -> {
@@ -72,20 +86,20 @@ class RuntimeExecutionService : Service() {
                     canStop = intent.getBooleanExtra(LEGACY_EXTRA_CAN_STOP, true)
                 }
                 val detail = incomingDetail?.takeIf(String::isNotBlank)
-                    ?: "Working in $projectName"
+                    ?: t(com.nextcraft.forge.R.string.notif_working_in, projectName)
                 getSystemService(NotificationManager::class.java)?.notify(
                     RUNNING_NOTIFICATION_ID,
                     runningNotification(detail, includeStop = canStop),
                 )
             }
             ACTION_COMPLETE, LEGACY_ACTION_COMPLETE -> finishTask(
-                title = "Task completed",
-                detail = incomingDetail?.takeIf(String::isNotBlank) ?: "Finished task in $projectName",
+                title = t(com.nextcraft.forge.R.string.notif_task_completed),
+                detail = incomingDetail?.takeIf(String::isNotBlank) ?: t(com.nextcraft.forge.R.string.notif_finished_in, projectName),
                 failed = false,
             )
             ACTION_FAILED, LEGACY_ACTION_FAILED -> finishTask(
-                title = "Task needs attention",
-                detail = incomingDetail?.takeIf(String::isNotBlank) ?: "Could not finish the active task.",
+                title = t(com.nextcraft.forge.R.string.notif_task_attention),
+                detail = incomingDetail?.takeIf(String::isNotBlank) ?: t(com.nextcraft.forge.R.string.notif_could_not_finish),
                 failed = true,
             )
             ACTION_CANCELLED, LEGACY_ACTION_CANCELLED -> {
@@ -107,11 +121,20 @@ class RuntimeExecutionService : Service() {
                 }
                 activeTasks++
                 val detail = incomingDetail?.takeIf(String::isNotBlank)
-                    ?: "Working in $projectName"
-                startForeground(
-                    RUNNING_NOTIFICATION_ID,
-                    runningNotification(detail, includeStop = canStop),
-                )
+                    ?: t(com.nextcraft.forge.R.string.notif_working_in, projectName)
+                try {
+                    startForeground(
+                        RUNNING_NOTIFICATION_ID,
+                        runningNotification(detail, includeStop = canStop),
+                    )
+                } catch (error: RuntimeException) {
+                    // Android 12+ refuses foreground promotion once the app has moved to the background
+                    // (ForegroundServiceStartNotAllowedException); crashing here would kill the running task.
+                    android.util.Log.w("RuntimeExecutionService", "startForeground refused: ${error::class.simpleName}")
+                    activeTasks = (activeTasks - 1).coerceAtLeast(0)
+                    if (!taskRunning) stopSelf()
+                    return START_NOT_STICKY
+                }
                 acquireWakeLock()
             }
         }
@@ -136,7 +159,7 @@ class RuntimeExecutionService : Service() {
                 Intent(this, RuntimeExecutionService::class.java).setAction(ACTION_STOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            builder.addAction(0, "Stop task", stopIntent)
+            builder.addAction(0, t(com.nextcraft.forge.R.string.notif_stop_task), stopIntent)
         }
         return builder.build()
     }
@@ -161,8 +184,8 @@ class RuntimeExecutionService : Service() {
         if (!taskRunning) stopSelf()
     }
 
-    private fun smallIconRes(): Int =
-        applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.stat_notify_sync
+    // Ikon status bar harus siluet satu warna, bukan ikon launcher adaptif
+    private fun smallIconRes(): Int = com.nextcraft.forge.R.drawable.ic_notification
 
     private fun openAppIntent(): PendingIntent {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -187,9 +210,22 @@ class RuntimeExecutionService : Service() {
 
     private fun releaseWakeLock() {
         wakeLock?.takeIf { it.isHeld }?.let { lock ->
-            runCatching { lock.release() }
+            runCatching { lock.release() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeExecutionService", it) }
         }
         wakeLock = null
+    }
+
+    /**
+     * Android 15+ caps dataSync foreground services at about six hours per 24 hours and then calls this; the
+     * service must stop promptly or the system raises an exception that kills the app. Commands already
+     * running in the chroot are separate processes and are not touched.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        android.util.Log.w("RuntimeExecutionService", "dataSync foreground time limit reached")
+        activeTasks = 0
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -210,6 +246,9 @@ class RuntimeExecutionService : Service() {
         const val EXTRA_PROJECT_NAME = RuntimeExecutionServiceContract.EXTRA_PROJECT_NAME
         const val EXTRA_DETAIL = RuntimeExecutionServiceContract.EXTRA_DETAIL
         const val EXTRA_TITLE = "com.nextcraft.forge.runtime.extra.TITLE"
+        const val EXTRA_TITLE_RES = "com.nextcraft.forge.runtime.extra.TITLE_RES"
+        const val EXTRA_DETAIL_RES = RuntimeExecutionServiceContract.EXTRA_DETAIL_RES
+        const val EXTRA_DETAIL_ARGS = RuntimeExecutionServiceContract.EXTRA_DETAIL_ARGS
         const val EXTRA_CAN_STOP = "com.nextcraft.forge.runtime.extra.CAN_STOP"
 
         private const val LEGACY_ACTION_STOP = "com.nextcraft.forge.STOP_RUNTIME"
@@ -226,26 +265,27 @@ class RuntimeExecutionService : Service() {
         private const val RESULT_CHANNEL_ID = "task-results"
         private const val RUNNING_NOTIFICATION_ID = 41
         private const val RESULT_NOTIFICATION_ID = 42
-        private const val MAX_WAKE_LOCK_MS = 90 * 60 * 1_000L
+        private const val MAX_WAKE_LOCK_MS = 35 * 60 * 1_000L
 
         fun ensureNotificationChannels(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            val localized = com.nextcraft.forge.ui.LocaleHelper.wrapContext(context)
             manager.createNotificationChannel(
                 NotificationChannel(
                     RUNNING_CHANNEL_ID,
-                    "Active coding tasks",
+                    localized.getString(com.nextcraft.forge.R.string.notif_channel_running),
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Shows live progress while an agent or build task is running."
+                    description = localized.getString(com.nextcraft.forge.R.string.notif_channel_running_desc)
                 },
             )
             manager.createNotificationChannel(
                 NotificationChannel(
                     RESULT_CHANNEL_ID,
-                    "Task results",
+                    localized.getString(com.nextcraft.forge.R.string.notif_channel_results),
                     NotificationManager.IMPORTANCE_DEFAULT,
                 ).apply {
-                    description = "Notifies when background coding or build tasks complete."
+                    description = localized.getString(com.nextcraft.forge.R.string.notif_channel_results_desc)
                 },
             )
         }

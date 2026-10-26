@@ -24,23 +24,25 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
 
-private data class ToolEntry(
+internal data class ToolEntry(
     val tab: ForgeTab,
     val glyph: ForgeGlyph,
     @StringRes val title: Int,
     @StringRes val subtitle: Int,
 )
 
-private data class ToolSection(@StringRes val label: Int, val entries: List<ToolEntry>)
+internal data class ToolSection(@StringRes val label: Int, val entries: List<ToolEntry>)
 
-private val toolSections = listOf(
+internal val toolSections = listOf(
     ToolSection(
         R.string.tools_section_development,
         listOf(
             ToolEntry(ForgeTab.TOOLCHAINS, ForgeGlyph.BUILD, R.string.tools_toolchains, R.string.tools_toolchains_desc),
             ToolEntry(ForgeTab.DIAGNOSTICS, ForgeGlyph.SHIELD, R.string.tools_diagnostics, R.string.tools_diagnostics_desc),
-            ToolEntry(ForgeTab.TERMINAL, ForgeGlyph.TERMINAL, R.string.shell_terminal, R.string.tools_terminal_desc),
+            ToolEntry(ForgeTab.REA, ForgeGlyph.SEARCH, R.string.tools_rea, R.string.tools_rea_desc),
             ToolEntry(ForgeTab.FILES, ForgeGlyph.FOLDER, R.string.tools_files, R.string.tools_files_desc),
+            ToolEntry(ForgeTab.FILE_BROWSER, ForgeGlyph.FILE, R.string.tools_file_browser, R.string.tools_file_browser_desc),
+            ToolEntry(ForgeTab.CODE_VIEWER, ForgeGlyph.EDIT, R.string.tools_code_viewer, R.string.tools_code_viewer_desc),
             ToolEntry(ForgeTab.PREVIEW, ForgeGlyph.GLOBE, R.string.tools_web_preview, R.string.tools_web_preview_desc),
         ),
     ),
@@ -63,6 +65,7 @@ private val toolSections = listOf(
         listOf(
             ToolEntry(ForgeTab.ROM, ForgeGlyph.CODE, R.string.tools_rom, R.string.tools_rom_desc),
             ToolEntry(ForgeTab.CHECKPOINTS, ForgeGlyph.HISTORY, R.string.tools_checkpoints, R.string.tools_checkpoints_desc),
+            ToolEntry(ForgeTab.BACKUP, ForgeGlyph.DOWNLOAD, R.string.tools_backup, R.string.tools_backup_desc),
         ),
     ),
 )
@@ -78,7 +81,8 @@ fun ToolsScreen(
     var query by rememberSaveable { mutableStateOf("") }
     val needle = query.trim()
 
-    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+    val scroll = rememberScrollState()
+    Column(modifier = modifier.fillMaxSize().forgeFadingVertical(scroll, MaterialTheme.colorScheme.background).verticalScroll(scroll).padding(bottom = 24.dp)) {
         ForgeProjectHeader(
             title = stringResource(R.string.tools_header_title),
             subtitle = stringResource(R.string.tools_header_subtitle),

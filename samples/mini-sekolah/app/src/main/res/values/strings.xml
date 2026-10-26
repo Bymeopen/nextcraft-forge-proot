@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Database Sekolah Mini</string>
+    <string name="search_hint">Cari nama, NIS, atau kelas</string>
+    <string name="add_student">Tambah siswa</string>
+    <string name="edit_student">Ubah siswa</string>
+    <string name="delete_student">Hapus siswa</string>
+    <string name="delete_student_message">Hapus %1$s beserta semua nilainya?</string>
+    <string name="add_grade">Tambah nilai</string>
+    <string name="delete_grade">Hapus nilai</string>
+    <string name="delete_grade_message">Hapus nilai %1$s?</string>
+    <string name="seed_demo">Isi data contoh</string>
+    <string name="save">Simpan</string>
+    <string name="cancel">Batal</string>
+    <string name="delete">Hapus</string>
+    <string name="edit">Ubah</string>
+    <string name="nis">NIS</string>
+    <string name="name">Nama</string>
+    <string name="kelas">Kelas</string>
+    <string name="subject">Mata pelajaran</string>
+    <string name="score">Nilai (0-100)</string>
+    <string name="required">Wajib diisi</string>
+    <string name="nis_taken">NIS sudah dipakai siswa lain</string>
+    <string name="score_range">Isi angka 0 sampai 100</string>
+    <string name="empty_students">Belum ada siswa.\nKetuk Tambah siswa, atau menu titik tiga lalu Isi data contoh.</string>
+    <string name="empty_search">Tidak ada siswa yang cocok.</string>
+    <string name="empty_grades">Belum ada nilai.</string>
+    <string name="summary">%1$d siswa · rata-rata %2$s</string>
+    <string name="summary_none">0 siswa</string>
+    <string name="student_meta">NIS %1$s · Kelas %2$s</string>
+    <string name="grade_count">%1$d nilai</string>
+    <string name="average_label">Rata-rata %1$s</string>
+    <string name="no_average">Belum ada nilai</string>
+    <string name="student_missing">Data siswa tidak ditemukan.</string>
+</resources>

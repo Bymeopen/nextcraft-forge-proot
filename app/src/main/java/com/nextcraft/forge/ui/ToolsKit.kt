@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,10 +43,12 @@ internal fun ToolScaffold(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ForgeProjectHeader(title = title, subtitle = subtitle, onBack = onBack)
+        val scroll = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .forgeFadingVertical(scroll, MaterialTheme.colorScheme.background)
+                .verticalScroll(scroll)
                 .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
@@ -72,7 +75,9 @@ internal fun LogBox(text: String, placeholder: String, modifier: Modifier = Modi
     val scroll = rememberScrollState()
     LaunchedEffect(text.length) { scroll.scrollTo(scroll.maxValue) }
     Surface(
-        modifier = modifier.fillMaxWidth().height(260.dp),
+        // Always a bounded height: the text inside scrolls vertically and every caller sits in a vertically scrolling
+        // screen, so a height with no upper limit (heightIn(min = ...)) crashes with "infinity maximum height".
+        modifier = modifier.fillMaxWidth().height(if (text.isEmpty()) 72.dp else 260.dp),
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
     ) {

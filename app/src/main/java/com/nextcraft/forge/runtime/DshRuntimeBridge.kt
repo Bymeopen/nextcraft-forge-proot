@@ -25,7 +25,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * [RuntimeBridge] driving the official DeepSeek Harness (`dsh`) inside the
+ * [RuntimeBridge] driving the official DeepSeek (`dsh`) inside the
  * NextCraft Forge Ubuntu 24.04 Root Chroot (`--profile sdk` JSON-RPC 2.0).
  */
 class DshRuntimeBridge(
@@ -67,26 +67,29 @@ class DshRuntimeBridge(
         foreground.begin()
         lastThinkingUpdateAt = 0L
         eventBus.emit(RuntimeEvent.SessionStarted(sessionId))
-        pushForegroundProgress("Starting DeepSeek Harness…")
+        pushForegroundProgress("Starting DeepSeek…")
         val secret = secretFor(provider).orEmpty().ifBlank { localServerPlaceholderKey(provider) }
         if (secret.isBlank()) {
             eventBus.emit(RuntimeEvent.SessionFailed(sessionId, "No API key is saved for ${provider.kind.title}."))
             activeSessionId = null
+            foreground.clearStart()
             return@withContext sessionId
         }
         if (provider.kind == ProviderKind.CLAUDE) {
             eventBus.emit(
                 RuntimeEvent.SessionFailed(
                     sessionId,
-                    "Claude subscription login is not supported by DeepSeek Harness. Pick a key-based provider in Settings.",
+                    "Claude subscription login is not supported by DeepSeek. Pick a key-based provider in Settings.",
                 ),
             )
             activeSessionId = null
+            foreground.clearStart()
             return@withContext sessionId
         }
 
         var openRouterGateway: OpenRouterRoutingGateway? = null
         var spawnedOutputFile: File? = null
+        var sessionHomeHostDir: File? = null
         var stopHandler: (() -> Unit)? = null
         runCatching {
             stopHandler = {
@@ -98,15 +101,15 @@ class DshRuntimeBridge(
                             running.destroy()
                             Thread.sleep(500)
                             if (running.isAlive) running.destroyForcibly()
-                        }
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
                     }, "forge-dsh-stop").apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register(RuntimeTaskController.AGENT, it) }
+            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
             startForegroundRuntime(projectSlug)
             val installed = installer.installedRuntime()
             check(installer.isAgentInstalled(AgentKind.DEEPSEEK_HARNESS)) {
-                "DeepSeek Harness is not installed. Open Settings → Coding agent to install it."
+                "DeepSeek is not installed. Open Settings → Coding agent to install it."
             }
             installer.ensureDshAndroidCompatibility()
             val workspace = checkpoints.ensureWorkspace(projectId)
@@ -121,16 +124,17 @@ class DshRuntimeBridge(
             } else {
                 baseRoute
             }
-            writeDshSettings(installed.rootfs, route, provider)
+            val sessionGuestHome = "$DSH_HOME_GUEST_PATH/sessions/$sessionId"
+            sessionHomeHostDir = writeDshSettings(installed.rootfs, route, provider, sessionGuestHome)
             val environment = linkedMapOf(
-                "DSH_HOME" to DSH_HOME_GUEST_PATH,
+                "DSH_HOME" to sessionGuestHome,
                 "DSH_PERMISSION_MODE" to "danger-full-access",
                 route.keyEnv to secret,
             )
             if (route.keyEnv != FALLBACK_KEY_ENV) environment.remove(FALLBACK_KEY_ENV)
 
             val guestWorkspacePath = "/workspace/$projectSlug"
-            val contextPrompt = buildContextPrompt(prompt, conversationHistory, guestWorkspacePath, projectKind)
+            val contextPrompt = buildContextPrompt(prompt, conversationHistory.unseenBy(null), guestWorkspacePath, projectKind)
             val command = listOf("/usr/local/bin/dsh", "--profile", "sdk")
             Log.d("DshBridge", "Route: ${route.name}, Model: ${provider.model}")
             val process = installer.process(
@@ -166,14 +170,10 @@ class DshRuntimeBridge(
             }
             if (sdkResult.completed && sdkResult.failure.isBlank() && !userStopRequested) {
                 emitCompletedOnce(sessionId)
-                finishForegroundRuntime(
-                    completed = true,
-                    projectName = projectSlug,
-                    detail = "DeepSeek Harness finished in $projectSlug",
-                )
+                finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "DeepSeek", projectSlug)
             } else {
                 if (userStopRequested) throw DshSessionException("Stopped by user")
-                error(sdkResult.failure.ifBlank { "DeepSeek Harness stopped with exit code $exit" })
+                error(sdkResult.failure.ifBlank { "DeepSeek stopped with exit code $exit" })
             }
         }.onFailure { error ->
             Log.e("DshBridge", "Session failed: ${error::class.simpleName}")
@@ -191,8 +191,9 @@ class DshRuntimeBridge(
                 )
             }
         }
-        runCatching { openRouterGateway?.close() }
-        runCatching { spawnedOutputFile?.delete() }
+        runCatching { openRouterGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        runCatching { sessionHomeHostDir?.deleteRecursively() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
         activeProcess = null
         activeSessionId = null
         RuntimeTaskController.release(stopHandler)
@@ -235,14 +236,14 @@ class DshRuntimeBridge(
         fun closeInput() {
             if (inputClosed) return
             inputClosed = true
-            runCatching { writer.close() }
+            runCatching { writer.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
         }
 
         fun finishTurnAndShutdown() {
             if (shutdownSent) return
             completed = sawActivity && failure.isBlank()
             if (!completed && failure.isBlank()) {
-                failure = "DeepSeek Harness stopped before processing the prompt"
+                failure = "DeepSeek stopped before processing the prompt"
             }
             shutdownSent = true
             shutdownSentAt = android.os.SystemClock.elapsedRealtime()
@@ -277,7 +278,7 @@ class DshRuntimeBridge(
                 is DshSdkProtocolEvent.Status -> {
                     if (protocolEvent.running) {
                         sawRunning = true
-                        pushForegroundProgress("DeepSeek Harness is working…")
+                        pushForegroundProgress("DeepSeek is working…")
                     } else if (sawRunning && !shutdownSent) {
                         finishTurnAndShutdown()
                     }
@@ -309,7 +310,12 @@ class DshRuntimeBridge(
                     sawActivity = true
                     eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, protocolEvent.text))
                 }
-                is DshSdkProtocolEvent.Failed -> failure = protocolEvent.message
+                is DshSdkProtocolEvent.Failed -> {
+                    failure = protocolEvent.message
+                    // An error answer to initialize or the prompt ends no turn on its own; without this the loop waits
+                    // for an exit that never comes and the foreground notification and wake lock stay held.
+                    finishTurnAndShutdown()
+                }
                 DshSdkProtocolEvent.TurnCompleted -> {
                     sawActivity = true
                     finishTurnAndShutdown()
@@ -332,7 +338,8 @@ class DshRuntimeBridge(
                     // A large tool output is not a protocol failure; the agent continues with it.
                     Log.d("DshBridge", "Dropped oversized tool/result frame (${line.length} chars)")
                 } else if (!duplicate) {
-                    handle(DshSdkProtocolEvent.Failed("DeepSeek Harness sent an oversized response"))
+                    // Our own reader cut this frame; that says nothing about the turn's outcome, so don't fail it.
+                    Log.w("DshBridge", "Dropped oversized frame (${line.length} chars): ${head.take(120)}")
                 }
                 return
             }
@@ -354,7 +361,7 @@ class DshRuntimeBridge(
                     Log.w("DshBridge", "SDK acknowledged completion but did not exit; stopping its runtime wrapper")
                     process.destroyForcibly()
                 }
-                for (line in tailer.readLines(timeoutMs = 50L)) {
+                for (line in tailer.readLines(timeoutMs = 250L)) {
                     processDshLine(line)
                 }
             }
@@ -415,8 +422,13 @@ class DshRuntimeBridge(
         checkpoints.acceptFile(projectId, workspace, path)
     }
 
-    private fun writeDshSettings(rootfs: File, route: DshRoute, provider: ProviderProfile) {
-        val home = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
+    private fun writeDshSettings(
+        rootfs: File,
+        route: DshRoute,
+        provider: ProviderProfile,
+        guestHomePath: String = DSH_HOME_GUEST_PATH,
+    ): File {
+        val home = File(rootfs, guestHomePath.removePrefix("/")).apply { mkdirs() }
         val body = buildString {
             appendLine("agent-default-model:")
             appendLine("  provider: ${route.name}")
@@ -433,6 +445,11 @@ class DshRuntimeBridge(
             }
         }
         File(home, "settings.yaml").writeText(body)
+        if (guestHomePath != DSH_HOME_GUEST_PATH) {
+            val defaultHome = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
+            runCatching { File(defaultHome, "settings.yaml").writeText(body) }
+        }
+        return home
     }
 
     private fun yamlQuote(value: String): String = "'${value.replace("'", "''")}'"
@@ -465,11 +482,12 @@ class DshRuntimeBridge(
     private suspend fun emitCompletedOnce(sessionId: String) {
         if (finishedSessions.add(sessionId)) {
             eventBus.emit(RuntimeEvent.SessionCompleted(sessionId))
-            finishForegroundRuntime(
-                completed = true,
-                projectName = activeProjectSlug ?: "Project",
-                detail = "DeepSeek Harness finished",
-            )
+            val slug = activeProjectSlug?.takeIf { it.isNotBlank() }
+            if (slug != null) {
+                finishForegroundRuntimeRes(true, slug, com.nextcraft.forge.R.string.notif_agent_finished_in, "DeepSeek", slug)
+            } else {
+                finishForegroundRuntimeRes(true, "Project", com.nextcraft.forge.R.string.notif_agent_finished, "DeepSeek")
+            }
         }
     }
 
@@ -507,72 +525,28 @@ class DshRuntimeBridge(
                 (message.contains("429") && message.contains("HTTP", true)) ->
                 "The provider rate limit or quota was reached. Wait a moment or switch keys."
             message.contains("missing_credential", true) ->
-                "No API key reached DeepSeek Harness. Re-save the provider key in Settings."
+                "No API key reached DeepSeek. Re-save the provider key in Settings."
             message.contains("not installed", true) -> message.take(300)
-            !message.isMeaningfulDshText() -> "DeepSeek Harness could not start."
+            !message.isMeaningfulDshText() -> "DeepSeek could not start."
             else -> message.take(500)
         }
     }
 
     private fun buildContextPrompt(
         currentPrompt: String,
-        history: List<ChatMessage>,
+        priorMessages: List<ChatMessage>,
         guestWorkspacePath: String,
         projectKind: ProjectKind,
-    ): String {
-        val priorMessages = history
-            .filter { msg ->
-                (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
-                    !msg.text.startsWith("Failed to") &&
-                    !msg.text.startsWith("Error:") &&
-                    !msg.text.contains("API Error")
-            }
-            .dropLast(1)
-            .recentWithinCharacterBudget(MAX_CONVERSATION_HISTORY_CHARACTERS)
-
-        val sb = StringBuilder()
-        sb.appendLine("<project_workspace>")
-        if (projectKind == ProjectKind.QUICK_PROJECT) {
-            sb.appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
-            sb.appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
-            sb.appendLine("Keep every file and command inside this project workspace.")
-        } else {
-            sb.appendLine("The current working directory $guestWorkspacePath is the project root.")
-            sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
-            sb.appendLine("When giving commands to the user, make them runnable from this project root.")
-        }
-        if (installer.isStackInstalled(DevStack.ANDROID)) {
-            AndroidToolchain.AGENT_PROMPT_LINES.forEach(sb::appendLine)
-        } else {
-            sb.appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
-        }
-        sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
-        sb.appendLine("</project_workspace>")
-        sb.appendLine()
-        if (priorMessages.isEmpty()) {
-            sb.appendLine(currentPrompt)
-            return sb.toString()
-        }
-        sb.appendLine("<conversation_history>")
-        sb.appendLine("The following is our prior conversation in this project. Continue naturally from where we left off.")
-        sb.appendLine()
-        for (msg in priorMessages) {
-            val role = if (msg.fromUser) "User" else "Assistant"
-            sb.appendLine("$role: ${msg.text}")
-            if (msg.attachments.isNotEmpty()) {
-                sb.appendLine("Attached files:")
-                msg.attachments.forEach { attachment ->
-                    sb.appendLine("- ${attachment.displayName}: $guestWorkspacePath/${attachment.relativePath} (${attachment.mimeType})")
-                }
-            }
-            sb.appendLine()
-        }
-        sb.appendLine("</conversation_history>")
-        sb.appendLine()
-        sb.appendLine("Now, respond to this new message from the user:")
-        sb.appendLine(currentPrompt)
-        return sb.toString()
-    }
+        resumed: Boolean = false,
+    ): String = buildAgentWorkspacePrompt(
+        currentPrompt = currentPrompt,
+        priorMessages = priorMessages,
+        guestWorkspacePath = guestWorkspacePath,
+        projectKind = projectKind,
+        androidStackInstalled = installer.isStackInstalled(DevStack.ANDROID),
+        maxHistoryChars = MAX_CONVERSATION_HISTORY_CHARACTERS,
+        resumed = resumed,
+    )
 
     private fun pushForegroundProgress(detailRaw: String) {
         if (activeSessionId == null) return
@@ -583,6 +557,9 @@ class DshRuntimeBridge(
 
     private fun finishForegroundRuntime(completed: Boolean, projectName: String, detail: String) =
         foreground.finish(completed, projectName, detail)
+
+    private fun finishForegroundRuntimeRes(completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, vararg args: String) =
+        foreground.finishRes(completed, projectName, detailRes, *args)
 
     private fun cancelForegroundRuntime() = foreground.cancel()
 
@@ -664,7 +641,7 @@ internal object DshRouteMapper {
                 defaultModel = model,
                 custom = DshCustomRoute(safeDshApi(profile.dshApi), profile.resolvedBaseUrl),
             )
-            ProviderKind.CLAUDE -> throw IllegalArgumentException("Claude subscription login is not supported by DeepSeek Harness")
+            ProviderKind.CLAUDE -> throw IllegalArgumentException("Claude subscription login is not supported by DeepSeek")
         }
     }
 }
@@ -735,7 +712,7 @@ internal class DshSdkProtocolParser(private val expectedSessionId: String) {
             ?: return if (line.startsWith("dsh:", ignoreCase = true)) {
                 DshSdkProtocolEvent.Failed(
                     line.removePrefix("dsh:").trim().meaningfulDshText(
-                        "DeepSeek Harness reported an unspecified error",
+                        "DeepSeek reported an unspecified error",
                     ),
                 )
             } else {
@@ -746,7 +723,7 @@ internal class DshSdkProtocolParser(private val expectedSessionId: String) {
             val id = frame.optInt("id", -1)
             frame.optJSONObject("error")?.let { error ->
                 return DshSdkProtocolEvent.Failed(
-                    error.stringOrEmpty("message").meaningfulDshText("DeepSeek Harness SDK request $id failed"),
+                    error.stringOrEmpty("message").meaningfulDshText("DeepSeek SDK request $id failed"),
                 )
             }
             return when (id) {
@@ -812,9 +789,9 @@ internal class DshSdkProtocolParser(private val expectedSessionId: String) {
                 when (reason?.stringOrEmpty("kind")) {
                     "error" -> DshSdkProtocolEvent.Failed(
                         reason.optJSONObject("error")?.stringOrEmpty("message").orEmpty()
-                            .meaningfulDshText("DeepSeek Harness turn failed"),
+                            .meaningfulDshText("DeepSeek turn failed"),
                     )
-                    "blocked" -> DshSdkProtocolEvent.Failed("DeepSeek Harness was blocked from completing the task")
+                    "blocked" -> DshSdkProtocolEvent.Failed("DeepSeek was blocked from completing the task")
                     else -> DshSdkProtocolEvent.TurnCompleted
                 }
             }

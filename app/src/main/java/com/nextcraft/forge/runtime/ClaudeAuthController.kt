@@ -1,5 +1,9 @@
 package com.nextcraft.forge.runtime
 
+import com.nextcraft.forge.ui.UiText
+import com.nextcraft.forge.ui.UiTextException
+import com.nextcraft.forge.ui.toUiText
+import com.nextcraft.forge.R
 import android.content.Context
 import com.nextcraft.forge.model.AgentKind
 import java.io.File
@@ -30,7 +34,7 @@ data class ClaudeAuthState(
     val authorizationUrl: String? = null,
     /** Fallback link whose page shows a code to paste when the automatic redirect cannot reach the CLI. */
     val manualUrl: String? = null,
-    val message: String? = null,
+    val message: UiText? = null,
     val accountEmail: String? = null,
 )
 
@@ -71,6 +75,27 @@ class ClaudeAuthController(
         }
     }
 
+    /**
+     * Fills in the account email of a login that was already on disk (an earlier session, or `claude auth login` in
+     * the terminal): the email is otherwise only read right after signing in from this screen. The remembered value is
+     * shown at once and replaced by what `claude auth status` reports.
+     */
+    suspend fun loadAccountEmail() = withContext(Dispatchers.IO) {
+        if (!hasCredential()) return@withContext
+        val prefs = com.nextcraft.forge.data.AppPreferences(context)
+        fun show(email: String) {
+            val current = mutableState.value
+            if (current.status == ClaudeAuthStatus.SIGNED_IN || current.status == ClaudeAuthStatus.SIGNED_OUT) {
+                mutableState.value = current.copy(accountEmail = email)
+            }
+        }
+        prefs.claudeAccountEmail.takeIf { it.isNotBlank() }?.let(::show)
+        readAccountEmail()?.let {
+            prefs.claudeAccountEmail = it
+            show(it)
+        }
+    }
+
     suspend fun beginLogin(mode: ClaudeLoginMode, email: String = "") = withContext(Dispatchers.IO) {
         if (!loginStarting.compareAndSet(false, true)) return@withContext
         try {
@@ -88,21 +113,21 @@ class ClaudeAuthController(
             val giveUp = android.os.SystemClock.elapsedRealtime() + RESTART_WAIT_MS
             while (process != null && android.os.SystemClock.elapsedRealtime() < giveUp) delay(50)
             if (process?.isAlive == true) {
-                mutableState.value = ClaudeAuthState(ClaudeAuthStatus.ERROR, message = "Previous sign-in is still closing. Try again.")
+                mutableState.value = ClaudeAuthState(ClaudeAuthStatus.ERROR, message = UiText.res(R.string.rt_auth_prev_closing))
                 return
             }
             process = null
         }
         if (!installer.isAgentInstalled(AgentKind.CLAUDE_CODE)) {
-            mutableState.value = ClaudeAuthState(ClaudeAuthStatus.ERROR, message = "Install Claude Code first.")
+            mutableState.value = ClaudeAuthState(ClaudeAuthStatus.ERROR, message = UiText.res(R.string.rt_auth_claude_install_first))
             return
         }
         if (email.isNotEmpty() && !EMAIL_PATTERN.matches(email)) {
-            mutableState.value = ClaudeAuthState(ClaudeAuthStatus.ERROR, message = "Enter a valid email address.")
+            mutableState.value = ClaudeAuthState(ClaudeAuthStatus.ERROR, message = UiText.res(R.string.rt_auth_email_invalid))
             return
         }
         stateBeforeLogin = mutableState.value.takeIf { it.status == ClaudeAuthStatus.SIGNED_IN }
-        mutableState.value = ClaudeAuthState(ClaudeAuthStatus.STARTING, message = "Starting Claude sign-in…")
+        mutableState.value = ClaudeAuthState(ClaudeAuthStatus.STARTING, message = UiText.res(R.string.rt_auth_claude_starting))
         authOutput.delete()
         urlFile.delete()
         val running = try {
@@ -124,7 +149,7 @@ class ClaudeAuthController(
                 runtime.rootfs,
                 workspace,
                 mapOf(
-                    "BROWSER" to "/opt/pocket/open-url.sh",
+                    "BROWSER" to "/opt/nextcraft/open-url.sh",
                     "TERM" to "xterm-256color",
                     "NO_COLOR" to "1",
                     "DISABLE_AUTOUPDATER" to "1",
@@ -138,14 +163,14 @@ class ClaudeAuthController(
                 ptyColumns = 160,
             )
             if (spawned !is NativeSpawnProcess) {
-                runCatching { spawned.destroyForcibly() }
-                error("Unsupported Claude authentication process")
+                runCatching { spawned.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
+                throw UiTextException(UiText.res(R.string.rt_auth_unsupported_process))
             }
             spawned
         } catch (error: Throwable) {
             mutableState.value = ClaudeAuthState(
                 ClaudeAuthStatus.ERROR,
-                message = error.message?.take(240) ?: "Could not start Claude sign-in.",
+                message = error.toUiText(R.string.rt_auth_claude_start_failed),
             )
             return
         }
@@ -160,7 +185,7 @@ class ClaudeAuthController(
             RandomAccessFile(running.outputFile, "r").use { file ->
                 while (true) {
                     if (generation != loginGeneration.get()) break
-                    if (android.os.SystemClock.elapsedRealtime() > deadline) error("Sign-in timed out. Start sign-in again.")
+                    if (android.os.SystemClock.elapsedRealtime() > deadline) throw UiTextException(UiText.res(R.string.rt_auth_timeout))
                     val available = running.outputFile.length() - offset
                     if (available > 0) {
                         val bytes = ByteArray(minOf(available, 16L * 1024).toInt())
@@ -186,13 +211,13 @@ class ClaudeAuthController(
                             ClaudeAuthStatus.AWAITING_BROWSER,
                             authorizationUrl = link,
                             manualUrl = manual,
-                            message = "Open the sign-in page. It finishes by itself; if it shows a code instead, paste it here.",
+                            message = UiText.res(R.string.rt_auth_claude_open_page),
                         )
                     }
                     if (clean.contains("authentication failed", true) || clean.contains("login failed", true) ||
                         clean.contains("invalid code", true) || clean.contains("failed to exchange", true)
                     ) {
-                        error("Claude sign-in failed. Start sign-in again.")
+                        throw UiTextException(UiText.res(R.string.rt_auth_claude_failed_retry))
                     }
                     val now = android.os.SystemClock.elapsedRealtime()
                     val exited = !running.isAlive
@@ -201,9 +226,10 @@ class ClaudeAuthController(
                         lastCredentialCheck = now
                         if ((exited || looksDone || mutableState.value.status == ClaudeAuthStatus.COMPLETING) && hasCredential()) {
                             val account = readAccountEmail()
+                            account?.let { com.nextcraft.forge.data.AppPreferences(context).claudeAccountEmail = it }
                             mutableState.value = ClaudeAuthState(
                                 ClaudeAuthStatus.SIGNED_IN,
-                                message = account?.let { context.getString(com.nextcraft.forge.R.string.auth_connected_as, it) } ?: context.getString(com.nextcraft.forge.R.string.auth_claude_connected),
+                                message = account?.let { UiText.res(R.string.rt_auth_connected_as, it) } ?: UiText.res(R.string.rt_auth_claude_connected),
                                 accountEmail = account,
                             )
                             onSignedInChanged(true)
@@ -211,7 +237,7 @@ class ClaudeAuthController(
                         }
                     }
                     if (exited && running.outputFile.length() <= offset) {
-                        error("Claude sign-in ended before completing (code ${runCatching { running.exitValue() }.getOrDefault(-1)}).")
+                        throw UiTextException(UiText.res(R.string.rt_auth_claude_ended, runCatching { running.exitValue() }.getOrDefault(-1)))
                     }
                     delay(120)
                 }
@@ -225,16 +251,16 @@ class ClaudeAuthController(
             if (generation == loginGeneration.get() && mutableState.value.status != ClaudeAuthStatus.SIGNED_IN) {
                 mutableState.value = ClaudeAuthState(
                     ClaudeAuthStatus.ERROR,
-                    message = error.message?.take(240) ?: "Claude sign-in failed.",
+                    message = error.toUiText(R.string.rt_auth_claude_failed),
                 )
             }
         } finally {
-            runCatching { running.outputStream.close() }
+            runCatching { running.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             if (running.isAlive) {
-                runCatching { running.destroy() }
-                runCatching { if (running.isAlive) running.destroyForcibly() }
+                runCatching { running.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
+                runCatching { if (running.isAlive) running.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             }
-            runCatching { running.waitFor() }
+            runCatching { running.waitFor() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             running.outputFile.delete() // OAuth terminal output is intentionally ephemeral.
             urlFile.delete()
             process = null
@@ -259,33 +285,33 @@ class ClaudeAuthController(
     @Synchronized
     fun submitCode(code: String) {
         val value = code.trim()
-        require(value.isNotBlank()) { "Paste the code from the sign-in page first." }
+        if (value.isBlank()) throw UiTextException(UiText.res(R.string.rt_auth_claude_code_empty))
         try {
-            val running = process ?: error("Sign-in session is not active. Start sign-in again.")
-            check(running.isAlive) { "Sign-in session expired. Start sign-in again." }
+            val running = process ?: throw UiTextException(UiText.res(R.string.rt_auth_session_inactive))
+            if (!running.isAlive) throw UiTextException(UiText.res(R.string.rt_auth_session_expired))
             running.outputStream.write((value + "\r").toByteArray())
             running.outputStream.flush()
         } catch (error: Throwable) {
             mutableState.value = ClaudeAuthState(
                 ClaudeAuthStatus.ERROR,
-                message = error.message?.take(240) ?: "Could not submit the code.",
+                message = error.toUiText(R.string.rt_auth_code_submit_failed),
             )
             throw error
         }
         mutableState.value = mutableState.value.copy(
             status = ClaudeAuthStatus.COMPLETING,
-            message = "Completing Claude sign-in…",
+            message = UiText.res(R.string.rt_auth_claude_completing),
         )
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {
         loginGeneration.incrementAndGet()
         process?.let { running ->
-            runCatching { running.destroy() }
-            runCatching { if (running.isAlive) running.destroyForcibly() }
+            runCatching { running.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
+            runCatching { if (running.isAlive) running.destroyForcibly() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
         }
         val previous = mutableState.value
-        mutableState.value = previous.copy(status = ClaudeAuthStatus.STARTING, message = "Signing out…")
+        mutableState.value = previous.copy(status = ClaudeAuthStatus.STARTING, message = UiText.res(R.string.rt_auth_signing_out))
         try {
             val runtime = installer.installedRuntime()
             val workspace = File(context.filesDir, "workspaces/claude-auth").apply { mkdirs() }
@@ -300,14 +326,15 @@ class ClaudeAuthController(
                 emulateHardLinks = false,
                 outputFile = output,
             )
-            runCatching { logout.outputStream.close() }
+            runCatching { logout.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             if (!logout.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) logout.destroyForcibly()
             output.delete()
-            check(!hasCredential()) { "Claude sign-out is incomplete." }
+            if (hasCredential()) throw UiTextException(UiText.res(R.string.rt_auth_claude_signout_incomplete))
             onSignedInChanged(false)
-            mutableState.value = ClaudeAuthState(message = "Signed out of Claude.")
+            com.nextcraft.forge.data.AppPreferences(context).claudeAccountEmail = ""
+            mutableState.value = ClaudeAuthState(message = UiText.res(R.string.rt_auth_claude_signed_out))
         } catch (error: Throwable) {
-            mutableState.value = previous.copy(message = error.message?.take(240) ?: "Could not sign out of Claude.")
+            mutableState.value = previous.copy(message = error.toUiText(R.string.rt_auth_claude_signout_failed))
             throw error
         }
     }
@@ -322,7 +349,7 @@ class ClaudeAuthController(
                     Thread.sleep(200)
                     if (running.isAlive) running.destroyForcibly()
                     running.waitFor()
-                }
+                }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
             }.apply { isDaemon = true }.start()
         }
         mutableState.value = stateBeforeLogin ?: ClaudeAuthState()
@@ -343,7 +370,7 @@ class ClaudeAuthController(
             emulateHardLinks = false,
             outputFile = output,
         )
-        runCatching { status.outputStream.close() }
+        runCatching { status.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
         if (!status.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) status.destroyForcibly()
         val text = output.readText()
         output.delete()

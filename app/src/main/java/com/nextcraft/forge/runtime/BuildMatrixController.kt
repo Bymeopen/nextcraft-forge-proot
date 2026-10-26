@@ -36,6 +36,10 @@ data class BuildMatrixState(
     val statuses: Map<String, TargetStatus> = emptyMap(),
     val log: String = "",
     val running: Boolean = false,
+    /** apt-get line for the cross-build tools the detected targets need; null when nothing needs installing. */
+    val installCommand: String? = null,
+    /** Name of the Xcode project in the folder, when the project is an iOS one (built on a macOS CI runner). */
+    val iosProject: String? = null,
 )
 
 /** A build target found in a project folder: stable id, label and the shell command that builds it. */
@@ -69,6 +73,10 @@ internal fun detectBuildTargets(workspace: File): List<DetectedTarget> {
         found += DetectedTarget("cmake:build", "CMake build", "cmake -S . -B build && cmake --build build -j2")
     }
     if (File(workspace, "Makefile").isFile) found += DetectedTarget("make:all", "make", "make -j2")
+    // Windows and Linux builds for other CPUs/systems that the chroot can cross-compile. iOS has no on-device build.
+    for (target in detectCrossTargets(workspace)) {
+        if (target.onDevice) found += DetectedTarget(target.id, target.name, withToolCheck(target.command, target.tools))
+    }
     return found
 }
 
@@ -77,6 +85,7 @@ class BuildMatrixController(
     context: Context,
     private val activeProject: () -> Project?,
     private val workspaceFor: (String) -> File,
+    private val onWorkspaceChanged: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -102,7 +111,71 @@ class BuildMatrixController(
             val targets = detected.map {
                 BuildTarget(it.id, it.name, it.command, detected = true, enabled = it.id !in stored.disabled)
             } + stored.custom.map { BuildTarget(it.id, it.name, it.command, detected = false, enabled = it.id !in stored.disabled) }
-            mutable.update { BuildMatrixState(projectId = project.id, projectName = project.name, targets = targets) }
+            val cross = withContext(Dispatchers.IO) { workspace?.let { runCatching { detectCrossTargets(it) }.getOrDefault(emptyList()) }.orEmpty() }
+            val iosProject = withContext(Dispatchers.IO) { workspace?.let { runCatching { findXcodeProject(it) }.getOrNull() } }
+            mutable.update {
+                BuildMatrixState(
+                    projectId = project.id,
+                    projectName = project.name,
+                    targets = targets,
+                    installCommand = crossToolchainInstallCommand(cross),
+                    iosProject = iosProject,
+                )
+            }
+        }
+    }
+
+    /** Installs the cross-build tools (MinGW, x86_64 gcc, Go, ...) the detected targets need, with the output in the log. */
+    fun installCrossTools() {
+        val snapshot = mutable.value
+        val project = activeProject()?.takeIf { it.id == snapshot.projectId } ?: return
+        val command = snapshot.installCommand ?: return
+        if (snapshot.running) return
+        mutable.update { it.copy(running = true, log = "▶ $command\n") }
+        job = scope.launch {
+            try {
+                val workspace = withContext(Dispatchers.IO) { workspaceFor(project.id) }
+                val result = runCatching {
+                    runner.run(workspace, project.slug, command, timeoutMillis = 30 * 60_000L) { chunk ->
+                        mutable.update { it.copy(log = appendLog(it.log, chunk)) }
+                    }
+                }
+                result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+                val note = when {
+                    result.isFailure -> "✕ ${result.exceptionOrNull()?.message ?: "failed to start"}\n"
+                    result.getOrNull()?.timedOut == true -> "✕ timed out\n"
+                    result.getOrNull()?.ok == true -> "✓ cross-build tools installed\n"
+                    else -> "✕ install failed (exit ${result.getOrNull()?.exitCode})\n"
+                }
+                mutable.update { it.copy(log = appendLog(it.log, note)) }
+            } catch (cancelled: CancellationException) {
+                mutable.update { it.copy(log = appendLog(it.log, "\n■ stopped\n")) }
+                throw cancelled
+            } finally {
+                mutable.update { it.copy(running = false) }
+                onWorkspaceChanged(project.id)
+            }
+        }
+    }
+
+    /** Writes `.github/workflows/build-ios.yml` for the project's Xcode project (never overwrites an existing one). */
+    fun createIosWorkflow() {
+        val project = activeProject()?.takeIf { it.id == mutable.value.projectId } ?: return
+        scope.launch {
+            var created = false
+            val message = withContext(Dispatchers.IO) {
+                runCatching {
+                    val workspace = workspaceFor(project.id)
+                    if (writeIosWorkflow(workspace)) {
+                        created = true
+                        "✓ $IOS_WORKFLOW_PATH created. Commit and push it, then run it from the CI/CD tool (macOS runner).\n"
+                    } else {
+                        "$IOS_WORKFLOW_PATH already exists or no Xcode project was found; nothing written.\n"
+                    }
+                }.getOrElse { "✕ ${it.message ?: "could not write the workflow"}\n" }
+            }
+            mutable.update { it.copy(log = appendLog(it.log, message)) }
+            if (created) onWorkspaceChanged(project.id)
         }
     }
 
@@ -148,6 +221,8 @@ class BuildMatrixController(
                             mutable.update { it.copy(log = appendLog(it.log, chunk)) }
                         }
                     }
+                    // runCatching also swallows cancellation; rethrow so Stop really stops the matrix.
+                    result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                     val ok = result.getOrNull()?.ok == true
                     val note = when {
                         result.isFailure -> "✕ ${result.exceptionOrNull()?.message ?: "failed to start"}\n"
@@ -162,6 +237,7 @@ class BuildMatrixController(
                 throw cancelled
             } finally {
                 mutable.update { it.copy(running = false) }
+                onWorkspaceChanged(project.id)
             }
         }
     }

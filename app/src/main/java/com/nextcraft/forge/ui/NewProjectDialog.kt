@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
@@ -86,6 +85,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.AndroidTemplate
+import com.nextcraft.forge.model.StarterTemplate
 import com.nextcraft.forge.model.DevStack
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
 import androidx.compose.ui.res.stringResource
@@ -113,14 +113,19 @@ import androidx.compose.foundation.layout.imePadding
 @Composable
 internal fun NewProjectDialog(
     onDismiss: () -> Unit,
-    onCreate: (name: String, description: String, isAndroid: Boolean, template: AndroidTemplate) -> Unit,
+    onCreate: (name: String, description: String, isAndroid: Boolean, template: AndroidTemplate, starter: StarterTemplate) -> Unit,
+    gameTemplatesEnabled: Boolean = false,
 ) {
+    // The game starter only shows once it is switched on in Settings.
+    val starters = StarterTemplate.entries.filter { gameTemplatesEnabled || it != StarterTemplate.GAME_LIBGDX }
     var name by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var isAndroid by rememberSaveable { mutableStateOf(false) }
     var template by rememberSaveable { mutableStateOf(AndroidTemplate.COMPOSE) }
+    var starter by rememberSaveable { mutableStateOf(StarterTemplate.EMPTY) }
+    val resolvedStarter = if (starter in starters) starter else StarterTemplate.EMPTY
 
-    AlertDialog(
+    ForgeAlertDialog(
         modifier = Modifier.forgePopIn(),
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
@@ -156,12 +161,20 @@ internal fun NewProjectDialog(
                         onSelect = { template = AndroidTemplate.entries[it] },
                         modifier = Modifier.padding(horizontal = 0.dp),
                     )
+                } else {
+                    // Non-Android starter: an empty workspace, or a Go app that builds for Windows and Linux.
+                    ForgePillTabs(
+                        items = starters.map { it.label },
+                        selectedIndex = starters.indexOf(resolvedStarter).coerceAtLeast(0),
+                        onSelect = { starter = starters[it] },
+                        modifier = Modifier.padding(horizontal = 0.dp),
+                    )
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onCreate(name, description, isAndroid, template) },
+                onClick = { onCreate(name, description, isAndroid, template, resolvedStarter) },
                 enabled = name.isNotBlank(),
                 shape = RoundedCornerShape(100),
             ) { Text(stringResource(R.string.files_create), fontWeight = FontWeight.SemiBold) }

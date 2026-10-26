@@ -1,5 +1,7 @@
 # JNI: libforgespawn.so resolves these by name.
 -keep class com.nextcraft.forge.runtime.NativeSpawn { native <methods>; }
+# Termux terminal emulator: libtermux.so resolves com.termux.terminal.JNI by name.
+-keep class com.termux.** { *; }
 # Resolved reflectively by AppUpdater.
 -keep class com.nextcraft.forge.BuildConfig { *; }
 # Resolved reflectively by name (Class.forName).

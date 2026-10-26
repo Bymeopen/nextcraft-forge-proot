@@ -108,8 +108,90 @@ data class ForgeThemeTokens(
     val selectionColors: TextSelectionColors,
 )
 
-// 1. DARK (Zuan Tinted Obsidian Dark)
+// 1. DARK (neutral near-black tinted by the one brand hue, indigo)
 internal val ZuanDarkColorScheme: ColorScheme = darkColorScheme(
+    // Near-black neutrals with a faint indigo tint, one indigo accent. Generated in OKLCH; ContrastTest keeps every pair at AA.
+    primary = Color(0xFF007AC1),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFF002B49),
+    onPrimaryContainer = Color(0xFFC9E2F7),
+    secondary = Color(0xFF4CB47F),
+    onSecondary = Color(0xFF06231A),
+    secondaryContainer = Color(0xFF12281E),
+    onSecondaryContainer = Color(0xFFB6F0D0),
+    tertiary = Color(0xFFF2C94C),
+    onTertiary = Color(0xFF2A2000),
+    background = Color(0xFF090B0E),
+    onBackground = Color(0xFFECEFF1),
+    surface = Color(0xFF111417),
+    onSurface = Color(0xFFECEFF1),
+    surfaceVariant = Color(0xFF191C1F),
+    onSurfaceVariant = Color(0xFFA0A5AB),
+    outline = Color(0xFF646A6E),
+    outlineVariant = Color(0xFF34393D),
+    error = Color(0xFFFD736D),
+    onError = Color(0xFF160605),
+    errorContainer = Color(0xFF401312),
+    onErrorContainer = Color(0xFFF8D4D1),
+    surfaceTint = Color.Transparent,
+)
+
+// 2. GLASS (Zuan Liquid Glassmorphism)
+internal val ZuanGlassColorScheme: ColorScheme = darkColorScheme(
+    primary = Color(0xFF5DBEB2),
+    onPrimary = Color(0xFF001411),
+    primaryContainer = Color(0x6605413C),
+    onPrimaryContainer = Color(0xFFE0E4FF),
+    secondary = Color(0xFF2DD4BF),
+    onSecondary = Color(0xFF042F2E),
+    secondaryContainer = Color(0x73115E59),
+    onSecondaryContainer = Color(0xFFCCFBF1),
+    tertiary = Color(0xFFC084FC),
+    onTertiary = Color(0xFF2E1065),
+    background = Color(0xFF001619),
+    onBackground = Color(0xFFF2F6F5),
+    surface = Color(0xF0011613),
+    onSurface = Color(0xFFF2F6F5),
+    surfaceVariant = Color(0x661E293B),
+    onSurfaceVariant = Color(0xFFD7E9E6),
+    outline = Color(0x55FFFFFF),
+    outlineVariant = Color(0x2EFFFFFF),
+    error = Color(0xFFFCA098),
+    onError = Color(0xFF1E0707),
+    errorContainer = Color(0x99450A0A),
+    onErrorContainer = Color(0xFFFEE2E2),
+    surfaceTint = Color.Transparent,
+)
+
+// 3. WHITE (near-white tinted by the same indigo)
+internal val AirbnbWhiteColorScheme: ColorScheme = lightColorScheme(
+    primary = Color(0xFF315DD4),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFE2EBFF),
+    onPrimaryContainer = Color(0xFF0F2669),
+    secondary = Color(0xFF008489),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFE6F6F7),
+    onSecondaryContainer = Color(0xFF004F52),
+    tertiary = Color(0xFF6D28D9),
+    onTertiary = Color(0xFFFFFFFF),
+    background = Color(0xFFFBFCFE),
+    onBackground = Color(0xFF1C2030),
+    surface = Color(0xFFFBFCFE),
+    onSurface = Color(0xFF1C2030),
+    surfaceVariant = Color(0xFFF1F3F8),
+    onSurfaceVariant = Color(0xFF4B5163),
+    outline = Color(0xFF6F7587),
+    outlineVariant = Color(0xFFD3D8E3),
+    error = Color(0xFFB71824),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFFE9E6),
+    onErrorContainer = Color(0xFF551112),
+    surfaceTint = Color.Transparent,
+)
+
+// 4. SISTEM (follows the phone): keeps its own earlier colours, separate from the Dark / Glass / White picks above.
+private val SystemDarkColorScheme: ColorScheme = darkColorScheme(
     // Linear-style neutral dark: R=G=B greys, one indigo accent (values measured from Linear Android).
     primary = Color(0xFF5E6AD2),
     onPrimary = Color(0xFFFFFFFF),
@@ -136,35 +218,7 @@ internal val ZuanDarkColorScheme: ColorScheme = darkColorScheme(
     surfaceTint = Color.Transparent,
 )
 
-// 2. GLASS (Zuan Liquid Glassmorphism)
-internal val ZuanGlassColorScheme: ColorScheme = darkColorScheme(
-    primary = Color(0xFF7C8CFF),
-    onPrimary = Color(0xFF0B1030),
-    primaryContainer = Color(0x66343F9E),
-    onPrimaryContainer = Color(0xFFE0E4FF),
-    secondary = Color(0xFF2DD4BF),
-    onSecondary = Color(0xFF042F2E),
-    secondaryContainer = Color(0x73115E59),
-    onSecondaryContainer = Color(0xFFCCFBF1),
-    tertiary = Color(0xFFC084FC),
-    onTertiary = Color(0xFF2E1065),
-    background = Color(0xFF090D16),
-    onBackground = Color(0xFFF8FAFC),
-    surface = Color(0xF0111827), // High opacity for DropdownMenu & AlertDialog popups (THEME-BUG-022)
-    onSurface = Color(0xFFF8FAFC),
-    surfaceVariant = Color(0x661E293B),
-    onSurfaceVariant = Color(0xFFCBD5E1),
-    outline = Color(0x55FFFFFF),
-    outlineVariant = Color(0x2EFFFFFF),
-    error = Color(0xFFF87171),
-    onError = Color(0xFF450A0A),
-    errorContainer = Color(0x99450A0A),
-    onErrorContainer = Color(0xFFFEE2E2),
-    surfaceTint = Color.Transparent,
-)
-
-// 3. WHITE (Airbnb Daylight 100% Pure White)
-internal val AirbnbWhiteColorScheme: ColorScheme = lightColorScheme(
+private val SystemLightBaseColorScheme: ColorScheme = lightColorScheme(
     primary = Color(0xFFD70F47), // Airbnb coral darkened: white text on #FF385C is only 3.5:1
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFFFF0F3),
@@ -190,8 +244,7 @@ internal val AirbnbWhiteColorScheme: ColorScheme = lightColorScheme(
     surfaceTint = Color.Transparent,
 )
 
-// 4. SYSTEM LIGHT (Daylight Clean Blue-Slate when OS is in Light Mode)
-internal val SystemLightColorScheme: ColorScheme = AirbnbWhiteColorScheme.copy(
+internal val SystemLightColorScheme: ColorScheme = SystemLightBaseColorScheme.copy(
     primary = Color(0xFF0369A1), // white on #0284C7 was 4.1:1
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFE0F2FE),
@@ -218,13 +271,112 @@ private val GlassInnerBorderBrush = Brush.linearGradient(
     ),
 )
 
-// Diagonal indigo-violet-teal wash: gives the translucent surfaces something coloured to show through.
-internal val GlassCanvasColors = listOf(Color(0xFF0D1326), Color(0xFF1A1038), Color(0xFF0B1B2E))
+// Diagonal indigo-to-violet wash: gives the translucent surfaces something coloured to show through.
+/** Opaque, darker than every stop of the Glass wash: the colour of sheets, dialogs and menus in Glass. */
+internal val GlassFloatingSurface = Color(0xFF000D0B)
+
+internal val GlassCanvasColors = listOf(Color(0xFF001411), Color(0xFF00202E), Color(0xFF000F0D))
 
 private val GlassCosmicCanvasBrush = Brush.linearGradient(colors = GlassCanvasColors)
 
 private val DarkThemeTokens = ForgeThemeTokens(
     mode = ForgeThemeMode.DARK,
+    isDark = true,
+    isGlass = false,
+    isWhite = false,
+    canvasBrush = SolidColor(Color(0xFF090B0E)),
+    windowBackgroundArgb = Color(0xFF090B0E).toArgb(),
+    cardContainerColor = Color(0xFF191C1F),
+    cardElevatedColor = Color(0xFF23272A),
+    cardBorderStroke = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)),
+    elevatedBorderStroke = null,
+    cardCornerRadius = 18.dp,
+    topBarContainerColor = Color(0xFF090B0E),
+    bottomBarContainerColor = Color(0xFF191C1F),
+    accentText = Color(0xFF7EC4FE),
+    successText = Color(0xFF49C96F),
+    warningText = Color(0xFFF9C02F),
+    dangerText = Color(0xFFFD736D),
+    terminalBackground = Color(0xFF040608),
+    terminalHeaderBackground = Color(0xFF191C1F),
+    terminalText = Color(0xFFDCDEE0),
+    inlineCodeBackground = Color(0x33007AC1),
+    diffAddedBackground = Color(0xFF062911),
+    diffAddedText = Color(0xFF67C07D),
+    diffRemovedBackground = Color(0xFF3D110F),
+    diffRemovedText = Color(0xFFF18F88),
+    selectionColors = TextSelectionColors(
+        handleColor = Color(0xFF007AC1),
+        backgroundColor = Color(0xFF007AC1).copy(alpha = 0.32f),
+    ),
+)
+
+internal val GlassThemeTokens = ForgeThemeTokens(
+    mode = ForgeThemeMode.GLASS,
+    isDark = true,
+    isGlass = true,
+    isWhite = false,
+    canvasBrush = GlassCosmicCanvasBrush,
+    windowBackgroundArgb = Color(0xFF000F0D).toArgb(),
+    cardContainerColor = Color(0xFFFFFFFF).copy(alpha = 0.09f),
+    cardElevatedColor = Color(0xFFFFFFFF).copy(alpha = 0.14f),
+    cardBorderStroke = BorderStroke(0.8.dp, GlassSpecularBorderBrush),
+    elevatedBorderStroke = BorderStroke(0.8.dp, GlassInnerBorderBrush),
+    cardCornerRadius = 18.dp,
+    topBarContainerColor = Color(0xFF001411).copy(alpha = 0.30f),
+    bottomBarContainerColor = Color(0xFFFFFFFF).copy(alpha = 0.12f),
+    accentText = Color(0xFF59F2E1),
+    successText = Color(0xFF79E393),
+    warningText = Color(0xFFFEE5B1),
+    dangerText = Color(0xFFFCA098),
+    terminalBackground = Color(0xFF000F0D).copy(alpha = 0.58f),
+    terminalHeaderBackground = Color(0xFFFFFFFF).copy(alpha = 0.10f),
+    terminalText = Color(0xFFF2F6F5),
+    inlineCodeBackground = Color(0x405DBEB2),
+    diffAddedBackground = Color(0x40064E3B),
+    diffAddedText = Color(0xFFA7F3D0),
+    diffRemovedBackground = Color(0x407F1D1D),
+    diffRemovedText = Color(0xFFFECACA),
+    selectionColors = TextSelectionColors(
+        handleColor = Color(0xFF5DBEB2),
+        backgroundColor = Color(0xFF5DBEB2).copy(alpha = 0.35f),
+    ),
+)
+
+internal val WhiteThemeTokens = ForgeThemeTokens(
+    mode = ForgeThemeMode.WHITE,
+    isDark = false,
+    isGlass = false,
+    isWhite = true,
+    canvasBrush = SolidColor(Color(0xFFFBFCFE)),
+    windowBackgroundArgb = Color(0xFFFBFCFE).toArgb(),
+    cardContainerColor = Color(0xFFF1F3F8),
+    cardElevatedColor = Color(0xFFEAEDF2),
+    cardBorderStroke = BorderStroke(0.75.dp, Color(0xFFDDE1EA)),
+    elevatedBorderStroke = BorderStroke(0.75.dp, Color(0xFFDDE1EA)),
+    cardCornerRadius = 18.dp,
+    topBarContainerColor = Color(0xFFFBFCFE),
+    bottomBarContainerColor = Color(0xFFF1F3F8),
+    accentText = Color(0xFF2B51B9),
+    successText = Color(0xFF0A6B31),
+    warningText = Color(0xFF825207),
+    dangerText = Color(0xFFB71824),
+    terminalBackground = Color(0xFFF1F3F8),
+    terminalHeaderBackground = Color(0xFFE5E8ED),
+    terminalText = Color(0xFF1C2030),
+    inlineCodeBackground = Color(0xFFE2EBFF),
+    diffAddedBackground = Color(0xFFE0FAE4),
+    diffAddedText = Color(0xFF1E6935),
+    diffRemovedBackground = Color(0xFFFFEDEB),
+    diffRemovedText = Color(0xFFA82D2E),
+    selectionColors = TextSelectionColors(
+        handleColor = Color(0xFF315DD4),
+        backgroundColor = Color(0xFF315DD4).copy(alpha = 0.22f),
+    ),
+)
+
+private val SystemDarkThemeTokens = ForgeThemeTokens(
+    mode = ForgeThemeMode.SYSTEM,
     isDark = true,
     isGlass = false,
     isWhite = false,
@@ -255,39 +407,8 @@ private val DarkThemeTokens = ForgeThemeTokens(
     ),
 )
 
-internal val GlassThemeTokens = ForgeThemeTokens(
-    mode = ForgeThemeMode.GLASS,
-    isDark = true,
-    isGlass = true,
-    isWhite = false,
-    canvasBrush = GlassCosmicCanvasBrush,
-    windowBackgroundArgb = Color(0xFF090D16).toArgb(),
-    cardContainerColor = Color(0xFF1E293B).copy(alpha = 0.30f),
-    cardElevatedColor = Color(0xFF283750).copy(alpha = 0.42f),
-    cardBorderStroke = BorderStroke(0.8.dp, GlassSpecularBorderBrush),
-    elevatedBorderStroke = BorderStroke(0.8.dp, GlassInnerBorderBrush),
-    cardCornerRadius = 18.dp,
-    topBarContainerColor = Color(0xFF0F172A).copy(alpha = 0.30f),
-    bottomBarContainerColor = Color(0xFF1E293B).copy(alpha = 0.38f),
-    accentText = Color(0xFFC5CCFF),
-    successText = Color(0xFF2DD4BF),
-    warningText = Color(0xFFFBBF24),
-    dangerText = Color(0xFFF87171),
-    terminalBackground = Color(0xFF090D16).copy(alpha = 0.58f),
-    terminalHeaderBackground = Color(0xFF1E293B).copy(alpha = 0.45f),
-    terminalText = Color(0xFFF8FAFC),
-    inlineCodeBackground = Color(0x407C8CFF),
-    diffAddedBackground = Color(0x40064E3B),
-    diffAddedText = Color(0xFFA7F3D0),
-    diffRemovedBackground = Color(0x407F1D1D),
-    diffRemovedText = Color(0xFFFECACA),
-    selectionColors = TextSelectionColors(
-        handleColor = Color(0xFF7C8CFF),
-        backgroundColor = Color(0xFF7C8CFF).copy(alpha = 0.35f),
-    ),
-)
 
-internal val WhiteThemeTokens = ForgeThemeTokens(
+private val SystemLightBaseTokens = ForgeThemeTokens(
     mode = ForgeThemeMode.WHITE,
     isDark = false,
     isGlass = false,
@@ -319,9 +440,7 @@ internal val WhiteThemeTokens = ForgeThemeTokens(
     ),
 )
 
-private val SystemDarkThemeTokens = DarkThemeTokens.copy(mode = ForgeThemeMode.SYSTEM)
-
-private val SystemLightThemeTokens = WhiteThemeTokens.copy(
+private val SystemLightThemeTokens = SystemLightBaseTokens.copy(
     mode = ForgeThemeMode.SYSTEM,
     isWhite = false,
     canvasBrush = SolidColor(Color(0xFFF8FAFC)),
@@ -343,7 +462,7 @@ fun resolveThemeTokens(
 ): Pair<ColorScheme, ForgeThemeTokens> {
     return when (ForgeThemeMode.fromStored(themeMode)) {
         ForgeThemeMode.SYSTEM -> if (systemDark) {
-            ZuanDarkColorScheme to SystemDarkThemeTokens
+            SystemDarkColorScheme to SystemDarkThemeTokens
         } else {
             SystemLightColorScheme to SystemLightThemeTokens
         }
@@ -400,9 +519,30 @@ fun NextCraftForgeTheme(
         LocalForgeThemeTokens provides tokens,
         LocalTextSelectionColors provides tokens.selectionColors,
     ) {
+        // Dialogs, sheets and menus read the surfaceContainer roles; map them to the card surfaces so every
+        // AlertDialog, bottom sheet and dropdown matches the cards. Glass uses its own opaque, darker floating colour:
+        // its card colour is translucent and a see-through dialog is unreadable over the scrim.
+        val themedScheme = if (tokens.isGlass) {
+            // Floating layers (sheets, dialogs, menus) are the darkest thing on screen and fully opaque, so they
+            // read as lifted off the page instead of as another see-through card.
+            colorScheme.copy(
+                surfaceContainerLowest = GlassFloatingSurface,
+                surfaceContainerLow = GlassFloatingSurface,
+                surfaceContainer = GlassFloatingSurface,
+                surfaceContainerHigh = GlassFloatingSurface,
+                surfaceContainerHighest = GlassFloatingSurface,
+            )
+        } else {
+            colorScheme.copy(
+                surfaceContainerHigh = tokens.cardContainerColor,
+                surfaceContainerLow = tokens.cardContainerColor,
+                surfaceContainer = tokens.cardElevatedColor,
+            )
+        }
         MaterialTheme(
-            colorScheme = colorScheme,
+            colorScheme = themedScheme,
             typography = ForgeTypography,
+            shapes = ForgeShapes,
         ) {
             // The app draws on a transparent Scaffold over its own canvas, so no Surface sets the
             // content colour. Without this, LocalContentColor stays black and every Text that
@@ -495,3 +635,12 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
+
+/** One corner scale for dialogs (extraLarge), menus (extraSmall) and sheets, shared by all themes. */
+internal val ForgeShapes = androidx.compose.material3.Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(20.dp),
+    extraLarge = RoundedCornerShape(24.dp),
+)

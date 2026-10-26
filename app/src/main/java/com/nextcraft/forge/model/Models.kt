@@ -4,7 +4,6 @@ import java.text.Normalizer
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
-import kotlin.random.Random
 
 enum class ProviderProtocol {
     CLAUDE_LOGIN,
@@ -69,7 +68,7 @@ enum class AgentKind(
     ),
     DEEPSEEK_HARNESS(
         "deepseek-harness",
-        "DeepSeek Harness",
+        "DeepSeek",
         "Official DeepSeek coding agent · API-key providers",
         "26.8 MB",
     ),
@@ -82,6 +81,8 @@ enum class AgentKind(
     ;
 
     companion object {
+        fun fromStoredOrNull(value: String?): AgentKind? = entries.firstOrNull { it.stableId == value || it.name == value }
+
         fun fromStored(value: String?): AgentKind = entries.firstOrNull {
             it.stableId == value || it.name == value
         } ?: CLAUDE_CODE
@@ -126,7 +127,7 @@ fun inferredDshApiForUrl(baseUrl: String): String {
     }
 }
 
-/** Resolves the protocol DeepSeek Harness will actually use for this saved profile. */
+/** Resolves the protocol DeepSeek will actually use for this saved profile. */
 fun providerProtocolForAgent(profile: ProviderProfile, agent: AgentKind): ProviderProtocol {
     if (agent != AgentKind.DEEPSEEK_HARNESS || profile.kind !in DSH_PROTOCOL_PROVIDERS) {
         return profile.kind.protocol
@@ -172,6 +173,14 @@ data class ProviderProfile(
 enum class ProjectKind { PROJECT, QUICK_PROJECT }
 
 enum class ProjectType { GENERAL, ANDROID }
+
+/** Starter files for a non-Android project. */
+enum class StarterTemplate(val label: String) {
+    EMPTY("Empty"),
+    GO("Go (Windows/Linux)"),
+    /** Off until Settings → "Game templates" is switched on. */
+    GAME_LIBGDX("Game (libGDX)"),
+}
 
 enum class AndroidTemplate(val label: String) {
     COMPOSE("Jetpack Compose"),
@@ -225,20 +234,17 @@ fun projectSlug(name: String): String {
 
 data class QuickChatIdentity(val displayName: String, val slug: String)
 
-fun generateQuickChatIdentity(usedSlugs: Set<String>, random: Random = Random.Default): QuickChatIdentity {
-    val adjectives = listOf("bright", "calm", "clever", "curious", "gentle", "nimble", "quiet", "swift", "wise", "bold")
-    val pioneers = listOf("turing", "lovelace", "hopper", "tesla", "curie", "ramanujan", "bose", "kalam", "faraday", "darwin")
-    repeat(20) {
-        val base = "${adjectives.random(random)}-${pioneers.random(random)}"
-        if (base !in usedSlugs) return QuickChatIdentity(base.toDisplayName(), base)
-    }
-    val base = "${adjectives.random(random)}-${pioneers.random(random)}"
-    val slug = generateSequence(2) { it + 1 }.map { "$base-$it" }.first { it !in usedSlugs }
-    return QuickChatIdentity(slug.toDisplayName(), slug)
-}
+private val QUICK_PROJECT_SLUG = Regex("^quick-project-(\\d+)$")
 
-private fun String.toDisplayName(): String = split('-').joinToString(" ") { word ->
-    word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+/**
+ * Quick projects are numbered: "Quick project 1", "Quick project 2", … ([label] is the localized "Quick project").
+ * The number follows the highest one in use, so deleting #2 does not make the next one reuse it. The folder stays
+ * `quick-project-N` when the user renames the project.
+ */
+fun generateQuickChatIdentity(usedSlugs: Set<String>, label: String): QuickChatIdentity {
+    val highest = usedSlugs.mapNotNull { QUICK_PROJECT_SLUG.find(it)?.groupValues?.get(1)?.toIntOrNull() }.maxOrNull() ?: 0
+    val number = generateSequence(highest + 1) { it + 1 }.first { "quick-project-$it" !in usedSlugs }
+    return QuickChatIdentity("$label $number", "quick-project-$number")
 }
 
 data class WorkspaceEntry(
@@ -249,6 +255,15 @@ data class WorkspaceEntry(
     val sizeBytes: Long = 0,
     /** Null until the directory's direct children have been counted off the UI thread. */
     val childCount: Int? = null,
+    /** Last-modified time in epoch millis; 0 when unknown. */
+    val modifiedMillis: Long = 0L,
+)
+
+/** The direct children of one workspace folder, as the file manager shows them. */
+data class WorkspaceDirListing(
+    val entries: List<WorkspaceEntry>,
+    /** True when the folder has more entries than [entries] holds. */
+    val truncated: Boolean = false,
 )
 
 enum class RiskLevel { SAFE, REVIEW, HIGH }
@@ -350,6 +365,8 @@ data class ChatMessage(
     val attachments: List<ChatAttachment> = emptyList(),
     val workItems: List<ActivityItem> = emptyList(),
     val workedMillis: Long = 0L,
+    /** [AgentKind.stableId] of the agent that wrote this reply; null for user messages and replies saved before routing. */
+    val agent: String? = null,
 )
 
 data class ChatAttachment(
@@ -365,6 +382,8 @@ data class ProjectChat(
     val title: String = "New chat",
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis(),
+    /** True when the chat works in its own branch (a clone of the project) and merges into it explicitly. */
+    val isolated: Boolean = false,
 )
 
 enum class DiffLineType { CONTEXT, ADDITION, DELETION, INFO }
@@ -374,6 +393,7 @@ data class DiffLine(
     val text: String,
     val oldLine: Int? = null,
     val newLine: Int? = null,
+    val hunkIndex: Int = 0,
 )
 
 data class ChangeItem(

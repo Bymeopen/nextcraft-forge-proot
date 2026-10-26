@@ -46,7 +46,7 @@ import com.nextcraft.forge.R
 data class ModelOption(val id: String, val label: String, val badge: String = "", @androidx.annotation.StringRes val labelRes: Int? = null)
 
 /**
- * Searchable model list shared by every agent (Claude Code, DeepSeek Harness, Antigravity), shown as a bottom sheet:
+ * Searchable model list shared by every agent (Claude Code, DeepSeek, Antigravity), shown as a bottom sheet:
  * title + "N available for <provider>", refresh, search, then one card per model. Typing an id that is not in the list
  * offers it as a custom model, so models the lists do not know yet stay usable.
  */
@@ -63,17 +63,21 @@ fun ModelPickerDialog(
     val scheme = MaterialTheme.colorScheme
     var query by remember { mutableStateOf("") }
     val needle = query.trim()
-    val filtered = remember(options, needle) {
+    val resolvedLabels = options.associate { option ->
+        option.id to (option.labelRes?.let { stringResource(it) } ?: option.label)
+    }
+    val filtered = remember(options, needle, resolvedLabels) {
         if (needle.isEmpty()) options else options.filter {
-            it.id.contains(needle, ignoreCase = true) || it.label.contains(needle, ignoreCase = true)
+            it.id.contains(needle, ignoreCase = true) ||
+                it.label.contains(needle, ignoreCase = true) ||
+                resolvedLabels[it.id].orEmpty().contains(needle, ignoreCase = true)
         }
     }
     val offerCustom = needle.isNotEmpty() && options.none { it.id.equals(needle, ignoreCase = true) }
 
-    ModalBottomSheet(
+    ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = LocalForgeThemeTokens.current.cardContainerColor,
     ) {
         Column(
             modifier = Modifier.padding(horizontal = ForgeSpace.card).padding(bottom = 16.dp),
@@ -126,19 +130,18 @@ fun ModelPickerDialog(
                     ModelRow(
                         label = option.labelRes?.let { stringResource(it) } ?: option.label,
                         id = option.id,
-                        badge = option.badge,
+                        badge = when (option.badge) {
+                            "latest" -> stringResource(R.string.model_badge_latest)
+                            "fast" -> stringResource(R.string.model_badge_fast)
+                            else -> option.badge
+                        },
                         selected = option.id == selectedId,
                         onClick = { onSelect(option.id) },
                     )
                 }
                 if (filtered.isEmpty() && !offerCustom) {
                     item(key = "empty") {
-                        Text(
-                            stringResource(R.string.model_picker_empty),
-                            fontSize = ForgeType.body,
-                            color = scheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 12.dp),
-                        )
+                        ForgeEmptyState(glyph = ForgeGlyph.SEARCH, title = stringResource(R.string.model_picker_empty))
                     }
                 }
             }

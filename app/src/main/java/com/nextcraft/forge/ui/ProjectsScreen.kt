@@ -3,6 +3,7 @@
 package com.nextcraft.forge.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import com.nextcraft.forge.model.Project
 import com.nextcraft.forge.model.ProjectKind
 import com.nextcraft.forge.model.ProjectType
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.nextcraft.forge.R
 import androidx.annotation.StringRes
@@ -71,7 +73,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -100,6 +101,7 @@ fun ProjectsScreen(
     onDeleteProject: (String) -> Unit,
     onRenameProject: (String, String) -> Unit = { _, _ -> },
     onNewQuickProject: () -> Unit = {},
+    onOpenUpdate: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val regular = state.projects
@@ -108,11 +110,6 @@ fun ProjectsScreen(
     val quick = state.projects
         .filter { it.kind == ProjectKind.QUICK_PROJECT }
         .sortedByDescending { it.updatedAtMillis }
-    val busy = state.sessionRunning ||
-        state.androidBuild.phase == com.nextcraft.forge.runtime.AndroidBuildPhase.BUILDING ||
-        state.terminalRunning
-    // Mirrors MainViewModel.deleteProject, which refuses to delete the last project or while tasks run.
-    val canDelete = state.projects.size > 1 && !busy
     var pendingDeleteProject by remember { mutableStateOf<Project?>(null) }
     var pendingRenameProject by remember { mutableStateOf<Project?>(null) }
     var showCloneDialog by rememberSaveable { mutableStateOf(false) }
@@ -121,6 +118,11 @@ fun ProjectsScreen(
     }
 
     LazyColumn(modifier = modifier.fillMaxSize()) {
+        state.updateInfo?.let { update ->
+            item(key = "update-banner") {
+                UpdateBanner(versionName = update.versionName, onOpen = onOpenUpdate)
+            }
+        }
         item(key = "hero") {
             ProjectsHero(
                 onQuickProject = onQuickProject,
@@ -150,12 +152,18 @@ fun ProjectsScreen(
             if (regular.isNotEmpty()) {
                 if (quick.isNotEmpty()) item(key = "header-recent") { SectionLabel(stringResource(R.string.projects_recent)) }
                 items(regular, key = { it.id }) { project ->
+                    val runningChats = state.runningProjectChatCounts[project.id] ?: 0
+                    val isBuilding = project.id in state.buildingProjectIds
+                    val projectBusy = runningChats > 0 || isBuilding
                     ProjectRow(
                         project = project,
                         active = project.id == state.activeProjectId,
-                        // MainViewModel.selectProject ignores switches while active tasks run.
-                        locked = busy && project.id != state.activeProjectId,
-                        canDelete = canDelete,
+                        changedCount = if (project.id == state.activeProjectId) state.changedItems.count { it.accepted == null } else 0,
+                        running = projectBusy,
+                        runningChatCount = runningChats,
+                        building = isBuilding,
+                        locked = false,
+                        canDelete = !projectBusy,
                         onOpen = { onOpenProject(project.id) },
                         onDelete = { pendingDeleteProject = project },
                         onRename = { pendingRenameProject = project },
@@ -165,11 +173,18 @@ fun ProjectsScreen(
             if (quick.isNotEmpty()) {
                 item(key = "header-quick") { SectionLabel(stringResource(R.string.projects_quick)) }
                 items(quick, key = { it.id }) { project ->
+                    val runningChats = state.runningProjectChatCounts[project.id] ?: 0
+                    val isBuilding = project.id in state.buildingProjectIds
+                    val projectBusy = runningChats > 0 || isBuilding
                     ProjectRow(
                         project = project,
                         active = project.id == state.activeProjectId,
-                        locked = busy && project.id != state.activeProjectId,
-                        canDelete = canDelete,
+                        changedCount = if (project.id == state.activeProjectId) state.changedItems.count { it.accepted == null } else 0,
+                        running = projectBusy,
+                        runningChatCount = runningChats,
+                        building = isBuilding,
+                        locked = false,
+                        canDelete = !projectBusy,
                         onOpen = { onOpenProject(project.id) },
                         onDelete = { pendingDeleteProject = project },
                         onRename = { pendingRenameProject = project },
@@ -191,7 +206,7 @@ fun ProjectsScreen(
     }
     pendingRenameProject?.let { target ->
         var name by remember(target.id) { mutableStateOf(target.name) }
-        AlertDialog(
+        ForgeAlertDialog(
             onDismissRequest = { pendingRenameProject = null },
             title = { Text(stringResource(R.string.projects_rename_title)) },
             text = {
@@ -219,7 +234,7 @@ fun ProjectsScreen(
         )
     }
     pendingDeleteProject?.let { target ->
-        AlertDialog(
+        ForgeAlertDialog(
             modifier = Modifier.forgePopIn(),
             onDismissRequest = { pendingDeleteProject = null },
             title = { Text(stringResource(R.string.shell_delete_project_confirm_title)) },
@@ -245,18 +260,28 @@ fun ProjectsScreen(
 private fun ProjectsHero(onQuickProject: () -> Unit, onNewProject: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-        Text(
-            text = stringResource(R.string.shell_nextcraft_forge),
-            fontSize = ForgeType.control,
-            color = scheme.onSurfaceVariant,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(top = 10.dp),
-        )
+        ) {
+            Image(
+                painter = painterResource(R.drawable.ic_logo),
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.shell_nextcraft_forge),
+                fontSize = ForgeType.control,
+                color = scheme.onSurfaceVariant,
+            )
+        }
         Text(
-            text = stringResource(R.string.projects_build_from_your_phone),
+            text = stringResource(R.string.app_tagline),
             fontSize = ForgeType.screenTitle,
             fontWeight = FontWeight.SemiBold,
             lineHeight = 32.sp,
-            modifier = Modifier.padding(top = 2.dp),
+            modifier = Modifier.padding(top = 6.dp),
         )
         Text(
             text = stringResource(R.string.projects_tagline),
@@ -286,6 +311,12 @@ private fun ProjectsHero(onQuickProject: () -> Unit, onNewProject: () -> Unit) {
                 Text(stringResource(R.string.projects_new_project), fontWeight = FontWeight.SemiBold)
             }
         }
+        Text(
+            text = stringResource(R.string.projects_buttons_hint),
+            fontSize = ForgeType.caption,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
     }
 }
 
@@ -443,7 +474,7 @@ private fun ImportTile(
 @Composable
 private fun CloneUrlDialog(onDismiss: () -> Unit, onClone: (String) -> Unit) {
     var url by rememberSaveable { mutableStateOf("") }
-    AlertDialog(
+    ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.projects_clone_title)) },
         text = {
@@ -456,7 +487,7 @@ private fun CloneUrlDialog(onDismiss: () -> Unit, onClone: (String) -> Unit) {
             )
         },
         confirmButton = {
-            Button(onClick = { onClone(url) }, enabled = url.isNotBlank()) {
+            Button(onClick = { onClone(url) }, enabled = FieldValidation.isHttpUrl(url)) {
                 Text(stringResource(R.string.projects_clone))
             }
         },
@@ -482,7 +513,7 @@ private const val MAX_PROJECT_NAME = 80
 /** Project card: folder tile, name, description, guest path, language and age, plus a rename/delete menu. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ProjectRow(
+internal fun ProjectRow(
     project: Project,
     active: Boolean,
     locked: Boolean,
@@ -490,10 +521,16 @@ private fun ProjectRow(
     onOpen: () -> Unit,
     onDelete: () -> Unit,
     onRename: () -> Unit,
+    changedCount: Int = 0,
+    running: Boolean = false,
+    runningChatCount: Int = 0,
+    building: Boolean = false,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val muted = scheme.onSurfaceVariant
+    // Phones up to ~6.3in report <= 400dp wide: a smaller tile and gaps give the text column 16dp more.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 400
 
     ForgeThemedCard(
         modifier = Modifier
@@ -506,14 +543,14 @@ private fun ProjectRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(enabled = !locked, role = Role.Button, onClick = onOpen, onLongClick = { menuOpen = true })
-                .padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 4.dp),
+                .padding(start = if (narrow) 12.dp else 16.dp, top = 16.dp, bottom = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier.size(52.dp).clip(RoundedCornerShape(14.dp)).background(scheme.primary.copy(alpha = 0.12f)),
+                modifier = Modifier.size(if (narrow) 44.dp else 52.dp).clip(RoundedCornerShape(14.dp)).background(scheme.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center,
-            ) { ForgeIcon(glyph = ForgeGlyph.FOLDER, tint = scheme.primary, size = 26.dp) }
-            Spacer(modifier = Modifier.width(16.dp))
+            ) { ForgeIcon(glyph = ForgeGlyph.FOLDER, tint = scheme.primary, size = if (narrow) 22.dp else 26.dp) }
+            Spacer(modifier = Modifier.width(if (narrow) 12.dp else 16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = project.name,
@@ -523,14 +560,19 @@ private fun ProjectRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = if (locked) stringResource(R.string.projects_agent_running) else project.localizedDescription().ifBlank { project.subtitle() },
-                    fontSize = ForgeType.body,
-                    color = muted,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // The stock descriptions ("General coding workspace", "Quick project") say nothing the card does not already
+                // show (the list is grouped by kind), so only a locked card or a description someone wrote takes a line.
+                val generic = project.description in GENERIC_PROJECT_DESCRIPTIONS
+                if (locked || !generic) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (locked) stringResource(R.string.projects_agent_running) else project.localizedDescription().ifBlank { project.subtitle() },
+                        fontSize = ForgeType.body,
+                        color = muted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 val guestPath = "/workspace/${project.slug}"
                 Text(
                     text = guestPath,
@@ -541,11 +583,37 @@ private fun ProjectRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = listOf(project.localizedLanguage(), project.relativeUpdatedAt()).filter { it.isNotBlank() }.joinToString(" · "),
+                    text = listOf(compactLanguages(project.localizedLanguage()), project.relativeUpdatedAt()).filter { it.isNotBlank() }.joinToString(" · "),
                     fontSize = ForgeType.secondary,
                     color = muted,
+                    // One line: the language list is shortened ("Kotlin +2") so the time always fits, even at 360dp.
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                // Live state for the project: chats working, APK building, or edits waiting for review.
+                if (running || building || changedCount > 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (runningChatCount > 0 || (running && !building)) {
+                            val label = if (runningChatCount > 1) {
+                                "${stringResource(R.string.projects_status_working)} ($runningChatCount)"
+                            } else {
+                                stringResource(R.string.projects_status_working)
+                            }
+                            ProjectStatusPill(label, ForgeGlyph.SPARK, LocalForgeThemeTokens.current.warningText)
+                        }
+                        if (building) {
+                            ProjectStatusPill(stringResource(R.string.notif_building_apk), ForgeGlyph.BUILD, LocalForgeThemeTokens.current.warningText)
+                        }
+                        if (changedCount > 0) {
+                            ProjectStatusPill(quantityStringResource(R.plurals.chat_files_changed, changedCount, changedCount), ForgeGlyph.FILE, scheme.primary)
+                        }
+                    }
+                }
             }
             Box {
                 IconButton(onClick = { menuOpen = true }, enabled = !locked) {
@@ -627,6 +695,12 @@ private fun ProjectsEmptyState() {
     }
 }
 
+private val GENERIC_PROJECT_DESCRIPTIONS = setOf(
+    "Default workspace inside Ubuntu ARM64 Root Chroot",
+    "General coding workspace",
+    "Quick project",
+)
+
 @Composable
 private fun Project.subtitle(): String = when {
     kind == ProjectKind.QUICK_PROJECT -> stringResource(R.string.projects_quick_chat)
@@ -634,13 +708,67 @@ private fun Project.subtitle(): String = when {
     else -> stringResource(R.string.projects_general)
 }
 
-/** Projects saved by older builds store English defaults; show them in the current language. */
+/**
+ * Project text is stored in English (the defaults a project is created with) and translated when drawn, so it follows
+ * the app language even after the language is changed. Text the user typed is shown as written.
+ */
 @Composable
-private fun Project.localizedDescription(): String = when (description) {
-    "Default workspace inside Ubuntu ARM64 Root Chroot" -> stringResource(R.string.project_default_sandbox_desc)
-    "General coding workspace" -> stringResource(R.string.project_general_desc)
-    else -> description
+private fun Project.localizedDescription(): String = when {
+    description == "Default workspace inside Ubuntu ARM64 Root Chroot" -> stringResource(R.string.project_default_sandbox_desc)
+    description == "General coding workspace" -> stringResource(R.string.project_general_desc)
+    description == "Quick project" -> stringResource(R.string.project_quick_desc)
+    else -> {
+        val imported = Regex("^Imported from (.+)$").matchEntire(description)
+        val android = Regex("^Android \\((.+)\\) project$").matchEntire(description)
+        when {
+            imported != null -> stringResource(R.string.project_imported_desc, imported.groupValues[1])
+            android != null -> stringResource(R.string.project_android_desc, android.groupValues[1])
+            else -> description
+        }
+    }
 }
 
 @Composable
 private fun Project.localizedLanguage(): String = if (language == "Multi-language") stringResource(R.string.project_lang_multi) else language
+
+/** Small status capsule on a project card: glyph plus words, so colour is never the only signal. */
+@Composable
+private fun ProjectStatusPill(text: String, glyph: ForgeGlyph, tint: androidx.compose.ui.graphics.Color) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(100))
+            .background(tint.copy(alpha = 0.12f))
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ForgeIcon(glyph, tint = tint, size = 12.dp)
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(text, fontSize = ForgeType.caption, color = tint, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+/** "Kotlin / TypeScript / Python" becomes "Kotlin +2": up to two languages are listed in full, more collapse to the first plus a count. */
+internal fun compactLanguages(languages: String): String {
+    val parts = languages.split(" / ").map { it.trim() }.filter { it.isNotEmpty() }
+    return if (parts.size <= 2) languages else parts.first() + " +" + (parts.size - 1)
+}
+
+/** Shown on top of the project list while a newer build is available; opens Settings, where it is installed. */
+@Composable
+private fun UpdateBanner(versionName: String, onOpen: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    androidx.compose.material3.Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = scheme.primary.copy(alpha = 0.14f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(role = Role.Button, onClick = onOpen),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(stringResource(R.string.upd_banner_title, versionName), fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.upd_banner_hint), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
+        }
+    }
+}

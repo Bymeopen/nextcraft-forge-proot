@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Logo untuk dipakai di dalam app (tile hitam bersudut membulat + prompt + spark) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M26,0 H82 A26,26 0 0 1 108,26 V82 A26,26 0 0 1 82,108 H26 A26,26 0 0 1 0,82 V26 A26,26 0 0 1 26,0 Z" />
+    <path
+        android:pathData="M32,36 L52,54 L32,72"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="32" android:startY="36"
+                android:endX="52" android:endY="72"
+                android:startColor="#38BDF8"
+                android:endColor="#34D399" />
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M58,72 L78,72"
+        android:strokeColor="#34D399"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M72,30 C73,35.5 74.5,36.5 80,38 C74.5,39.5 73,40.5 72,46 C71,40.5 69.5,39.5 64,38 C69.5,36.5 71,35.5 72,30Z" />
+</vector>

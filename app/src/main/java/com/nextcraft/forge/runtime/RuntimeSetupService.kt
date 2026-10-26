@@ -78,7 +78,7 @@ object RuntimeSetupController {
                 errorMessage = json.stringOrEmpty("errorMessage").takeIf(String::isNotBlank),
                 offline = json.optBoolean("offline"),
             )
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     @Synchronized
@@ -228,7 +228,7 @@ object RuntimeSetupController {
                     android.util.Log.e("SetupController", "Failed to persist setup state — data may be lost")
                 }
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     private fun appendLog(context: Context, line: String?) {
@@ -241,7 +241,7 @@ object RuntimeSetupController {
                 val tail = file.readTailText(MAX_LOG_BYTES.toInt())
                 file.writeText(tail.substringAfter('\n', tail))
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     private fun sanitize(line: String): String = line.filter { it == '\t' || it.code >= 32 }.take(500)
@@ -268,6 +268,14 @@ class RuntimeSetupService : Service() {
     private var lastWakeLockRenewAt = 0L
     private var lastNotificationAt = 0L
 
+    /** Resources in the language chosen inside the app; the service's own context follows the system language. */
+    private fun t(@androidx.annotation.StringRes id: Int, vararg args: Any): String =
+        com.nextcraft.forge.ui.LocaleHelper.wrapContext(this).getString(id, *args)
+
+    /** Installer sentences are English; known ones are shown in the app language (same table the install panel uses). */
+    private fun localizedRuntimeText(raw: String): String =
+        com.nextcraft.forge.ui.RuntimeText.match(raw)?.let { (id, args) -> t(id, *args.toTypedArray()) } ?: raw
+
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel(this)
@@ -287,7 +295,13 @@ class RuntimeSetupService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, setupNotification(RuntimeSetupController.snapshot.value))
+        try {
+            startForeground(NOTIFICATION_ID, setupNotification(RuntimeSetupController.snapshot.value))
+        } catch (error: RuntimeException) {
+            // Android 12+ refuses foreground promotion once the app is in the background; the install can still
+            // run (it resumes from its .part files), so do not crash the process.
+            android.util.Log.w("RuntimeSetupService", "startForeground refused: ${error::class.simpleName}")
+        }
         acquireWakeLock()
         val previousJob = installJob
         // A cancelled job can still be winding down; start the new one after it instead of dropping the request.
@@ -355,10 +369,10 @@ class RuntimeSetupService : Service() {
 
     private fun setupNotification(state: RuntimeSetupSnapshot): Notification {
         val latest = state.logs.lastOrNull().orEmpty().take(180)
-        val bodyText = latest.ifBlank { state.message }
+        val bodyText = localizedRuntimeText(latest.ifBlank { state.message })
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(smallIconRes())
-            .setContentTitle("Setting up Linux chroot runtime")
+            .setContentTitle(t(com.nextcraft.forge.R.string.notif_setup_title))
             .setContentText(bodyText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(bodyText))
             .setContentIntent(openAppIntent())
@@ -373,7 +387,7 @@ class RuntimeSetupService : Service() {
         }
         builder.addAction(
             0,
-            "Pause",
+            t(com.nextcraft.forge.R.string.notif_pause),
             PendingIntent.getService(
                 this,
                 102,
@@ -386,11 +400,11 @@ class RuntimeSetupService : Service() {
 
     private fun showFinishedNotification(success: Boolean) {
         val state = RuntimeSetupController.snapshot.value
-        val title = if (success) "Linux chroot runtime is ready" else "Runtime setup needs attention"
+        val title = if (success) t(com.nextcraft.forge.R.string.rt_msg_chroot_ready) else t(com.nextcraft.forge.R.string.notif_setup_attention)
         val detail = if (success) {
-            "Your Ubuntu ARM64 chroot environment and coding tools are ready."
+            t(com.nextcraft.forge.R.string.rt_msg_env_ready)
         } else {
-            state.errorMessage ?: "Runtime setup encountered an error."
+            state.errorMessage?.let(::localizedRuntimeText) ?: t(com.nextcraft.forge.R.string.notif_setup_error)
         }
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(smallIconRes())
@@ -404,8 +418,8 @@ class RuntimeSetupService : Service() {
         getSystemService(NotificationManager::class.java)?.notify(RESULT_NOTIFICATION_ID, notification)
     }
 
-    private fun smallIconRes(): Int =
-        applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.stat_notify_sync
+    // Ikon status bar harus siluet satu warna, bukan ikon launcher adaptif
+    private fun smallIconRes(): Int = com.nextcraft.forge.R.drawable.ic_notification
 
     private fun openAppIntent(): PendingIntent {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -443,14 +457,23 @@ class RuntimeSetupService : Service() {
         if (now - lastWakeLockRenewAt < WAKE_LOCK_RENEW_INTERVAL_MS) return
         if (now - wakeLockAcquiredAt > MAX_SETUP_WAKE_MS) return
         lastWakeLockRenewAt = now
-        runCatching { lock.acquire(MAX_WAKE_LOCK_MS) }
+        runCatching { lock.acquire(MAX_WAKE_LOCK_MS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
     }
 
     private fun releaseWakeLock() {
         wakeLock?.takeIf { it.isHeld }?.let { lock ->
-            runCatching { lock.release() }
+            runCatching { lock.release() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeSetupService", it) }
         }
         wakeLock = null
+    }
+
+    /** Android 15+ dataSync time limit (about six hours per 24 hours): stop promptly; downloads resume from .part files. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        android.util.Log.w("RuntimeSetupService", "dataSync foreground time limit reached")
+        installJob?.takeIf { it.isActive }?.cancel(CancellationException("Foreground time limit reached"))
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -481,13 +504,14 @@ class RuntimeSetupService : Service() {
         private const val MAX_SETUP_WAKE_MS = 4 * 60 * 60 * 1_000L
 
         fun ensureNotificationChannel(context: Context) {
+            val localized = com.nextcraft.forge.ui.LocaleHelper.wrapContext(context)
             context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "Runtime setup",
+                    localized.getString(com.nextcraft.forge.R.string.notif_channel_setup),
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Shows download and extraction progress during Linux chroot setup."
+                    description = localized.getString(com.nextcraft.forge.R.string.notif_channel_setup_desc)
                 },
             )
         }

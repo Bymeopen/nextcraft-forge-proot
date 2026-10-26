@@ -89,7 +89,7 @@ internal fun RuntimeProgressPanel(snapshot: RuntimeSetupSnapshot, modifier: Modi
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = snapshot.message,
+                    text = runtimeText(snapshot.message),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 2,
@@ -115,7 +115,7 @@ internal fun RuntimeProgressPanel(snapshot: RuntimeSetupSnapshot, modifier: Modi
             }
             if (failed) {
                 Text(
-                    text = snapshot.errorMessage.orEmpty(),
+                    text = runtimeText(snapshot.errorMessage.orEmpty()),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.forgeLive(),
@@ -124,7 +124,7 @@ internal fun RuntimeProgressPanel(snapshot: RuntimeSetupSnapshot, modifier: Modi
             val recentLines = snapshot.logs.takeLast(3).filter { it.isNotBlank() }
             if (recentLines.isNotEmpty()) {
                 Text(
-                    text = recentLines.joinToString("\n"),
+                    text = recentLines.map { runtimeText(it) }.joinToString("\n"),
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

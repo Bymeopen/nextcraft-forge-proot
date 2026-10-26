@@ -60,11 +60,11 @@ internal class LocalFormatGateway(
             runCatching {
                 socket.soTimeout = SOCKET_TIMEOUT_MS
                 socket.tcpNoDelay = true
-            }
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
             try {
                 workers.execute { runCatching { socket.use(::handle) } } // client disconnects must not escape as uncaught exceptions (crashes the app)
             } catch (_: java.util.concurrent.RejectedExecutionException) {
-                runCatching { socket.close() }
+                runCatching { socket.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
             }
         }
     }
@@ -158,7 +158,7 @@ internal class LocalFormatGateway(
                 output.eventStream -> writeStreamError(output, "api_error", message)
                 else -> Unit
             }
-        }
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
     }
 
     private fun writeStreamError(output: BufferedOutputStream, type: String, message: String) {
@@ -177,7 +177,7 @@ internal class LocalFormatGateway(
         val target = JSONObject()
             .put("model", normalizeModel(profile.model))
             .put("stream", false)
-            .put("max_tokens", source.optInt("max_tokens", 4096))
+            .put(maxTokensField(), source.optInt("max_tokens", 4096))
         if (source.has("temperature")) target.put("temperature", source.get("temperature"))
         val messages = JSONArray()
         source.opt("system")?.let { system ->
@@ -419,7 +419,7 @@ internal class LocalFormatGateway(
             return 400 to errorJson("invalid_request_error", "Plain http:// is only allowed for localhost")
         }
         val currentKey = activeApiKey
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).also(upstreamConnections::add)
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).also(upstreamConnections::add).apply { instanceFollowRedirects = false }
         return try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 20_000
@@ -486,7 +486,7 @@ internal class LocalFormatGateway(
         }
         val body = toOpenAi(anthropic).put("stream", true)
         val currentKey = activeApiKey
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).also(upstreamConnections::add)
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).also(upstreamConnections::add).apply { instanceFollowRedirects = false }
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 20_000
@@ -895,6 +895,15 @@ internal class LocalFormatGateway(
         JSONObject(body).optJSONObject("error")?.stringOrEmpty("message").orEmpty().ifBlank { body.take(500) }
     }.getOrDefault(body.take(500))
 
+    /**
+     * api.openai.com rejects `max_tokens` on its reasoning models (o-series, gpt-5) with HTTP 400 and accepts
+     * `max_completion_tokens` on every current chat model. Other OpenAI-compatible servers keep the older name.
+     */
+    private fun maxTokensField(): String {
+        val host = runCatching { URL(profile.resolvedBaseUrl.trim()).host }.getOrDefault("")
+        return if (host.equals("api.openai.com", ignoreCase = true)) "max_completion_tokens" else "max_tokens"
+    }
+
     private fun normalizeModel(model: String): String = model
         .removePrefix("models/")
         .removePrefix("anthropic/")
@@ -906,7 +915,7 @@ internal class LocalFormatGateway(
 
     override fun close() {
         running.set(false)
-        runCatching { server.close() }
+        runCatching { server.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("LocalFormatGateway", it) }
         workers.shutdown()
         // shutdown() does not interrupt workers, and HttpURLConnection ignores interrupts anyway: a provider call of
         // up to 180 s would keep using the key and quota after the session ended. Disconnecting aborts it.

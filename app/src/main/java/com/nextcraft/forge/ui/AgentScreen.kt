@@ -9,6 +9,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,7 +77,6 @@ import androidx.compose.material.icons.filled.List
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ArrowBack
@@ -110,6 +113,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -131,7 +135,9 @@ fun AgentScreen(
     viewModel: MainViewModel,
 ) {
     var promptInput by rememberSaveable { mutableStateOf("") }
-    val listState = rememberLazyListState()
+    // Coming back to a chat (leaving the app, another tab) recreates the list; open it at the newest message,
+    // not at the first one.
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = state.messages.lastIndex.coerceAtLeast(0))
     val agyAuthState by viewModel.antigravityAuth.state.collectAsState()
     val scope = rememberCoroutineScope()
     val tokens = LocalForgeThemeTokens.current
@@ -150,17 +156,30 @@ fun AgentScreen(
         }
     }
 
-    var previousMessageCount by remember { mutableStateOf(state.messages.size) }
+    // Every time the chat is opened (or another chat is picked) start at the newest message. rememberLazyListState
+    // is saveable, so on return it restores the old position (often the top) and ignores its initial index;
+    // this plain remember is reset on each entry and forces the jump once the messages are there.
+    var openedAtEnd by remember(state.activeProjectId, state.activeChatId) { mutableStateOf(false) }
+    LaunchedEffect(state.activeProjectId, state.activeChatId, state.messages.isNotEmpty()) {
+        if (!openedAtEnd && state.messages.isNotEmpty()) {
+            listState.scrollToItem(state.messages.lastIndex, Int.MAX_VALUE)
+            openedAtEnd = true
+        }
+    }
+
+    var previousMessageCount by remember(state.activeProjectId, state.activeChatId) { mutableStateOf(state.messages.size) }
     LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.text?.length) {
         if (state.messages.isNotEmpty()) {
             val lastIdx = state.messages.lastIndex
             if (state.messages.size != previousMessageCount) {
+                // A chat that just loaded jumps straight to its end; only new messages animate.
+                val firstLoad = previousMessageCount == 0
                 previousMessageCount = state.messages.size
-                listState.animateScrollToItem(lastIdx)
+                if (firstLoad) listState.scrollToItem(lastIdx, Int.MAX_VALUE) else listState.animateScrollToItem(lastIdx)
             } else {
                 val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
                 if (lastVisible >= lastIdx - 1) {
-                    listState.scrollToItem(lastIdx)
+                    listState.scrollToItem(lastIdx, Int.MAX_VALUE)
                 }
             }
         } else {
@@ -168,16 +187,42 @@ fun AgentScreen(
         }
     }
 
+    val drawerState = androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed)
+    var usageOpen by rememberSaveable { mutableStateOf(false) }
+    var scheduleOpen by rememberSaveable { mutableStateOf(false) }
+    var renameOpen by rememberSaveable { mutableStateOf(false) }
+    var modelSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var routeSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // The chip shows the model of the primary agent, which can differ from the selected one in the multi-agent modes.
+    androidx.compose.runtime.LaunchedEffect(state.routing) { viewModel.refreshAgentProfiles(); viewModel.refreshReadyAgents() }
+    var branchSheetOpen by rememberSaveable { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
+
+    androidx.compose.material3.ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            androidx.compose.material3.ModalDrawerSheet {
+                ChatDrawerContent(state = state, viewModel = viewModel, onClose = { scope.launch { drawerState.close() } })
+            }
+        },
+    ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        AgentHeader(
+        ChatTopBar(
             state = state,
-            onBack = { viewModel.projectBack() },
-            onRun = { viewModel.selectTab(ForgeTab.ANDROID) },
-            onSelectChat = viewModel::openChat,
-            onCreateChat = { viewModel.createChat() },
-            onDeleteChat = viewModel::deleteChat,
-            onSelectAgent = viewModel::selectAgent,
-            onClearChat = viewModel::clearActiveChat,
+            onOpenDrawer = { scope.launch { drawerState.open() } },
+            onOpenChanges = { viewModel.selectProjectPane(ProjectPane.FILES) },
+            onRename = { renameOpen = true },
+            onUsage = { usageOpen = true },
+            onSchedule = { scheduleOpen = true },
+            onClear = viewModel::clearActiveChat,
+            onDelete = { viewModel.deleteChat(state.activeChatId) },
+            onBranch = {
+                viewModel.refreshBranchStatus(state.activeChatId)
+                branchSheetOpen = true
+            },
+            onEnableBranch = { viewModel.enableChatBranch(state.activeChatId) },
+            onOpenRea = { viewModel.selectTab(ForgeTab.REA) },
+            onOpenMemory = viewModel::openProjectMemory,
         )
 
         if (state.agentKind == AgentKind.ANTIGRAVITY &&
@@ -193,35 +238,33 @@ fun AgentScreen(
         }
 
         state.activeStatusLine?.let { statusLine ->
+            // A slim status line: no sliding bar (the spinner by the chat title shows that it is working), small text,
+            // and a compact Stop (the composer's round button also stops).
             Surface(
                 color = tokens.cardElevatedColor,
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    if (state.sessionRunning) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                            .padding(start = 12.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
                             text = statusLine.asString(),
-                            style = MaterialTheme.typography.labelMedium,
+                            fontSize = ForgeType.caption,
                             color = tokens.accentText,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).padding(vertical = 4.dp),
                         )
-                        if (state.sessionRunning) {
-                            OutlinedButton(
+                        if (state.activeChatRunning) {
+                            ForgeTextButton(
                                 onClick = viewModel::stopActiveTask,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                modifier = Modifier.heightIn(min = ForgeSpace.minTouch),
+                                modifier = Modifier.heightIn(min = 32.dp),
                             ) {
                                 Text(stringResource(R.string.agent_stop), fontSize = ForgeType.caption)
                             }
@@ -233,7 +276,7 @@ fun AgentScreen(
         }
 
         state.pendingToolRequest?.let { req ->
-            ToolApprovalCard(
+            ToolApprovalSheet(
                 request = req,
                 onApprove = { viewModel.respondToToolRequest(true) },
                 onReject = { viewModel.respondToToolRequest(false) },
@@ -258,6 +301,8 @@ fun AgentScreen(
                 }
             }
         } else {
+            val pendingChanges = state.changedItems.filter { it.accepted == null }
+            val lastAssistantId = state.messages.lastOrNull { !it.fromUser }?.id
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 LazyColumn(
                     state = listState,
@@ -266,27 +311,57 @@ fun AgentScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(state.messages, key = { it.id }) { message ->
-                        Box(modifier = Modifier.animateItemPlacement()) {
-                        ChatMessageCard(
-                            message = message,
-                            agentName = state.agentKind.displayTitle(),
-                            onRunSnippet = { cmd ->
-                                viewModel.runTerminalCommand(cmd)
-                                viewModel.selectTab(ForgeTab.TERMINAL)
-                            },
-                        )
+                        Column(modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ChatMessageCard(
+                                message = message,
+                                agentName = state.agentKind.displayTitle(),
+                                onRunSnippet = { cmd ->
+                                    viewModel.runInChatTerminal(cmd)
+                                },
+                            )
+                            // A chat with its own branch shows what the branch holds instead of the project's review list.
+                            val branchStatus = state.branchStatus[state.activeChatId]
+                            if (message.id == lastAssistantId && !state.activeChatRunning && branchStatus != null &&
+                                (branchStatus.commits > 0 || branchStatus.uncommitted > 0 || branchStatus.conflicts.isNotEmpty())
+                            ) {
+                                BranchSummaryCard(status = branchStatus, onOpen = { branchSheetOpen = true })
+                            }
+                            // Review right where the agent said it was done; the Files tab keeps the full diff view.
+                            if (message.id == lastAssistantId && pendingChanges.isNotEmpty() && state.runningChatIds.isEmpty()) {
+                                ChangedFilesCard(
+                                    changes = pendingChanges,
+                                    enabled = state.runningChatIds.isEmpty(),
+                                    onOpenFile = { path ->
+                                        viewModel.openWorkspaceFile(path)
+                                        viewModel.selectProjectPane(ProjectPane.FILES)
+                                    },
+                                    onKeepFile = viewModel::keepSingleFile,
+                                    onRevertFile = viewModel::revertSingleFile,
+                                    onKeepAll = viewModel::keepAllChanges,
+                                    onRevertAll = viewModel::revertAllChanges,
+                                    onEditInTerminal = viewModel::editInTerminal,
+                                    onAcceptAndCommit = viewModel::acceptAndCommitChanges,
+                                    onRevertHunk = viewModel::revertDiffHunk,
+                                )
+                            }
                         }
                     }
                 }
                 // "Latest" pill: shown once the reader has scrolled up from the newest message.
                 val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
                 val awayFromEnd = state.messages.size > 1 && lastVisible < state.messages.lastIndex
+                // Count only what arrived after the reader scrolled away; remember(awayFromEnd) snapshots the size at that moment.
+                val sizeWhenAway = remember(awayFromEnd) { state.messages.size }
+                val newCount = (state.messages.size - sizeWhenAway).coerceAtLeast(0)
                 if (awayFromEnd) {
                     Surface(
                         shape = RoundedCornerShape(100),
-                        color = tokens.cardElevatedColor,
+                        // Opaque (composited over the page) and raised: the glass card colour is translucent and let the
+                        // last message show through the pill.
+                        color = tokens.cardElevatedColor.compositeOver(MaterialTheme.colorScheme.surface),
                         contentColor = tokens.accentText,
                         border = tokens.cardBorderStroke,
+                        shadowElevation = 4.dp,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(bottom = 10.dp)
@@ -299,7 +374,12 @@ fun AgentScreen(
                         ) {
                             Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(stringResource(R.string.agent_latest), fontWeight = FontWeight.SemiBold, fontSize = ForgeType.control)
+                            Text(
+                                text = if (newCount > 0) quantityStringResource(R.plurals.chat_new_messages, newCount, newCount) else stringResource(R.string.agent_latest),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = ForgeType.control,
+                                modifier = Modifier.forgeLive(),
+                            )
                         }
                     }
                 }
@@ -307,7 +387,7 @@ fun AgentScreen(
         }
 
         // Composer: one capsule, attach + field + round send/stop button. The agent name is in the header.
-        val running = state.sessionRunning
+        val running = state.activeChatRunning
         val canSend = promptInput.isNotBlank() || state.pendingAttachments.isNotEmpty()
         val attachPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty()) viewModel.attachFilesToPrompt(uris)
@@ -315,7 +395,21 @@ fun AgentScreen(
         // Camera: the photo is written to a FileProvider URI in the app cache, then imported like any picked file.
         val cameraContext = LocalContext.current
         var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
-        var attachMenuOpen by remember { mutableStateOf(false) }
+        var confirmCapture by remember { mutableStateOf(false) }
+        if (confirmCapture) {
+            val captureTarget = cameraContext.findWindow()
+            ForgeAlertDialog(
+                onDismissRequest = { confirmCapture = false },
+                title = { Text(stringResource(R.string.capture_confirm_title)) },
+                text = { Text(stringResource(R.string.capture_confirm_message)) },
+                confirmButton = {
+                    TextButton(onClick = { confirmCapture = false; captureTarget?.let(viewModel::captureAppScreens) }) {
+                        Text(stringResource(R.string.capture_start))
+                    }
+                },
+                dismissButton = { TextButton(onClick = { confirmCapture = false }) { Text(stringResource(R.string.agent_cancel)) } },
+            )
+        }
         val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
             val uri = cameraUri?.let(android.net.Uri::parse)
             if (saved && uri != null) viewModel.attachFilesToPrompt(listOf(uri))
@@ -334,7 +428,9 @@ fun AgentScreen(
                 cameraLauncher.launch(uri)
             }.onFailure { cameraUri = null }
         }
-        val retry = state.retryPrompt?.takeIf { it.chatId == state.activeChatId && !state.sessionRunning }
+        val retry = state.retryPrompts[state.activeChatId]?.takeIf {
+            !state.activeChatRunning && (it.prompt.projectId == null || it.prompt.projectId == state.activeProjectId)
+        }
         if (retry != null) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp).forgeLive(),
@@ -349,19 +445,39 @@ fun AgentScreen(
                 ForgeTextButton(onClick = viewModel::retryLastPrompt) { Text(stringResource(R.string.action_retry)) }
             }
         }
-        if (state.queuedPrompts.isNotEmpty()) {
+        val chatQueue = state.queuedPrompts.filter {
+            it.chatId == state.activeChatId && (it.projectId == null || it.projectId == state.activeProjectId)
+        }
+        if (chatQueue.isNotEmpty()) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    stringResource(R.string.agent_queued_title, state.queuedPrompts.size),
+                    stringResource(R.string.agent_queued_title, chatQueue.size),
                     fontSize = ForgeType.caption,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                state.queuedPrompts.forEach { queued ->
+                chatQueue.forEach { queued ->
                     val label = queued.text.ifBlank { queued.attachments.joinToString { it.displayName } }
-                    AttachmentChip(name = label, size = 0L, onRemove = { viewModel.removeQueuedPrompt(queued.id) }, showSize = false)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(modifier = Modifier.weight(1f, fill = false)) {
+                            AttachmentChip(name = label, size = 0L, onRemove = { viewModel.removeQueuedPrompt(queued.id) }, showSize = false)
+                        }
+                        // Steer: stop the running turn and send this message now instead of waiting for the queue.
+                        if (running) {
+                            ForgeTextButton(onClick = { viewModel.steerQueuedPrompt(queued.id) }) {
+                                Text(stringResource(R.string.agent_steer), fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+                if (running) {
+                    Text(
+                        stringResource(R.string.agent_steer_hint),
+                        fontSize = ForgeType.caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -378,235 +494,126 @@ fun AgentScreen(
                 }
             }
         }
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = tokens.cardContainerColor,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            border = tokens.cardBorderStroke,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-        ) {
-            Row(
-                modifier = Modifier.padding(start = 4.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Attach: photos or any file; it lands in attachments/ inside the workspace.
-                Box {
-                    IconButton(onClick = { attachMenuOpen = true }) {
-                        ForgeIcon(glyph = ForgeGlyph.PLUS, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 22.dp, description = stringResource(R.string.agent_attach))
+        if (!running && state.pendingToolRequest == null) {
+            val chips = buildList {
+                if (state.messages.isEmpty()) {
+                    // Starter ideas fill the composer instead of sending, so the user can edit first.
+                    add(QuickChip(stringResource(R.string.starter_explain), ForgeGlyph.SPARK) { promptInput = stringOf(R.string.starter_explain, cameraContext) })
+                    add(QuickChip(stringResource(R.string.starter_fix), ForgeGlyph.BUILD) { promptInput = stringOf(R.string.starter_fix, cameraContext) })
+                    add(QuickChip(stringResource(R.string.starter_feature), ForgeGlyph.PLUS) { promptInput = stringOf(R.string.starter_feature, cameraContext) })
+                    add(QuickChip(stringResource(R.string.starter_tests), ForgeGlyph.CODE) { promptInput = stringOf(R.string.starter_tests, cameraContext) })
+                } else {
+                    val changed = state.changedItems.count { it.accepted == null }
+                    if (changed > 0) {
+                        add(QuickChip(quantityStringResource(R.plurals.chip_review_changes, changed, changed), ForgeGlyph.FILE) { viewModel.selectProjectPane(ProjectPane.FILES) })
+                        add(QuickChip(stringResource(R.string.chip_review_2nd_agent), ForgeGlyph.SPARK) { viewModel.reviewChangesWithSecondAgent() })
+                        add(QuickChip(stringResource(R.string.chip_explain_changes), ForgeGlyph.SPARK) { viewModel.sendPrompt(stringOf(R.string.prompt_explain_changes, cameraContext)) })
                     }
-                    DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.agent_attach_camera)) },
-                            onClick = { attachMenuOpen = false; launchCamera() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.agent_attach_file)) },
-                            onClick = { attachMenuOpen = false; attachPicker.launch(arrayOf("*/*")) },
-                        )
+                    if (state.activeLocalPorts.isNotEmpty()) {
+                        add(QuickChip(stringResource(R.string.chip_open_preview), ForgeGlyph.GLOBE) { viewModel.selectProjectPane(ProjectPane.PREVIEW) })
                     }
-                }
-                TextField(
-                    value = promptInput,
-                    onValueChange = { promptInput = it },
-                    placeholder = {
-                        Text(
-                            stringResource(R.string.agent_message_placeholder, state.agentKind.displayTitle()),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 5,
-                    // Enter stays a newline (messages are multi-line); send is the round button.
-                    keyboardOptions = ForgeFieldKind.TEXT.keyboardOptions(ImeAction.Default),
-                    colors = TextFieldDefaults.textFieldColors(
-                        containerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    ),
-                )
-                val haptics = LocalHapticFeedback.current
-                val reduceMotion = rememberReduceMotion()
-                val sendScale by animateFloatAsState(
-                    targetValue = if (running || canSend) 1f else 0.86f,
-                    animationSpec = if (reduceMotion) snap() else ForgeMotion.springSnappy(),
-                    label = "sendScale",
-                )
-                val sendBg by animateColorAsState(
-                    targetValue = when {
-                        canSend -> MaterialTheme.colorScheme.primary
-                        running -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-                    },
-                    animationSpec = if (reduceMotion) snap() else tween(ForgeMotion.FADE_MS),
-                    label = "sendBg",
-                )
-                Box(
-                    modifier = Modifier
-                        .forgeMinTouch()
-                        .graphicsLayer { scaleX = sendScale; scaleY = sendScale }
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(sendBg)
-                        .clickable(
-                            enabled = running || canSend,
-                            role = Role.Button,
-                            onClickLabel = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
-                        ) {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            // While the agent works, sending queues the message; stop is available when nothing is typed.
-                            if (canSend) {
-                                val text = promptInput.trim()
-                                promptInput = ""
-                                viewModel.sendPrompt(text)
-                            } else if (running) {
-                                viewModel.stopActiveTask()
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (running && !canSend) Icons.Default.Close else Icons.Default.KeyboardArrowUp,
-                        contentDescription = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
-                        tint = when {
-                            canSend -> MaterialTheme.colorScheme.onPrimary
-                            running -> MaterialTheme.colorScheme.onError
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.size(22.dp),
-                    )
+                    if (state.activeProject?.type == com.nextcraft.forge.model.ProjectType.ANDROID) {
+                        add(QuickChip(stringResource(R.string.chip_build_run), ForgeGlyph.BUILD) { viewModel.selectTab(ForgeTab.ANDROID) })
+                    } else {
+                        add(QuickChip(stringResource(R.string.chip_run_tests), ForgeGlyph.CODE) { viewModel.sendPrompt(stringOf(R.string.prompt_run_tests, cameraContext)) })
+                    }
                 }
             }
+            QuickActionRow(chips, modifier = Modifier.padding(top = 4.dp))
         }
-    }
-}
-
-/** Large title + action pill (agent switcher, new chat) and pill tabs for the chats of the project. */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun AgentHeader(
-    state: ForgeUiState,
-    onBack: () -> Unit,
-    onRun: () -> Unit,
-    onSelectChat: (String) -> Unit,
-    onCreateChat: () -> Unit,
-    onDeleteChat: (String) -> Unit,
-    onSelectAgent: (AgentKind) -> Unit,
-    onClearChat: () -> Unit,
-) {
-    var chatsOpen by rememberSaveable { mutableStateOf(false) }
-    val scheme = MaterialTheme.colorScheme
-    val activeChat = state.chats.firstOrNull { it.id == state.activeChatId }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 4.dp, end = 14.dp, top = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Back to Projects: the project name is the title, so this header reads as "inside a project".
-        IconButton(onClick = onBack) {
-            Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.a11y_back), tint = scheme.onSurface)
-        }
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(
-                text = state.activeProject?.name ?: stringResource(R.string.agent_title),
-                modifier = Modifier.forgeHeading(),
-                fontSize = ForgeType.screenTitle,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = listOfNotNull(state.agentKind.displayTitle(), activeChat?.displayTitle()).joinToString(" · "),
-                fontSize = ForgeType.secondary,
-                color = scheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        IconButton(onClick = { chatsOpen = true }) {
-            ForgeIcon(glyph = ForgeGlyph.HISTORY, tint = scheme.onSurface, size = 22.dp, description = stringResource(R.string.agent_project_chats))
-        }
-    }
-
-    if (chatsOpen) {
-        ProjectChatsDialog(
-            state = state,
-            onDismiss = { chatsOpen = false },
-            onCreateChat = {
-                chatsOpen = false
-                onCreateChat()
+        // Voice: words appear in the box while speaking; "stop", "clear" and a trailing "send now" act as commands.
+        var voiceBase by remember { mutableStateOf("") }
+        var handsFreeSend by rememberSaveable { mutableStateOf(false) }
+        var imageDialogOpen by rememberSaveable { mutableStateOf(false) }
+        fun joinVoice(base: String, spoken: String) = listOf(base.trim(), spoken.trim()).filter { it.isNotEmpty() }.joinToString(" ")
+        val voice = rememberVoiceController(
+            languageCode = state.languageCode,
+            onPartial = { promptInput = joinVoice(voiceBase, it) },
+            onFinal = { spoken ->
+                // true = keep listening for the next sentence; commands that end the dictation return false.
+                when (val command = VoiceCommands.parse(spoken)) {
+                    VoiceCommand.Stop -> { promptInput = voiceBase; viewModel.stopActiveTask(); false }
+                    VoiceCommand.Clear -> { promptInput = ""; voiceBase = ""; true }
+                    is VoiceCommand.QuickSlash -> { promptInput = ""; voiceBase = ""; viewModel.sendPrompt(command.slash); false }
+                    is VoiceCommand.Dictate -> {
+                        val text = joinVoice(voiceBase, command.text)
+                        if ((command.send || handsFreeSend) && (text.isNotEmpty() || state.pendingAttachments.isNotEmpty())) {
+                            promptInput = ""
+                            voiceBase = ""
+                            viewModel.sendPrompt(text)
+                            false
+                        } else {
+                            promptInput = text
+                            voiceBase = text // the next sentence continues after this one
+                            !command.send
+                        }
+                    }
+                }
             },
-            onSelectChat = {
-                chatsOpen = false
-                onSelectChat(it)
+        )
+        ChatComposer(
+            promptInput = promptInput,
+            onPromptChange = { promptInput = it },
+            agentName = primaryAgent(state).displayTitle(),
+            running = running,
+            canSend = canSend,
+            captureEnabled = !state.capturingScreens,
+            onAttachCamera = { launchCamera() },
+            onAttachFile = { attachPicker.launch(arrayOf("*/*")) },
+            onCapture = { confirmCapture = true },
+            onSend = {
+                val text = promptInput.trim()
+                promptInput = ""
+                viewModel.sendPrompt(text)
             },
-            onDeleteChat = onDeleteChat,
+            onStop = viewModel::stopActiveTask,
+            modelChipLabel = chatModelChipLabel(state, primaryAgent(state)),
+            onModelChip = { modelSheetOpen = true },
+            routeChipLabel = stringResource(R.string.route_chip_label, routeModeLabel(state.routing.mode)),
+            onRouteChip = { routeSheetOpen = true },
+            onMic = {
+                if (!voice.listening) voiceBase = promptInput
+                voice.toggle()
+            },
+            listening = voice.listening,
+            micLevel = voice.level,
+            handsFreeSend = handsFreeSend,
+            onToggleHandsFree = { handsFreeSend = !handsFreeSend },
+            onGenerateImage = { imageDialogOpen = true },
+            workspaceFiles = state.workspaceFiles,
+            readyAgents = state.readyAgents,
+            onExecuteSlashCommand = { cmd -> viewModel.sendPrompt(cmd) },
+            onSelectAgentTag = {
+                if (state.routing.mode == com.nextcraft.forge.model.RouteMode.SINGLE) {
+                    viewModel.setRouteMode(com.nextcraft.forge.model.RouteMode.MANUAL)
+                }
+            },
+        )
+        if (imageDialogOpen) ImageGenerationDialog(state = state, viewModel = viewModel, onDismiss = { imageDialogOpen = false })
+    }
+    }
+
+    if (usageOpen) ChatUsageSheet(state = state, onDismiss = { usageOpen = false })
+    if (scheduleOpen) ScheduleDialog(state = state, viewModel = viewModel, onDismiss = { scheduleOpen = false })
+    if (branchSheetOpen) BranchSheet(state = state, viewModel = viewModel, chatId = state.activeChatId, onDismiss = { branchSheetOpen = false })
+    if (routeSheetOpen) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshReadyAgents() }
+        ChatRoutingSheet(state = state, viewModel = viewModel, onDismiss = { routeSheetOpen = false })
+    }
+    if (modelSheetOpen) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshAgentProfiles() }
+    }
+    if (modelSheetOpen) ChatModelSheet(state = state, viewModel = viewModel, onDismiss = { modelSheetOpen = false })
+    if (renameOpen) {
+        RenameChatDialog(
+            initial = state.chats.firstOrNull { it.id == state.activeChatId }?.title.orEmpty(),
+            onDismiss = { renameOpen = false },
+            onSave = {
+                viewModel.renameChat(state.activeChatId, it)
+                renameOpen = false
+            },
         )
     }
-}
-
-/** "Project chats": one primary New chat action, then every chat of the project with the current one checked. */
-@Composable
-private fun ProjectChatsDialog(
-    state: ForgeUiState,
-    onDismiss: () -> Unit,
-    onCreateChat: () -> Unit,
-    onSelectChat: (String) -> Unit,
-    onDeleteChat: (String) -> Unit,
-) {
-    val tokens = LocalForgeThemeTokens.current
-    val scheme = MaterialTheme.colorScheme
-    AlertDialog(
-        modifier = Modifier.forgePopIn(),
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(22.dp),
-        containerColor = tokens.cardContainerColor,
-        title = { Text(stringResource(R.string.agent_project_chats), fontWeight = FontWeight.SemiBold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ForgePrimaryButton(
-                    text = stringResource(R.string.agent_new_chat),
-                    onClick = onCreateChat,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                state.chats.forEach { chat ->
-                    val current = chat.id == state.activeChatId
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(if (current) scheme.primary.copy(alpha = 0.12f) else tokens.cardElevatedColor)
-                            .clickable(role = Role.Button) { onSelectChat(chat.id) }
-                            .padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
-                            .height(48.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(chat.displayTitle(), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (current) {
-                                Text(stringResource(R.string.agent_current_chat), fontSize = ForgeType.caption, color = scheme.onSurfaceVariant)
-                            }
-                        }
-                        if (current) {
-                            Icon(Icons.Default.Check, contentDescription = stringResource(R.string.a11y_selected), tint = scheme.primary)
-                        } else if (state.chats.size > 1) {
-                            IconButton(onClick = { onDeleteChat(chat.id) }) {
-                                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            ForgeTextButton(onClick = onDismiss) { Text(stringResource(R.string.agent_close)) }
-        },
-    )
 }
 
 @Composable
@@ -644,7 +651,7 @@ private fun AntigravityOAuthBanner(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(stringResource(R.string.agent_google_account), fontSize = ForgeType.rowTitle, fontWeight = FontWeight.Medium)
                     Text(
-                        text = authState.message ?: stringResource(R.string.agent_required_for_antigravity),
+                        text = authState.message?.asString() ?: stringResource(R.string.agent_required_for_antigravity),
                         fontSize = ForgeType.secondary,
                         color = scheme.onSurfaceVariant,
                     )
@@ -700,80 +707,7 @@ private fun AntigravityOAuthBanner(
 }
 
 @Composable
-private fun ToolApprovalCard(
-    request: ToolRequest,
-    onApprove: () -> Unit,
-    onReject: () -> Unit,
-) {
-    val tokens = LocalForgeThemeTokens.current
-    val scheme = MaterialTheme.colorScheme
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = tokens.cardContainerColor,
-        contentColor = scheme.onSurface,
-        border = tokens.cardBorderStroke,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-    ) {
-        Row {
-            // Thin red rule carries the warning so the card itself stays calm.
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .fillMaxHeight()
-                    .background(scheme.error),
-            )
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ForgeStatusIcon(ForgeStatus.FAILED, iconSize = 20.dp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.agent_approval_title), fontSize = ForgeType.rowTitle, fontWeight = FontWeight.Medium)
-                        Text(
-                            text = stringResource(R.string.agent_approval_sub, request.toolName, request.risk.name.lowercase()),
-                            fontSize = ForgeType.secondary,
-                            color = scheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Text(text = request.explanation, fontSize = ForgeType.control, color = scheme.onSurfaceVariant)
-                request.commandPreview?.takeIf { it.isNotBlank() }?.let { cmd ->
-                    Text(
-                        text = cmd,
-                        style = ForgeCodeTextStyle,
-                        color = tokens.terminalText,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(tokens.terminalBackground)
-                            .padding(10.dp),
-                    )
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = onReject,
-                        shape = RoundedCornerShape(100),
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp),
-                    ) { Text(stringResource(R.string.agent_deny)) }
-                    Button(
-                        onClick = onApprove,
-                        shape = RoundedCornerShape(100),
-                        colors = ButtonDefaults.buttonColors(containerColor = scheme.error, contentColor = scheme.onError),
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp),
-                    ) { Text(stringResource(R.string.agent_approve_execution), fontWeight = FontWeight.SemiBold) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatMessageCard(
+internal fun ChatMessageCard(
     message: ChatMessage,
     agentName: String,
     onRunSnippet: (String) -> Unit,
@@ -801,7 +735,11 @@ private fun ChatMessageCard(
                 }
                 if (message.attachments.isNotEmpty()) {
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        message.attachments.forEach { att -> AttachmentChip(name = att.displayName, size = att.sizeBytes, onRemove = null) }
+                        message.attachments.filterNot { it.mimeType.startsWith("image/") }
+                            .forEach { att -> AttachmentChip(name = att.displayName, size = att.sizeBytes, onRemove = null) }
+                    }
+                    message.attachments.filter { it.mimeType.startsWith("image/") }.forEach { att ->
+                        ChatImage(alt = att.displayName, src = att.relativePath, maxHeight = 200.dp)
                     }
                 }
             }
@@ -811,7 +749,23 @@ private fun ChatMessageCard(
 
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         // Each tool call is one collapsed row ("Bash · command ⌄"); tap to read its detail.
-        message.workItems.forEach { item -> ToolCallRow(item) }
+        if (message.workItems.size >= STEP_GROUP_MIN) {
+            ToolStepGroup(message.workItems)
+        } else {
+            message.workItems.forEach { item -> ToolCallRow(item) }
+        }
+        // With several agents in one chat, each reply says who wrote it.
+        message.agent?.let { id ->
+            AgentKind.fromStoredOrNull(id)?.let { agent ->
+                Text(
+                    text = agent.displayTitle(),
+                    fontSize = ForgeType.secondary,
+                    fontWeight = FontWeight.Medium,
+                    color = scheme.primary,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+                )
+            }
+        }
         if (message.workedMillis > 0L) {
             Text(
                 text = stringResource(R.string.agent_worked_for, formatWorked(message.workedMillis)),
@@ -824,8 +778,11 @@ private fun ChatMessageCard(
         if (message.text.isNotBlank()) {
             MessageContainer(fromUser = false, contentColor = textColor) {
                 Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-                    Column(modifier = Modifier.padding(end = 32.dp)) {
-                        MarkdownText(markdown = message.text, color = textColor, onRunCode = onRunSnippet, selectable = false)
+                    // 44dp: the copy button is a 48dp touch box; 32dp let it cover the end of the first lines.
+                    Column(modifier = Modifier.padding(end = 44.dp)) {
+                        // Selection (long-press, drag handles, Copy) only on a finished message: the streaming one changes
+                        // under the selection container, which is what crashed Compose before. Finished text is static.
+                        MarkdownText(markdown = message.text, color = textColor, onRunCode = onRunSnippet, selectable = !streaming)
                         if (streaming) {
                             // Blinking caret says "still arriving" without a spinner.
                             val blink = rememberBlink()
@@ -841,24 +798,87 @@ private fun ChatMessageCard(
                     if (!streaming) CopyMessageButton(message.text, Modifier.align(Alignment.TopEnd))
                 }
             }
-        } else if (message.workItems.isEmpty()) {
-            val blink = rememberBlink()
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 8.dp, height = 16.dp)
-                        .graphicsLayer { alpha = blink }
-                        .background(scheme.primary, RoundedCornerShape(2.dp)),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = stringResource(R.string.agent_thinking),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                    modifier = Modifier.forgeLive(),
+        }
+        if (streaming) {
+            // Every provider shows the same live line: rotating dots, time since the reply started, and what it is doing.
+            val phase = when {
+                message.text.isNotBlank() -> R.string.agent_status_writing
+                message.workItems.isEmpty() -> R.string.agent_thinking
+                else -> R.string.agent_status_working
+            }
+            // While a tool runs, say which one ("Working… · Bash"), so a long step doesn't look like a hang.
+            val running = message.workItems.lastOrNull { !it.isComplete }?.title?.replace(Regex("\\s+"), " ")?.trim()?.take(32)
+            val phaseLabel = stringResource(phase)
+            WorkingIndicator(
+                startedAt = message.createdAt,
+                label = if (running.isNullOrBlank() || message.text.isNotBlank()) phaseLabel else "$phaseLabel · $running",
+                modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * "(dots) 1m 4s · Thinking…": a ring of dots that turns, the time since the reply started (ticks every second), and the
+ * phase. TalkBack hears only the phase (it changes rarely), never the per-second time.
+ */
+@Composable
+internal fun WorkingIndicator(startedAt: java.time.Instant, label: String, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(startedAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+    val elapsed = (now - startedAt.toEpochMilli()).coerceAtLeast(0L)
+    val reduceMotion = rememberReduceMotion()
+    // Eight dots: step the head ~14 times a second instead of animating every frame, which redrew the chat (and the
+    // Glass backdrop behind the bar) at 60-120 fps for the whole agent turn.
+    var step by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    if (!reduceMotion) {
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(1_100L / 16)
+                step = (step + 1) % 16
+            }
+        }
+    }
+    val angle = step * 360f / 16
+    val dotColor = scheme.primary
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.clearAndSetSemantics {
+            contentDescription = label
+            liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite
+        },
+    ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.size(18.dp)) {
+            val dots = 8
+            val ring = size.minDimension / 2f - 2.dp.toPx()
+            val head = angle / 360f * dots
+            for (i in 0 until dots) {
+                val radians = Math.toRadians(i * 360.0 / dots - 90.0)
+                // Dots just behind the head are bright, the rest fade: it reads as a turning tail.
+                val behind = ((head - i) % dots + dots) % dots
+                val alpha = (1f - behind / dots).coerceIn(0.15f, 1f)
+                drawCircle(
+                    color = dotColor.copy(alpha = alpha),
+                    radius = 1.7.dp.toPx() * (0.6f + 0.4f * alpha),
+                    center = androidx.compose.ui.geometry.Offset(
+                        center.x + (kotlin.math.cos(radians) * ring).toFloat(),
+                        center.y + (kotlin.math.sin(radians) * ring).toFloat(),
+                    ),
                 )
             }
         }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = formatWorked(elapsed) + " · " + label,
+            style = MaterialTheme.typography.bodySmall,
+            color = scheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -903,19 +923,29 @@ private fun CopyMessageButton(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-private fun formatWorked(millis: Long): String {
+internal fun formatWorked(millis: Long): String {
     val totalSec = millis / 1000
     val m = totalSec / 60
     val sec = totalSec % 60
     return if (m > 0) "${m}m ${sec}s" else "${sec}s"
 }
 
-/** One collapsed tool call: status glyph, "Title · detail" on one line, chevron; expands to the full detail. */
+/** One collapsed tool call: status glyph, "Title · detail" on one line, live rolling tail while running, chevron; expands to the full detail. */
 @Composable
-private fun ToolCallRow(item: ActivityItem) {
+internal fun ToolCallRow(item: ActivityItem) {
     var open by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
+    val startedAtMillis = remember(item.title) { System.currentTimeMillis() }
+    var elapsedSec by remember(item.title) { androidx.compose.runtime.mutableIntStateOf(0) }
+    if (!item.isComplete) {
+        LaunchedEffect(item.title) {
+            while (true) {
+                kotlinx.coroutines.delay(1_000)
+                elapsedSec = ((System.currentTimeMillis() - startedAtMillis) / 1_000L).toInt().coerceAtLeast(0)
+            }
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -948,6 +978,16 @@ private fun ToolCallRow(item: ActivityItem) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (!item.isComplete && elapsedSec > 0) {
+                val timerText = formatWorked(elapsedSec * 1_000L)
+                Text(
+                    text = timerText,
+                    fontSize = ForgeType.caption,
+                    color = tokens.warningText,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+            }
             val reduceMotion = rememberReduceMotion()
             val rotation by animateFloatAsState(
                 targetValue = if (open) 180f else 0f,
@@ -961,17 +1001,25 @@ private fun ToolCallRow(item: ActivityItem) {
                 modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = rotation },
             )
         }
+        val showBody = (open || !item.isComplete) && item.detail.isNotBlank()
+        val displayDetail = if (open || item.isComplete) {
+            item.detail
+        } else {
+            item.detail.lineSequence().filter { it.isNotBlank() }.toList().takeLast(3).joinToString("\n").ifBlank { item.detail }
+        }
         AnimatedVisibility(
-            visible = open && item.detail.isNotBlank(),
+            visible = showBody,
             enter = expandVertically(tween(ForgeMotion.EXPAND_MS)) + fadeIn(tween(ForgeMotion.FADE_MS)),
             exit = shrinkVertically(tween(ForgeMotion.FADE_MS)) + fadeOut(tween(ForgeMotion.FADE_MS / 2)),
         ) {
             Text(
-                text = item.detail,
+                text = displayDetail,
                 fontSize = ForgeType.secondary,
                 lineHeight = 18.sp,
                 color = tokens.terminalText,
                 fontFamily = if (item.isCommand) FontFamily.Monospace else FontFamily.Default,
+                maxLines = if (open) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
@@ -994,26 +1042,28 @@ private fun MessageContainer(
     content: @Composable () -> Unit,
 ) {
     if (fromUser) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = LocalForgeThemeTokens.current.cardElevatedColor,
-            contentColor = contentColor,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .then(
-                    if (onLongClick != null) {
-                        Modifier.combinedClickable(onLongClickLabel = longClickLabel, onLongClick = onLongClick, onClick = {})
-                    } else Modifier,
-                ),
-        ) { content() }
+        // Wraps its text and sits at the end: a short message must not get a full-width bubble of empty space.
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = LocalForgeThemeTokens.current.cardElevatedColor,
+                contentColor = contentColor,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .then(
+                        if (onLongClick != null) {
+                            Modifier.combinedClickable(onLongClickLabel = longClickLabel, onLongClick = onLongClick, onClick = {})
+                        } else Modifier,
+                    ),
+            ) { content() }
+        }
     } else {
         Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) { content() }
     }
 }
 
 /** Tool-call kinds, derived from the activity title, each with its own glyph and tint. */
-private enum class ToolKind(val glyph: ForgeGlyph) {
+internal enum class ToolKind(val glyph: ForgeGlyph) {
     THINK(ForgeGlyph.SPARK), BASH(ForgeGlyph.TERMINAL), READ(ForgeGlyph.FILE), WRITE(ForgeGlyph.EDIT), OTHER(ForgeGlyph.BUILD);
 
     fun tint(scheme: androidx.compose.material3.ColorScheme, tokens: ForgeThemeTokens): Color = when (this) {
@@ -1023,7 +1073,7 @@ private enum class ToolKind(val glyph: ForgeGlyph) {
     }
 }
 
-private fun toolKind(item: ActivityItem): ToolKind {
+internal fun toolKind(item: ActivityItem): ToolKind {
     val t = item.title.lowercase()
     return when {
         "think" in t || "reason" in t -> ToolKind.THINK
@@ -1060,3 +1110,6 @@ private fun AttachmentChip(name: String, size: Long, onRemove: (() -> Unit)?, sh
         }
     }
 }
+
+/** String lookup for click handlers, which run outside composition and cannot call stringResource. */
+private fun stringOf(@androidx.annotation.StringRes id: Int, context: android.content.Context): String = context.getString(id)

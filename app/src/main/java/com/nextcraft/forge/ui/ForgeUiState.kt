@@ -9,8 +9,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nextcraft.forge.data.ApiKeyVault
 import com.nextcraft.forge.data.AppPreferences
+import com.nextcraft.forge.runtime.BranchStatus
+import com.nextcraft.forge.runtime.ClaudeSkill
+import com.nextcraft.forge.runtime.McpConnector
+import com.nextcraft.forge.runtime.ProjectRepoInfo
 import com.nextcraft.forge.model.ActivityItem
 import com.nextcraft.forge.model.AgentKind
+import com.nextcraft.forge.model.RoutingConfig
 import com.nextcraft.forge.model.AndroidTemplate
 import com.nextcraft.forge.model.ChangeItem
 import com.nextcraft.forge.model.ChatAttachment
@@ -128,6 +133,10 @@ enum class ForgeTab(val title: String) {
     CICD("CI/CD"),
     ROM("ROM Studio"),
     CHECKPOINTS("Checkpoints"),
+    CODE_VIEWER("Code viewer"),
+    FILE_BROWSER("File browser"),
+    REA("REA"),
+    BACKUP("Backup"),
 }
 
 enum class SetupScope { RUNTIME, AGENT }
@@ -158,7 +167,24 @@ data class ForgeUiState(
     val chats: List<ProjectChat> = emptyList(),
     val activeChatId: String = "main",
     val messages: List<ChatMessage> = emptyList(),
+    /** True while any agent turn runs (workspace-wide operations stay blocked); see [activeChatRunning] for the open chat. */
     val sessionRunning: Boolean = false,
+    /** Chats of the active project whose agent turn is running right now. */
+    val runningChatIds: Set<String> = emptySet(),
+    /** Active agent turn counts by project id across all projects. */
+    val runningProjectChatCounts: Map<String, Int> = emptyMap(),
+    /** Live snapshot of all currently running agent turns across all projects (for the Dynamic Live Activity HUD). */
+    val liveAgentRuns: List<LiveAgentRunInfo> = emptyList(),
+    /** Projects currently running an Android APK build. */
+    val buildingProjectIds: Set<String> = emptySet(),
+    /** Per-project Android build records so background project builds preserve their state. */
+    val projectBuilds: Map<String, AndroidBuildRecord> = emptyMap(),
+    /** How chat messages pick an agent (single agent unless the user changed it in the chat). */
+    val routing: RoutingConfig = RoutingConfig(),
+    /** Agents that have credentials; refreshed when the routing sheet opens. */
+    val readyAgents: Set<AgentKind> = emptySet(),
+    /** Provider profile (kind, model) of every agent, so the model sheet can edit an agent other than the selected one. */
+    val agentProfiles: Map<AgentKind, ProviderProfile> = emptyMap(),
     val activeStatusLine: UiText? = null,
     val pendingToolRequest: ToolRequest? = null,
     val changedItems: List<ChangeItem> = emptyList(),
@@ -172,9 +198,13 @@ data class ForgeUiState(
     val fileSavedBanner: String? = null,
     /** Files picked for the next prompt; copied into the workspace's attachments/ folder. */
     val pendingAttachments: List<ChatAttachment> = emptyList(),
+    /** True while the app walks through its screens taking pictures for the agent. */
+    val capturingScreens: Boolean = false,
     /** Messages sent while the agent was busy; delivered as the next turn once the current one completes. */
     val queuedPrompts: List<QueuedPrompt> = emptyList(),
-    val terminalOutput: String = "NextCraft Forge Root Chroot Terminal Ready.\n",
+    /** Bumped when a terminal session is created, ends or is restarted, so the screen re-reads it. */
+    val terminalRevision: Int = 0,
+    /** Legacy one-shot runner flag, kept for the "busy" guards. The interactive shell is persistent, so it stays false. */
     val terminalRunning: Boolean = false,
     val androidBuild: AndroidBuildRecord = AndroidBuildRecord(),
     val androidLogcat: AndroidLogcatState = AndroidLogcatState(),
@@ -193,8 +223,36 @@ data class ForgeUiState(
     val interactiveHighRiskApprovals: Boolean = true,
     val autoApproveAllTools: Boolean = false,
     val autoSyncGitHub: Boolean = false,
-    val antigravityModel: String = "gemini-2.5-pro",
-    val antigravityEffort: String = "high",
+    val gameTemplatesEnabled: Boolean = false,
+    val androidHostTools: Boolean = false,
+    val autoKeepChanges: Boolean = true,
+    /** Download cache sizes in bytes by RuntimeCaches.Kind name; null while not measured. */
+    val runtimeCacheSizes: Map<String, Long>? = null,
+    val reaChatHint: Boolean = false,
+    /** Scheduled prompts (timers that send a message to a chat again) and whether the agent may create them. */
+    val scheduledTasks: List<com.nextcraft.forge.schedule.ScheduledTask> = emptyList(),
+    val scheduleEnabled: Boolean = true,
+    val updateNotifications: Boolean = true,
+    val autoInstallUpdates: Boolean = true,
+    val autoBranchChats: Boolean = false,
+    val antigravityModel: String = "claude-sonnet-5-5-low",
+    val antigravityEffort: String = "low",
+    val claudeEffort: String = "",
+    /** Branch status of the chats that work in their own branch, by chat id. */
+    val branchStatus: Map<String, BranchStatus> = emptyMap(),
+    /** Chats with a branch operation (merge, update, diff) in progress. */
+    val branchBusy: Set<String> = emptySet(),
+    /** Last diff text loaded for a branch (chat id to text). */
+    val branchDiff: Map<String, String> = emptyMap(),
+    /** The open project's own repository (null until the repository panel loads it). */
+    val projectRepo: ProjectRepoInfo? = null,
+    val repoBusy: Boolean = false,
+    val imageGenerating: Boolean = false,
+    /** MCP connectors and Claude Code skills (loaded when the connectors sheet opens). */
+    val connectors: List<McpConnector> = emptyList(),
+    val skills: List<ClaudeSkill> = emptyList(),
+    /** Bumped when the Google image key is saved, so the dialog notices it. */
+    val geminiKeyVersion: Int = 0,
     /** Model ids reported by `agy models` (empty until refreshed; the picker then offers built-in presets). */
     val antigravityModels: List<String> = emptyList(),
     val antigravityModelsLoading: Boolean = false,
@@ -207,13 +265,33 @@ data class ForgeUiState(
     /** Recovery offered with [bannerMessage]; shown only while the banner still carries the message it was made for. */
     val bannerAction: BannerAction? = null,
     /** The last message of a turn that failed (not stopped); offered as "Try again" above the composer. */
-    val retryPrompt: RetryPrompt? = null,
+    /** The last prompt of each chat whose turn failed (by chat id), so parallel failures do not overwrite each other. */
+    val retryPrompts: Map<String, RetryPrompt> = emptyMap(),
     /** Set while a deleted project can still be restored; the UI shows a Snackbar with Undo. */
     val undoDelete: ProjectUndo? = null,
-) {
+    /** Parsed Android UI hierarchy nodes for the Visual UI Inspector & Tap-to-Edit mode in Preview. */
+    val uiInspectorNodes: List<UiInspectorNode> = emptyList(),
+    val uiInspectorBusy: Boolean = false,
+)
+ {
     val activeProject: Project?
         get() = projects.firstOrNull { it.id == activeProjectId } ?: projects.firstOrNull()
+
+    /** True while the open chat has its own agent turn running (drives its Stop button, status line and composer). */
+    val activeChatRunning: Boolean get() = activeChatId in runningChatIds
 }
+
+/** One interactive/visible Android UI node dumped via uiautomator for Visual Tap-to-Edit with Agent. */
+data class UiInspectorNode(
+    val id: String,
+    val className: String,
+    val text: String,
+    val bounds: String,
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+)
 
 /** [chatId] keeps the offer in the chat where the failure happened. */
 data class RetryPrompt(val chatId: String, val prompt: QueuedPrompt)
@@ -234,7 +312,21 @@ data class QueuedPrompt(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
     val attachments: List<ChatAttachment> = emptyList(),
+    /** Where the message was typed; it is only sent there, never into a chat the user switched to. */
+    val projectId: String? = null,
+    val chatId: String? = null,
 )
 
 /** A project removed from the list whose files are kept until the undo window (UNDO_WINDOW_MS) passes. */
 data class ProjectUndo(val projectId: String, val name: String)
+
+/** Snapshot of one active agent turn across any project/chat, displayed in the Dynamic Multi-Agent Live HUD. */
+data class LiveAgentRunInfo(
+    val projectId: String,
+    val projectName: String,
+    val chatId: String,
+    val chatTitle: String,
+    val agent: AgentKind,
+    val statusLine: UiText?,
+    val waitingApproval: Boolean = false,
+)

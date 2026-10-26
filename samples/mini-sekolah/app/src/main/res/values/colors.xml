@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="good">#1B7F3B</color>
+    <color name="warn">#8A5300</color>
+    <color name="bad">#B3261E</color>
+    <color name="muted">#5F6368</color>
+</resources>

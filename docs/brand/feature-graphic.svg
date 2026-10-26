@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500" width="1024" height="500" font-family="Inter,Helvetica,Arial,sans-serif">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0A0A0A"/><stop offset="1" stop-color="#000"/></linearGradient><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="32" y1="36" x2="52" y2="72"><stop offset="0" stop-color="#38BDF8"/><stop offset="1" stop-color="#34D399"/></linearGradient><radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#38BDF8" stop-opacity=".25"/><stop offset="1" stop-color="#38BDF8" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="500" fill="#000"/>
+<circle cx="800" cy="250" r="300" fill="url(#glow)"/>
+<text x="72" y="170" fill="#F9FAFB" font-size="76" font-weight="700" letter-spacing="-2">NextCraft</text>
+<text x="72" y="250" fill="url(#g)" font-size="64" font-weight="600" letter-spacing="10">FORGE</text>
+<rect x="72" y="336" width="56" height="4" rx="2" fill="url(#g)"/>
+<text x="72" y="384" fill="#E5E7EB" font-size="30" font-weight="500">Forge your dreams</text>
+<text x="72" y="424" fill="#9CA3AF" font-size="30" font-weight="400">with AI.</text>
+<g transform="translate(670,94) scale(2.9)"><rect width="108" height="108" rx="26" fill="url(#bg)" stroke="#fff" stroke-opacity=".12"/><path d="M32,36 L52,54 L32,72" fill="none" stroke="#38BDF8" stroke-opacity=".2" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/><path d="M32,36 L52,54 L32,72" fill="none" stroke="url(#g)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><path d="M58,72 H78" stroke="#34D399" stroke-width="8" stroke-linecap="round"/><path d="M72,30 C73,35.5 74.5,36.5 80,38 C74.5,39.5 73,40.5 72,46 C71,40.5 69.5,39.5 64,38 C69.5,36.5 71,35.5 72,30Z" fill="#FBBF24"/></g>
+</svg>

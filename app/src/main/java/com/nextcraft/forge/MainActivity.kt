@@ -1,5 +1,9 @@
 package com.nextcraft.forge
 
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.blur
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.animateDpAsState
 import android.Manifest
 import android.content.ComponentCallbacks2
 import android.content.Context
@@ -14,14 +18,23 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import com.nextcraft.forge.data.AppPreferences
+import com.nextcraft.forge.ui.LocalChatImageLoader
+import com.nextcraft.forge.runtime.BatteryOptimization
 import com.nextcraft.forge.ui.AppStrings
 import com.nextcraft.forge.ui.LocalForgeThemeTokens
 import com.nextcraft.forge.ui.LocaleHelper
@@ -37,7 +50,20 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { _ ->
         viewModel.refreshRuntimeStatus()
+        if (chainBatteryPrompt) {
+            chainBatteryPrompt = false
+            requestBatteryExemption()
+        }
     }
+
+    private val batteryLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { _ ->
+        viewModel.diagnostics.refresh()
+    }
+
+    /** Set while the notification prompt is on screen so the battery prompt follows it, not overlaps it. */
+    private var chainBatteryPrompt = false
 
     private var appliedLanguage = "system"
 
@@ -47,9 +73,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         applyWindowTheme(AppPreferences(this).themeMode)
         super.onCreate(savedInstanceState)
-        requestNotificationPermissionIfNeeded()
+        com.nextcraft.forge.ui.glassUserSolid = AppPreferences(this).glassSolid
+        com.nextcraft.forge.ui.glassReducedEffects = com.nextcraft.forge.ui.detectReducedEffects(this)
+        // First-time users are asked when they start the runtime setup; existing installs keep the old behaviour.
+        if (AppPreferences(this).runtimeSetupComplete) requestNotificationPermissionIfNeeded()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.backgroundPrompts.collect { requestBackgroundPrompts() }
+            }
+        }
 
         setContent {
             val state by viewModel.state.collectAsState()
@@ -69,7 +104,31 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(tokens.canvasBrush),
                 ) {
-                    NextCraftForgeApp(viewModel = viewModel)
+                    val imageLoader = remember<suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?>(viewModel) {
+                        { src -> viewModel.loadChatImage(src) }
+                    }
+                    val appContext = this@MainActivity
+                    val videoHandler = remember(viewModel) {
+                        object : com.nextcraft.forge.ui.ChatVideoHandler {
+                            override suspend fun thumbnail(src: String) = viewModel.loadChatVideoThumbnail(src)
+                            override fun open(src: String) = viewModel.openChatVideo(appContext, src)
+                        }
+                    }
+                    val sheetDepth = remember { mutableIntStateOf(0) }
+                    // Glass: while a sheet floats above, the page behind it is blurred so nothing reads through the sheet.
+                    val blurRadius by animateDpAsState(
+                        targetValue = if (tokens.isGlass && com.nextcraft.forge.ui.glassBlurSupported && sheetDepth.intValue > 0) com.nextcraft.forge.ui.GlassSheetBlur else 0.dp,
+                        label = "sheetBlur",
+                    )
+                    CompositionLocalProvider(
+                        LocalChatImageLoader provides imageLoader,
+                        com.nextcraft.forge.ui.LocalChatVideoHandler provides videoHandler,
+                        com.nextcraft.forge.ui.LocalForgeSheetDepth provides sheetDepth,
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize().then(if (blurRadius > 0.dp) Modifier.blur(blurRadius) else Modifier)) {
+                            NextCraftForgeApp(viewModel = viewModel)
+                        }
+                    }
                 }
             }
         }
@@ -95,6 +154,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshRuntimeStatusOnResume()
+        com.nextcraft.forge.ui.ReturnToApp.dismiss(this)
     }
 
     override fun onTrimMemory(level: Int) {
@@ -103,19 +163,35 @@ class MainActivity : ComponentActivity() {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             viewModel.releaseMemoryCaches()
         }
+        com.nextcraft.forge.runtime.GradleDaemonReaper.onTrimMemory(this, level)
     }
 
+    private fun needsNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+
     private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            val granted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                runCatching {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
+        if (needsNotificationPermission()) {
+            runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainActivity", it) }
         }
+    }
+
+    /** Notifications first (the runtime reports progress there), then the battery exemption, each at most once. */
+    private fun requestBackgroundPrompts() {
+        val preferences = AppPreferences(this)
+        if (preferences.backgroundPromptsShown) return
+        preferences.backgroundPromptsShown = true
+        if (needsNotificationPermission()) {
+            chainBatteryPrompt = true
+            val launched = runCatching { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }.isSuccess
+            if (launched) return
+            chainBatteryPrompt = false
+        }
+        requestBatteryExemption()
+    }
+
+    private fun requestBatteryExemption() {
+        if (BatteryOptimization.isUnrestricted(this)) return
+        BatteryOptimization.launch(this) { batteryLauncher.launch(it) }
     }
 }
