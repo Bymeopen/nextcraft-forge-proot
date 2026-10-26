@@ -76,6 +76,9 @@ import com.nextcraft.forge.runtime.RomStudioController
 import com.nextcraft.forge.runtime.DiagnosticsController
 import com.nextcraft.forge.runtime.CiCdController
 import com.nextcraft.forge.runtime.BuildMatrixController
+import com.nextcraft.forge.runtime.BuildOutcome
+import com.nextcraft.forge.runtime.BuildVerification
+import com.nextcraft.forge.runtime.AndroidIssueSeverity
 import com.nextcraft.forge.runtime.GoProjectTemplateGenerator
 import com.nextcraft.forge.runtime.GameProjectTemplateGenerator
 import com.nextcraft.forge.runtime.sanitizeClaudeAuthOutput
@@ -510,6 +513,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     languageCode = AppStrings.languageCode(getApplication()),
                     interactiveHighRiskApprovals = preferences.interactiveHighRiskApprovals,
                     autoApproveAllTools = preferences.autoApproveAllTools,
+                    autoVerifyBuild = preferences.autoVerifyBuild,
+                    autoFixBuild = preferences.autoFixBuild,
                     autoSyncGitHub = preferences.autoSyncGitHub,
                     gameTemplatesEnabled = preferences.gameTemplatesEnabled,
                     androidHostTools = preferences.androidHostTools,
@@ -1957,6 +1962,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Fix rounds the local build check has used per chat; a message the user writes starts again at zero. */
+    private val autoFixRounds = java.util.concurrent.ConcurrentHashMap<RunKey, Int>()
+
+    /**
+     * Local CI: after a turn that changed an Android project's files, build and unit-test it in one Gradle run. A
+     * failure in the code goes back to the same chat's agent (see [onBuildVerified]).
+     */
+    private fun maybeVerifyBuild(run: ChatRun) {
+        if (!preferences.autoVerifyBuild || !run.changedFiles || run.isolated) return
+        val project = projectOf(run.projectId) ?: return
+        val key = runKey(run.projectId, run.chatId)
+        if (!BuildVerification.isAutoFixPrompt(run.lastPrompt.text)) autoFixRounds.remove(key)
+        viewModelScope.launch {
+            val android = withContext(Dispatchers.IO) {
+                runCatching { findAndroidProjectRoot(checkpoints.ensureWorkspace(project.id)) != null }.getOrDefault(false)
+            }
+            if (!android) return@launch
+            _state.update { it.copy(bannerMessage = UiText.res(R.string.verify_running)) }
+            runAndroidBuild(BuildVerification.VERIFY_TASKS, targetProject = project) { outcome ->
+                onBuildVerified(project, run.chatId, key, outcome)
+            }
+        }
+    }
+
+    private fun onBuildVerified(project: Project, chatId: String, key: RunKey, outcome: BuildOutcome) {
+        val banner = when {
+            outcome.cancelled -> null
+            outcome.succeeded -> UiText.res(R.string.verify_passed).also { autoFixRounds.remove(key) }
+            outcome.failure == BuildVerification.FailureKind.CODE && preferences.autoFixBuild -> {
+                val round = (autoFixRounds[key] ?: 0) + 1
+                if (round > BuildVerification.MAX_FIX_ROUNDS) {
+                    autoFixRounds.remove(key)
+                    UiText.res(R.string.verify_gave_up, BuildVerification.MAX_FIX_ROUNDS)
+                } else {
+                    autoFixRounds[key] = round
+                    val errors = outcome.issues.filter { it.severity == AndroidIssueSeverity.ERROR }.map { it.formatForAgentPrompt() }
+                    sendAutoFix(project, chatId, BuildVerification.fixPrompt(round, errors, outcome.log))
+                    UiText.res(R.string.verify_fixing, round, BuildVerification.MAX_FIX_ROUNDS)
+                }
+            }
+            outcome.failure == BuildVerification.FailureKind.OUT_OF_MEMORY -> UiText.res(R.string.verify_failed_memory)
+            outcome.failure == BuildVerification.FailureKind.DEPENDENCY -> UiText.res(R.string.verify_failed_dependency)
+            else -> UiText.res(R.string.verify_failed)
+        }
+        banner?.let { message -> _state.update { it.copy(bannerMessage = message) } }
+    }
+
+    /** Like [sendPrompt], for a chat that need not be the open one. */
+    private fun sendAutoFix(project: Project, chatId: String, text: String) {
+        val prompt = QueuedPrompt(text = text, projectId = project.id, chatId = chatId)
+        if (runs.containsKey(runKey(project.id, chatId)) || !canStartAnotherRun(tentativeAgent(text))) enqueuePrompt(prompt)
+        else startRun(project, chatId, prompt)
+    }
+
     /** Sends the current Android build failure (parsed issues or raw Gradle tail log) to the coding agent, optionally scheduling an automatic rebuild on completion. */
     fun fixBuildWithAgent(autoRebuild: Boolean = false) {
         val project = _state.value.activeProject ?: return
@@ -2824,6 +2883,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             is RuntimeEvent.FilesChanged -> {
+                if (event.changes.isNotEmpty()) run.changedFiles = true
                 // An isolated chat's changes live in its branch; the project's review list is not theirs.
                 if (!run.isolated && _state.value.activeProjectId == run.projectId) {
                     _state.update { it.copy(changedItems = event.changes) }
@@ -2842,6 +2902,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         runAndroidBuild("assembleDebug", installAfterBuild = true, targetProject = proj)
                     }
+                } else {
+                    maybeVerifyBuild(run)
                 }
                 // Wait for the bridge call to fully unwind so the next turn cannot race its shared state.
                 viewModelScope.launch {
@@ -4222,6 +4284,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         task: String = "assembleDebug",
         installAfterBuild: Boolean = false,
         targetProject: Project? = _state.value.activeProject,
+        lowMemory: Boolean = false,
+        onFinished: ((BuildOutcome) -> Unit)? = null,
     ) {
         val project = targetProject ?: return
         if (project.id in _state.value.buildingProjectIds || projectBuildHandles.containsKey(project.id)) return
@@ -4272,7 +4336,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val ws = withContext(Dispatchers.IO) { checkpoints.ensureWorkspace(project.id) }
                 val root = withContext(Dispatchers.IO) { findAndroidProjectRoot(ws) ?: ws }
                 androidRoot = root
-                val cmd = androidGradleCommand(root, task)
+                val cmd = androidGradleCommand(root, task, if (lowMemory) BuildVerification.LOW_MEMORY_FLAGS else "")
                 withContext(Dispatchers.IO) {
                     val relativeRoot = root.relativeTo(ws).invariantSeparatorsPath
                     val guestCommand = if (relativeRoot.isEmpty()) cmd else "cd ${shellSingleQuote(relativeRoot)} && $cmd"
@@ -4410,9 +4474,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             .putExtra(RuntimeExecutionService.EXTRA_DETAIL_RES, finalDetailRes),
                     )
                 }
+            val failureKind = if (succeeded || cancelled) null else BuildVerification.classify(
+                fullLog, exitCode, issues.count { it.severity == AndroidIssueSeverity.ERROR },
+            )
+            // Out of memory is the phone, not the code: try once more with the lightest Gradle settings.
+            if (failureKind == BuildVerification.FailureKind.OUT_OF_MEMORY && !lowMemory) {
+                _state.update { it.copy(bannerMessage = UiText.res(R.string.build_retry_low_memory)) }
+                runAndroidBuild(task, installAfterBuild, project, lowMemory = true, onFinished = onFinished)
+                return@launch
+            }
             if (succeeded && !cancelled && installAfterBuild && finalApk != null) {
                 installBuiltApk(finalApk.absolutePath, project.id)
             }
+            onFinished?.invoke(BuildOutcome(succeeded, cancelled, failureKind, issues, fullLog))
         }
         handle.job = job
     }
@@ -5229,6 +5303,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setAutoVerifyBuild(enabled: Boolean) {
+        preferences.autoVerifyBuild = enabled
+        _state.update { it.copy(autoVerifyBuild = enabled) }
+    }
+
+    fun setAutoFixBuild(enabled: Boolean) {
+        preferences.autoFixBuild = enabled
+        _state.update { it.copy(autoFixBuild = enabled) }
+    }
+
+    /** The local build check (build + unit tests in one Gradle run) of the open project, by hand. */
+    fun verifyBuildNow() {
+        val project = _state.value.activeProject ?: return
+        runAndroidBuild(BuildVerification.VERIFY_TASKS, targetProject = project) { outcome ->
+            onBuildVerified(project, _state.value.activeChatId, runKey(project.id, _state.value.activeChatId), outcome)
+        }
+    }
+
     fun setAutoApproveAllTools(enabled: Boolean) {
         preferences.autoApproveAllTools = enabled
         if (enabled && preferences.interactiveHighRiskApprovals) {
@@ -5509,6 +5601,8 @@ private class ChatRun(
 
     /** True while the run is being stopped so that a queued message can go out at once (see steerQueuedPrompt). */
     var steering: Boolean = false
+    /** The agent changed project files this turn: the local build check has something to verify. */
+    var changedFiles: Boolean = false
 }
 
 /** The effort part of an Antigravity model id such as gemini-4-argon-high. */

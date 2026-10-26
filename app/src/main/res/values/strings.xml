@@ -1522,4 +1522,15 @@
     <string name="inspector_empty_hint">Tap Scan Screen UI to inspect live Android view bounds and tap any element to edit it with the coding agent.</string>
     <string name="inspector_edit_with_agent">Edit Element with Agent</string>
     <string name="inspector_instruction_hint">Describe how the agent should change this element</string>
+    <string name="build_retry_low_memory">Out of memory: building again with lighter Gradle settings…</string>
+    <string name="verify_running">Checking the build (build + unit tests)…</string>
+    <string name="verify_passed">Build check passed ✓</string>
+    <string name="verify_fixing">Build check failed: the agent is fixing it (round %1$d of %2$d)…</string>
+    <string name="verify_gave_up">Build still fails after %1$d fix rounds. Check the Issues tab.</string>
+    <string name="verify_failed_memory">Build check stopped: out of memory. Close other apps and try again.</string>
+    <string name="verify_failed_dependency">Build check failed: a library could not be downloaded. Go online and build once.</string>
+    <string name="verify_failed">Build check failed. See the Issues and Log tabs.</string>
+    <string name="verify_now">Check build now (build + tests)</string>
+    <string name="verify_auto_toggle">Check build after agent changes</string>
+    <string name="verify_autofix_toggle">Let the agent fix build errors</string>
 </resources>

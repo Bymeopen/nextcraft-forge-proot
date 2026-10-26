@@ -1588,4 +1588,15 @@
     <string name="inspector_empty_hint">اضغط على فحص واجهة الشاشة لعرض عناصر أندرويد واضغط على أي عنصر لتعديله بواسطة الوكيل.</string>
     <string name="inspector_edit_with_agent">تعديل العنصر بواسطة الوكيل</string>
     <string name="inspector_instruction_hint">صف كيف يجب على الوكيل تعديل هذا العنصر</string>
+    <string name="build_retry_low_memory">نفدت الذاكرة: إعادة البناء بإعدادات Gradle أخف…</string>
+    <string name="verify_running">جارٍ فحص البناء (بناء + اختبارات الوحدة)…</string>
+    <string name="verify_passed">نجح فحص البناء ✓</string>
+    <string name="verify_fixing">فشل فحص البناء: الوكيل يصلحه (الجولة %1$d من %2$d)…</string>
+    <string name="verify_gave_up">لا يزال البناء يفشل بعد %1$d جولات إصلاح. راجع علامة تبويب المشكلات.</string>
+    <string name="verify_failed_memory">توقف فحص البناء: نفدت الذاكرة. أغلق التطبيقات الأخرى وحاول مجددًا.</string>
+    <string name="verify_failed_dependency">فشل فحص البناء: تعذر تنزيل مكتبة. اتصل بالإنترنت وابنِ مرة واحدة.</string>
+    <string name="verify_failed">فشل فحص البناء. راجع علامتي تبويب المشكلات والسجل.</string>
+    <string name="verify_now">فحص البناء الآن (بناء + اختبارات)</string>
+    <string name="verify_auto_toggle">فحص البناء بعد تغييرات الوكيل</string>
+    <string name="verify_autofix_toggle">السماح للوكيل بإصلاح أخطاء البناء</string>
 </resources>

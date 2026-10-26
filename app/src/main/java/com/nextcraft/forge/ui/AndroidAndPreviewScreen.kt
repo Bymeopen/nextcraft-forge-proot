@@ -212,6 +212,27 @@ fun AndroidBuildScreen(
                         )
                     }
                     DropdownMenuItem(
+                        text = { Text(stringResource(R.string.verify_now)) },
+                        enabled = !busy,
+                        onClick = {
+                            menuOpen = false
+                            viewModel.verifyBuildNow()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.verify_auto_toggle)) },
+                        trailingIcon = { androidx.compose.material3.Switch(checked = state.autoVerifyBuild, onCheckedChange = null) },
+                        onClick = { viewModel.setAutoVerifyBuild(!state.autoVerifyBuild) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.verify_autofix_toggle)) },
+                        enabled = state.autoVerifyBuild,
+                        trailingIcon = {
+                            androidx.compose.material3.Switch(checked = state.autoFixBuild, onCheckedChange = null, enabled = state.autoVerifyBuild)
+                        },
+                        onClick = { viewModel.setAutoFixBuild(!state.autoFixBuild) },
+                    )
+                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.launch_clean)) },
                         enabled = !busy,
                         onClick = {
