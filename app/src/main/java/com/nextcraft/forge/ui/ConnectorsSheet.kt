@@ -93,8 +93,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
                 )
             }
             Switch(checked = connector.enabled, onCheckedChange = { viewModel.setConnectorEnabled(connector.id, it) })
-            ForgeTextButton(onClick = { viewModel.deleteConnector(connector.id) }) {
-                Text(stringResource(R.string.connector_delete), color = MaterialTheme.colorScheme.error)
+            ConfirmedAction(
+                title = stringResource(R.string.connector_delete),
+                message = connector.name,
+                confirmLabel = stringResource(R.string.connector_delete),
+                onConfirm = { viewModel.deleteConnector(connector.id) },
+            ) { onClick ->
+                ForgeTextButton(onClick = onClick) {
+                    Text(stringResource(R.string.connector_delete), color = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }
@@ -203,8 +210,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.skillItems(state: For
                         description = skill.description
                         scope.launch { body = viewModel.loadSkillBody(skill.name) }
                     }) { Text(stringResource(R.string.skill_edit)) }
-                    ForgeTextButton(onClick = { viewModel.deleteSkill(skill.name) }) {
-                        Text(stringResource(R.string.connector_delete), color = MaterialTheme.colorScheme.error)
+                    ConfirmedAction(
+                        title = stringResource(R.string.connector_delete),
+                        message = skill.name,
+                        confirmLabel = stringResource(R.string.connector_delete),
+                        onConfirm = { viewModel.deleteSkill(skill.name) },
+                    ) { onClick ->
+                        ForgeTextButton(onClick = onClick) {
+                            Text(stringResource(R.string.connector_delete), color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
             }

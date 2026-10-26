@@ -207,12 +207,19 @@ internal fun ChangedFilesCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(
-                    onClick = onRevertAll,
-                    enabled = enabled,
-                    shape = RoundedCornerShape(100),
-                    modifier = Modifier.weight(1f).heightIn(min = ForgeSpace.minTouch + 4.dp),
-                ) { Text(stringResource(R.string.chat_revert_all), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                ConfirmedAction(
+                    title = stringResource(R.string.chat_revert_all),
+                    message = quantityStringResource(R.plurals.chat_files_changed, changes.size, changes.size),
+                    confirmLabel = stringResource(R.string.chat_revert_all),
+                    onConfirm = onRevertAll,
+                ) { onClick ->
+                    OutlinedButton(
+                        onClick = onClick,
+                        enabled = enabled,
+                        shape = RoundedCornerShape(100),
+                        modifier = Modifier.weight(1f).heightIn(min = ForgeSpace.minTouch + 4.dp),
+                    ) { Text(stringResource(R.string.chat_revert_all), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
                 Button(
                     onClick = onKeepAll,
                     enabled = enabled,
@@ -264,18 +271,19 @@ private fun ChangedFileRow(
     onRevertHunk: ((String, Int) -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
+    var confirmRevert by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
     val name = change.path.substringAfterLast('/')
     val dir = change.path.substringBeforeLast('/', "")
-    // Swipe right keeps the file, left reverts it (the revert has its own Undo snackbar). Only while the row is collapsed:
-    // an open diff scrolls sideways and would fight the swipe.
+    // Swipe right keeps the file, left asks before reverting it so diagonal scroll gestures never lose changes.
+    // Only while the row is collapsed: an open diff scrolls sideways and would fight the swipe.
     val haptics = LocalHapticFeedback.current
     val swipe = androidx.compose.material3.rememberSwipeToDismissBoxState(
         confirmValueChange = { target ->
             when (target) {
                 androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onKeepFile(change.path) }
-                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onRevertFile(change.path) }
+                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); confirmRevert = true }
                 else -> Unit
             }
             false // the list drops the row itself once the change is resolved; if it is not, the row springs back
@@ -347,7 +355,7 @@ private fun ChangedFileRow(
                     TextButton(onClick = { onOpenFile(change.path) }, modifier = actionHeight) { Text(stringResource(R.string.chat_open_in_files), maxLines = 1) }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { onRevertFile(change.path) }, enabled = enabled, modifier = actionHeight) {
+                    TextButton(onClick = { confirmRevert = true }, enabled = enabled, modifier = actionHeight) {
                         Text(stringResource(R.string.chat_revert), color = tokens.dangerText, maxLines = 1)
                     }
                     Spacer(modifier = Modifier.weight(1f))
@@ -358,6 +366,21 @@ private fun ChangedFileRow(
             }
         }
     }
+    }
+    if (confirmRevert) {
+        ForgeAlertDialog(
+            onDismissRequest = { confirmRevert = false },
+            title = { Text(stringResource(R.string.files_revert_file), fontWeight = FontWeight.SemiBold) },
+            text = { Text(change.path) },
+            confirmButton = {
+                ForgeTextButton(onClick = { confirmRevert = false; onRevertFile(change.path) }) {
+                    Text(stringResource(R.string.chat_revert), color = tokens.dangerText)
+                }
+            },
+            dismissButton = {
+                ForgeTextButton(onClick = { confirmRevert = false }) { Text(stringResource(R.string.agent_cancel)) }
+            },
+        )
     }
 }
 

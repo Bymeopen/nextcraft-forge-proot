@@ -355,6 +355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(
         ForgeUiState(
             themeMode = ForgeThemeMode.fromStored(preferences.themeMode).id,
+            glassSolid = preferences.glassSolid,
             languageCode = AppStrings.languageCode(application),
         ),
     )
@@ -513,6 +514,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     agentKind = savedAgent,
                     routing = preferences.routing,
                     themeMode = ForgeThemeMode.fromStored(preferences.themeMode).id,
+                    glassSolid = preferences.glassSolid,
                     // Bootstrap can wait on a root prompt; if the user already opened or deleted a project meanwhile, keep that.
                     projects = if (it.activeProjectId.isBlank()) projects else it.projects,
                     activeProjectId = if (it.activeProjectId.isBlank()) firstProject?.id.orEmpty() else it.activeProjectId,
@@ -5519,6 +5521,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val resolved = ForgeThemeMode.fromStored(mode).id
         preferences.themeMode = resolved
         _state.update { it.copy(themeMode = resolved) }
+    }
+
+    fun setGlassSolid(solid: Boolean) {
+        preferences.glassSolid = solid
+        glassUserSolid = solid
+        _state.update { it.copy(glassSolid = solid) }
     }
 
     fun toggleThemeMode() {

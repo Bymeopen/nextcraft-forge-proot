@@ -83,6 +83,8 @@ internal fun ChatTopBar(
 ) {
     val scheme = MaterialTheme.colorScheme
     var menuOpen by rememberSaveable { mutableStateOf(false) }
+    var confirmClear by rememberSaveable { mutableStateOf(false) }
+    var confirmDelete by rememberSaveable { mutableStateOf(false) }
     val activeChat = state.chats.firstOrNull { it.id == state.activeChatId }
     val pending = state.changedItems.count { it.accepted == null }
     Row(
@@ -158,15 +160,47 @@ internal fun ChatTopBar(
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.chat_menu_clear)) },
                     enabled = !state.activeChatRunning,
-                    onClick = { menuOpen = false; onClear() },
+                    onClick = { menuOpen = false; confirmClear = true },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.agent_delete_chat)) },
                     enabled = state.chats.size > 1 && !state.activeChatRunning,
-                    onClick = { menuOpen = false; onDelete() },
+                    onClick = { menuOpen = false; confirmDelete = true },
                 )
             }
         }
+    }
+    if (confirmClear) {
+        val tokens = LocalForgeThemeTokens.current
+        ForgeAlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(stringResource(R.string.chat_menu_clear), fontWeight = FontWeight.SemiBold) },
+            text = { Text(activeChat?.displayTitle() ?: stringResource(R.string.agent_title)) },
+            confirmButton = {
+                ForgeTextButton(onClick = { confirmClear = false; onClear() }) {
+                    Text(stringResource(R.string.chat_menu_clear), color = tokens.dangerText)
+                }
+            },
+            dismissButton = {
+                ForgeTextButton(onClick = { confirmClear = false }) { Text(stringResource(R.string.agent_cancel)) }
+            },
+        )
+    }
+    if (confirmDelete) {
+        val tokens = LocalForgeThemeTokens.current
+        ForgeAlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.agent_delete_chat), fontWeight = FontWeight.SemiBold) },
+            text = { Text(activeChat?.displayTitle() ?: stringResource(R.string.agent_title)) },
+            confirmButton = {
+                ForgeTextButton(onClick = { confirmDelete = false; onDelete() }) {
+                    Text(stringResource(R.string.tool_delete), color = tokens.dangerText)
+                }
+            },
+            dismissButton = {
+                ForgeTextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.agent_cancel)) }
+            },
+        )
     }
 }
 
@@ -253,8 +287,15 @@ internal fun ChatDrawerRow(
             Text(text = formatRelativeTime(chat.updatedAtMillis), fontSize = ForgeType.caption, color = scheme.onSurfaceVariant)
         }
         if (canDelete) {
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            ConfirmedAction(
+                title = stringResource(R.string.agent_delete_chat),
+                message = chat.displayTitle(),
+                confirmLabel = stringResource(R.string.tool_delete),
+                onConfirm = onDelete,
+            ) { onClick ->
+                IconButton(onClick = onClick) {
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                }
             }
         }
     }
@@ -286,7 +327,10 @@ internal fun RenameChatDialog(initial: String, onDismiss: () -> Unit, onSave: (S
 internal fun ChatUsageSheet(state: ForgeUiState, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
-    val used = estimateContextTokens(state.messages)
+    val msgTokens = estimateContextTokens(state.messages)
+    // Include estimated system prompt, AGENTS.md rules, and active MCP/skill schema overhead (~4,200 base tokens + 350 per enabled connector/skill)
+    val systemOverhead = 4_200 + (state.connectors.count { it.enabled } + state.skills.size) * 350
+    val used = msgTokens + systemOverhead
     val activeAgent = primaryAgent(state)
     val activeModel = when (activeAgent) {
         AgentKind.ANTIGRAVITY -> state.antigravityModel

@@ -158,6 +158,7 @@ data class ForgeUiState(
     val projectView: ProjectView = ProjectView.LIST,
     val projectPane: ProjectPane = ProjectPane.CHAT,
     val themeMode: String = "dark",
+    val glassSolid: Boolean = false,
     val projects: List<Project> = emptyList(),
     val activeProjectId: String = "",
     val chats: List<ProjectChat> = emptyList(),
