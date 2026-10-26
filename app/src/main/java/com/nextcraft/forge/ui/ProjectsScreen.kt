@@ -364,18 +364,14 @@ private fun BringExistingProjectCard(
                         color = scheme.onSurfaceVariant,
                     )
                 }
-                Icon(
-                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = scheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
+                Chevron(expanded = expanded)
             }
+            val reduceMotion = rememberReduceMotion()
             // Height-only animation keeps the LazyColumn item from jumping while the body appears.
             AnimatedVisibility(
                 visible = expanded,
-                enter = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(180)),
-                exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(120)),
+                enter = ForgeMotion.expandEnter(reduceMotion),
+                exit = ForgeMotion.shrinkExit(reduceMotion),
             ) {
                 Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -393,12 +389,14 @@ private fun BringExistingProjectCard(
                         )
                     }
                     Spacer(modifier = Modifier.height(10.dp))
+                    val ghInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .forgePressScale(ghInteraction, pressedScale = 0.98f)
                             .clip(RoundedCornerShape(14.dp))
                             .background(tokens.cardElevatedColor)
-                            .clickable(role = Role.Button, onClick = onConnectGitHub)
+                            .clickable(interactionSource = ghInteraction, indication = androidx.compose.material3.ripple(), role = Role.Button, onClick = onConnectGitHub)
                             .heightIn(min = 60.dp)
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -450,11 +448,13 @@ private fun ImportTile(
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalForgeThemeTokens.current
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
         modifier = modifier
+            .forgePressScale(interaction, pressedScale = 0.97f)
             .clip(RoundedCornerShape(14.dp))
             .background(tokens.cardElevatedColor)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.Button, onClick = onClick)
             .heightIn(min = 52.dp)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -529,6 +529,7 @@ internal fun ProjectRow(
     var menuOpen by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val muted = scheme.onSurfaceVariant
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     // Phones up to ~6.3in report <= 400dp wide: a smaller tile and gaps give the text column 16dp more.
     val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 400
 
@@ -536,13 +537,21 @@ internal fun ProjectRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 6.dp)
+            .forgePressScale(interaction, pressedScale = 0.985f)
             .alpha(if (locked) 0.5f else 1f),
         border = if (active) androidx.compose.foundation.BorderStroke(1.dp, scheme.primary.copy(alpha = 0.6f)) else LocalForgeThemeTokens.current.cardBorderStroke,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .combinedClickable(enabled = !locked, role = Role.Button, onClick = onOpen, onLongClick = { menuOpen = true })
+                .combinedClickable(
+                    interactionSource = interaction,
+                    indication = androidx.compose.material3.ripple(),
+                    enabled = !locked,
+                    role = Role.Button,
+                    onClick = onOpen,
+                    onLongClick = { menuOpen = true },
+                )
                 .padding(start = if (narrow) 12.dp else 16.dp, top = 16.dp, bottom = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

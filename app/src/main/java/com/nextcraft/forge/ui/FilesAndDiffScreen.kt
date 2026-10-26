@@ -183,7 +183,7 @@ fun FilesAndDiffScreen(
             title = pluralStringResource(R.plurals.fm_items_count, shownEntries.size, shownEntries.size),
             selecting = selecting,
             selectedCount = selectedPaths.size,
-            enabled = !state.activeProjectAgentRunning,
+            enabled = !state.sessionRunning,
             sort = sort,
             showHidden = showHidden,
             onSort = { sortName = it.name },
@@ -207,18 +207,30 @@ fun FilesAndDiffScreen(
             },
         )
         val modes = listOf("files", "editor", "diff")
+        val modeIdx = modes.indexOf(mode).coerceAtLeast(0)
+        var lastModeIdx by remember { mutableStateOf(modeIdx) }
+        val modeForward = modeIdx >= lastModeIdx
+        androidx.compose.runtime.SideEffect { lastModeIdx = modeIdx }
+        val reduceMotion = rememberReduceMotion()
+
         ForgePillTabs(
             items = listOf(
                 stringResource(R.string.files_tab_explorer, shownEntries.size),
                 state.selectedFilePath?.substringAfterLast('/') ?: stringResource(R.string.files_tab_editor),
                 stringResource(R.string.files_tab_changes, state.changedItems.size),
             ),
-            selectedIndex = modes.indexOf(mode).coerceAtLeast(0),
+            selectedIndex = modeIdx,
             onSelect = { mode = modes[it] },
         )
 
-        when (mode) {
-            "files" -> Column(modifier = Modifier.weight(1f)) {
+        androidx.compose.animation.AnimatedContent(
+            targetState = mode,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            transitionSpec = { ForgeMotion.tabTransition(forward = modeForward, reduceMotion = reduceMotion) },
+            label = "filesModeSwitch",
+        ) { activeMode ->
+        when (activeMode) {
+            "files" -> Column(modifier = Modifier.fillMaxSize()) {
                 // Search covers the whole workspace (not just the open folder) and lists only the matches, flat.
                 val search = remember(state.workspaceFiles, searchQuery, searching) {
                     if (searching && searchQuery.isNotBlank()) searchWorkspaceEntries(state.workspaceFiles, searchQuery) else null
@@ -244,7 +256,7 @@ fun FilesAndDiffScreen(
                     selectedPath = state.selectedFilePath,
                     selecting = selecting,
                     selectedPaths = selectedPaths,
-                    enabled = !state.activeProjectAgentRunning,
+                    enabled = !state.sessionRunning,
                     onOpenFolder = { dir ->
                         // Opening a folder from a search result leaves the search and goes there.
                         searching = false
@@ -281,17 +293,17 @@ fun FilesAndDiffScreen(
                 content = state.selectedFileContent,
                 editable = state.selectedFileEditable,
                 dirty = state.selectedFileDirty,
-                sessionRunning = state.activeProjectAgentRunning,
+                sessionRunning = state.sessionRunning,
                 savedBanner = state.fileSavedBanner,
                 onContentChange = viewModel::updateSelectedFileContent,
                 onSave = viewModel::saveSelectedFile,
                 onRequestDelete = { path -> pendingDeletePath = path },
                 onBackToExplorer = { mode = "files" },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
             )
             else -> WorkspaceDiffReviewList(
                 changes = state.changedItems,
-                sessionRunning = state.activeProjectAgentRunning,
+                sessionRunning = state.sessionRunning,
                 onOpenFile = { path ->
                     viewModel.openWorkspaceFile(path)
                     mode = "editor"
@@ -301,8 +313,9 @@ fun FilesAndDiffScreen(
                 onRevertAll = viewModel::revertAllChanges,
                 onKeepFile = viewModel::keepSingleFile,
                 onKeepAll = viewModel::keepAllChanges,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
             )
+        }
         }
     }
 
@@ -623,12 +636,14 @@ internal fun WorkspaceFolderList(
             val isSelected = entry.path == selectedPath
             var menuOpen by remember { mutableStateOf(false) }
             val checked = entry.path in selectedPaths
+            val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .forgePressScale(interaction, pressedScale = 0.985f)
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (isSelected) scheme.onSurface.copy(alpha = 0.08f) else Color.Transparent)
-                    .clickable(role = Role.Button) {
+                    .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.Button) {
                         when {
                             selecting -> if (checked) selectedPaths.remove(entry.path) else selectedPaths.add(entry.path)
                             entry.isDirectory -> onOpenFolder(entry.path)
@@ -679,8 +694,7 @@ internal fun WorkspaceFolderList(
                     )
                 }
                 Box {
-                    // Always open: installing, analysing or saving a copy reads the file and is safe while an agent works.
-                    IconButton(onClick = { menuOpen = true }, enabled = !selecting) {
+                    IconButton(onClick = { menuOpen = true }, enabled = enabled && !selecting) {
                         Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.files_row_menu), tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                     }
                     DropdownMenu(
@@ -690,25 +704,24 @@ internal fun WorkspaceFolderList(
                         offset = androidx.compose.ui.unit.DpOffset((-12).dp, 0.dp),
                     ) {
                         if (entry.isDirectory) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_file)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FILE, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onNewFileIn(entry.path) }, enabled = enabled)
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_folder)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FOLDER, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onNewFolderIn(entry.path) }, enabled = enabled)
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_upload_here)) }, leadingIcon = { ForgeIcon(ForgeGlyph.UPLOAD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onUploadIn(entry.path) }, enabled = enabled)
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_file)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FILE, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onNewFileIn(entry.path) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_folder)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FOLDER, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onNewFolderIn(entry.path) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_upload_here)) }, leadingIcon = { ForgeIcon(ForgeGlyph.UPLOAD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onUploadIn(entry.path) })
                             Divider(color = scheme.outlineVariant, thickness = 0.5.dp)
                         }
                         if (!entry.isDirectory && entry.name.endsWith(".apk", ignoreCase = true)) {
                             DropdownMenuItem(text = { Text(stringResource(R.string.files_install_apk)) }, leadingIcon = { ForgeIcon(ForgeGlyph.BUILD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onInstallApk(entry.path) })
                         }
                         if (!entry.isDirectory) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_edit_in_terminal)) }, leadingIcon = { ForgeIcon(ForgeGlyph.TERMINAL, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onEditInTerminal(entry.path) }, enabled = enabled)
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_edit_in_terminal)) }, leadingIcon = { ForgeIcon(ForgeGlyph.TERMINAL, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onEditInTerminal(entry.path) })
                             DropdownMenuItem(text = { Text(stringResource(R.string.files_analyze_rea)) }, leadingIcon = { ForgeIcon(ForgeGlyph.SEARCH, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onAnalyzeWithRea(entry.path) })
                             DropdownMenuItem(text = { Text(stringResource(R.string.files_save_copy)) }, leadingIcon = { ForgeIcon(ForgeGlyph.DOWNLOAD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onSaveCopy(entry.path) })
                         }
-                        DropdownMenuItem(text = { Text(stringResource(R.string.files_rename)) }, leadingIcon = { ForgeIcon(ForgeGlyph.EDIT, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onRename(entry.path) }, enabled = enabled)
+                        DropdownMenuItem(text = { Text(stringResource(R.string.files_rename)) }, leadingIcon = { ForgeIcon(ForgeGlyph.EDIT, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onRename(entry.path) })
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.files_delete), color = tokens.dangerText) },
                             leadingIcon = { ForgeIcon(ForgeGlyph.TRASH, tokens.dangerText) },
                             onClick = { menuOpen = false; onDelete(entry.path) },
-                            enabled = enabled,
                         )
                     }
                 }

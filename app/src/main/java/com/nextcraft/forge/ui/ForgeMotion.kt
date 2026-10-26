@@ -4,7 +4,10 @@ package com.nextcraft.forge.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -14,14 +17,19 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.with
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,6 +37,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.composed
@@ -53,27 +63,68 @@ object ForgeMotion {
     fun <T> springExpressive(): androidx.compose.animation.core.SpringSpec<T> =
         spring(dampingRatio = 0.62f, stiffness = 380f)
 
-    /** Screen push: slide 24% + fade in, the leaving screen fades and drifts 12% the other way. */
+    /** Smooth critically-damped physics spring for spatial screen and layout transitions without wobble. */
+    fun <T> springFluid(): androidx.compose.animation.core.SpringSpec<T> =
+        spring(dampingRatio = 0.84f, stiffness = 400f)
+
+    /** Screen push: fluid spring slide 22% + subtle depth scale (96% -> 100%) + fade in; leaving screen drifts 10% + scales to 97%. */
     fun screenTransition(forward: Boolean, reduceMotion: Boolean): ContentTransform {
         if (reduceMotion) return fadeIn(snap()) with fadeOut(snap())
         val dir = if (forward) 1 else -1
-        return (
-            slideInHorizontally(tween(SCREEN_MS, easing = FastOutSlowInEasing)) { (it * 0.24f * dir).toInt() } +
-                fadeIn(tween(SCREEN_MS))
-            ) with (
-            slideOutHorizontally(tween(SCREEN_MS, easing = FastOutSlowInEasing)) { (-it * 0.12f * dir).toInt() } +
-                fadeOut(tween(FADE_MS))
-            )
+        val offsetSpring = spring<IntOffset>(dampingRatio = 0.84f, stiffness = 400f)
+        val scaleSpring = spring<Float>(dampingRatio = 0.86f, stiffness = 420f)
+        return ContentTransform(
+            targetContentEnter = slideInHorizontally(offsetSpring) { (it * 0.22f * dir).toInt() } +
+                scaleIn(scaleSpring, initialScale = 0.96f) +
+                fadeIn(tween(FADE_MS, easing = FastOutSlowInEasing)),
+            initialContentExit = slideOutHorizontally(offsetSpring) { (-it * 0.10f * dir).toInt() } +
+                scaleOut(scaleSpring, targetScale = 0.97f) +
+                fadeOut(tween(FADE_MS * 2 / 3, easing = FastOutSlowInEasing)),
+            sizeTransform = SizeTransform(clip = false),
+        )
     }
 
-    /** Tab switch: content cross-fades; nothing moves because the pill already did. */
-    fun crossfade(reduceMotion: Boolean): ContentTransform =
-        if (reduceMotion) fadeIn(snap()) with fadeOut(snap()) else fadeIn(tween(FADE_MS)) with fadeOut(tween(FADE_MS / 2))
+    /** Sibling tab / sub-view switch: directional 8% horizontal drift + subtle 98.5% scale + fade so tabs never feel stiff. */
+    fun tabTransition(forward: Boolean, reduceMotion: Boolean): ContentTransform {
+        if (reduceMotion) return fadeIn(snap()) with fadeOut(snap())
+        val dir = if (forward) 1 else -1
+        val offsetSpring = spring<IntOffset>(dampingRatio = 0.86f, stiffness = 460f)
+        val scaleSpring = spring<Float>(dampingRatio = 0.88f, stiffness = 480f)
+        return ContentTransform(
+            targetContentEnter = slideInHorizontally(offsetSpring) { (it * 0.08f * dir).toInt() } +
+                scaleIn(scaleSpring, initialScale = 0.985f) +
+                fadeIn(tween(FADE_MS, easing = FastOutSlowInEasing)),
+            initialContentExit = slideOutHorizontally(offsetSpring) { (-it * 0.06f * dir).toInt() } +
+                scaleOut(scaleSpring, targetScale = 0.985f) +
+                fadeOut(tween(FADE_MS / 2, easing = FastOutSlowInEasing)),
+            sizeTransform = SizeTransform(clip = false),
+        )
+    }
+
+    /** Tab switch: content cross-fades with subtle directional drift. */
+    fun crossfade(reduceMotion: Boolean, forward: Boolean = true): ContentTransform =
+        tabTransition(forward = forward, reduceMotion = reduceMotion)
+
+    /** Smooth spring vertical expand + fade for collapsible cards, banners, and disclosure sections. */
+    fun expandEnter(reduceMotion: Boolean = false): EnterTransition =
+        if (reduceMotion) EnterTransition.None
+        else expandVertically(
+            animationSpec = spring<IntSize>(dampingRatio = 0.82f, stiffness = 420f),
+            expandFrom = Alignment.Top,
+        ) + fadeIn(tween(FADE_MS, easing = FastOutSlowInEasing))
+
+    /** Smooth spring vertical shrink + fade for collapsible cards, banners, and disclosure sections. */
+    fun shrinkExit(reduceMotion: Boolean = false): ExitTransition =
+        if (reduceMotion) ExitTransition.None
+        else shrinkVertically(
+            animationSpec = spring<IntSize>(dampingRatio = 0.85f, stiffness = 460f),
+            shrinkTowards = Alignment.Top,
+        ) + fadeOut(tween(FADE_MS * 2 / 3, easing = FastOutSlowInEasing))
 }
 
 /**
  * Hosts a screen keyed by [key]; a new key pushes (slide from the right) when [forward], pops otherwise,
- * and cross-fades when [slide] is false (sibling tabs).
+ * and uses a directional sibling tab transition when [slide] is false.
  */
 @Composable
 fun <K> ForgeScreenHost(
@@ -87,7 +138,11 @@ fun <K> ForgeScreenHost(
     AnimatedContent(
         targetState = key,
         modifier = modifier,
-        transitionSpec = { if (slide) ForgeMotion.screenTransition(forward, reduceMotion) else ForgeMotion.crossfade(reduceMotion) },
+        transitionSpec = {
+            if (slide) ForgeMotion.screenTransition(forward, reduceMotion)
+            else ForgeMotion.tabTransition(forward, reduceMotion)
+        },
+        label = "forgeScreenHost",
     ) { state -> content(state) }
 }
 

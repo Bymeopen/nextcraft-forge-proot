@@ -69,6 +69,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Edit
@@ -237,7 +238,16 @@ fun AgentScreen(
             )
         }
 
-        state.activeStatusLine?.let { statusLine ->
+        val reduceMotion = rememberReduceMotion()
+        val statusText = state.activeStatusLine?.asString()
+        var lastStatusText by remember { mutableStateOf("") }
+        if (statusText != null) lastStatusText = statusText
+        AnimatedVisibility(
+            visible = statusText != null,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
+            val activeText = statusText ?: lastStatusText
             // A slim status line: no sliding bar (the spinner by the chat title shows that it is working), small text,
             // and a compact Stop (the composer's round button also stops).
             Surface(
@@ -253,7 +263,7 @@ fun AgentScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = statusLine.asString(),
+                            text = activeText,
                             fontSize = ForgeType.caption,
                             color = tokens.accentText,
                             fontWeight = FontWeight.Medium,
@@ -353,7 +363,13 @@ fun AgentScreen(
                 // Count only what arrived after the reader scrolled away; remember(awayFromEnd) snapshots the size at that moment.
                 val sizeWhenAway = remember(awayFromEnd) { state.messages.size }
                 val newCount = (state.messages.size - sizeWhenAway).coerceAtLeast(0)
-                if (awayFromEnd) {
+                val latestInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = awayFromEnd,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+                    enter = fadeIn(tween(ForgeMotion.FADE_MS)) + androidx.compose.animation.scaleIn(animationSpec = ForgeMotion.springSnappy(), initialScale = 0.88f),
+                    exit = fadeOut(tween(ForgeMotion.FADE_MS / 2)) + androidx.compose.animation.scaleOut(animationSpec = tween(ForgeMotion.FADE_MS / 2), targetScale = 0.88f),
+                ) {
                     Surface(
                         shape = RoundedCornerShape(100),
                         // Opaque (composited over the page) and raised: the glass card colour is translucent and let the
@@ -363,10 +379,11 @@ fun AgentScreen(
                         border = tokens.cardBorderStroke,
                         shadowElevation = 4.dp,
                         modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 10.dp)
+                            .forgePressScale(latestInteraction, pressedScale = 0.94f, haptic = true)
                             .clip(RoundedCornerShape(100))
-                            .clickable(role = Role.Button) { scope.launch { listState.animateScrollToItem(state.messages.lastIndex) } },
+                            .clickable(interactionSource = latestInteraction, indication = androidx.compose.material3.ripple(), role = Role.Button) {
+                                scope.launch { listState.animateScrollToItem(state.messages.lastIndex) }
+                            },
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
@@ -431,7 +448,11 @@ fun AgentScreen(
         val retry = state.retryPrompts[state.activeChatId]?.takeIf {
             !state.activeChatRunning && (it.prompt.projectId == null || it.prompt.projectId == state.activeProjectId)
         }
-        if (retry != null) {
+        AnimatedVisibility(
+            visible = retry != null,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp).forgeLive(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -747,7 +768,15 @@ internal fun ChatMessageCard(
         return
     }
 
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (rememberReduceMotion()) Modifier
+                else Modifier.animateContentSize(animationSpec = ForgeMotion.springFluid()),
+            ),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         // Each tool call is one collapsed row ("Bash · command ⌄"); tap to read its detail.
         if (message.workItems.size >= STEP_GROUP_MIN) {
             ToolStepGroup(message.workItems)

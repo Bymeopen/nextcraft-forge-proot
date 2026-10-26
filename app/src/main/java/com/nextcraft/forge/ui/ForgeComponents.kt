@@ -357,7 +357,7 @@ fun ForgePillIcon(
     }
 }
 
-/** Text tabs; the selected one sits in a soft pill. */
+/** Text tabs; the selected one sits in a soft animated pill with tactile press scale. */
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun ForgePillTabs(
@@ -372,6 +372,7 @@ fun ForgePillTabs(
 ) {
     val scheme = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
+    val reduceMotion = rememberReduceMotion()
     // Equal segments only while they can hold their labels; more than three options scroll instead of being cut to "R…".
     val equalWidth = equalWidth && items.size <= 3
     Row(
@@ -384,13 +385,27 @@ fun ForgePillTabs(
     ) {
         items.forEachIndexed { index, label ->
             val selected = index == selectedIndex
+            val interaction = remember { MutableInteractionSource() }
+            val pillBg = androidx.compose.animation.animateColorAsState(
+                targetValue = if (selected) scheme.onSurface.copy(alpha = 0.09f) else Color.Transparent,
+                animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
+                label = "pillTabBg",
+            ).value
+            val textColor = androidx.compose.animation.animateColorAsState(
+                targetValue = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
+                animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
+                label = "pillTabText",
+            ).value
             Box(
                 modifier = Modifier
                     .then(if (equalWidth) Modifier.weight(1f) else Modifier.widthIn(max = 168.dp))
+                    .forgePressScale(interaction, pressedScale = 0.95f, haptic = true)
                     .heightIn(min = 40.dp)
                     .clip(RoundedCornerShape(100))
-                    .background(if (selected) scheme.onSurface.copy(alpha = 0.09f) else Color.Transparent)
+                    .background(pillBg)
                     .combinedClickable(
+                        interactionSource = interaction,
+                        indication = androidx.compose.material3.ripple(),
                         role = Role.Tab,
                         onClickLabel = label,
                         onLongClickLabel = longPressLabel,
@@ -405,7 +420,8 @@ fun ForgePillTabs(
                     text = label,
                     // Equal segments are narrower (a third of the row at 360dp): one size down keeps "Antigravity" whole.
                     fontSize = if (equalWidth) ForgeType.control else ForgeType.body,
-                    color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = textColor,
                     maxLines = 1,
                     overflow = TextOverflow.MiddleEllipsis,
                 )

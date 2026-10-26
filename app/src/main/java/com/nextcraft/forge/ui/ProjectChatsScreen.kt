@@ -119,11 +119,13 @@ fun ProjectChatsScreen(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(chats, key = { it.id }) { chat ->
                 val active = chat.id == state.activeChatId
+                val interaction = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                 Row(
                     modifier = Modifier
                         .animateItem(fadeInSpec = null, fadeOutSpec = null)
                         .fillMaxWidth()
-                        .clickable(role = Role.Button) { viewModel.openChat(chat.id) }
+                        .forgePressScale(interaction, pressedScale = 0.985f)
+                        .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.Button) { viewModel.openChat(chat.id) }
                         .heightIn(min = 60.dp)
                         .padding(start = 20.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
