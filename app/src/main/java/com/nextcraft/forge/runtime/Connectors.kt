@@ -9,8 +9,15 @@ import org.json.JSONObject
 
 enum class McpTransport { HTTP, COMMAND }
 
+data class McpPreset(
+    val name: String,
+    val transport: McpTransport,
+    val target: String,
+    val secretName: String = "",
+)
+
 /**
- * A Model Context Protocol server Claude Code can use. [target] is the https address of a remote server or the
+ * A Model Context Protocol server Claude Code and Antigravity can use. [target] is the https address of a remote server or the
  * command line of a local one; its secret (a bearer token, or the value of the environment variable [secretName] for
  * a command) lives in the encrypted vault, never in this record.
  */
@@ -22,11 +29,58 @@ data class McpConnector(
     val secretName: String = "",
     val enabled: Boolean = true,
 ) {
-    /** Name of the server in Claude's config; the prefix marks the entries this app manages. */
+    /** Name of the server in Claude's and Antigravity's config; the prefix marks the entries this app manages. */
     val key: String get() = MANAGED_PREFIX + id
 
     companion object {
         const val MANAGED_PREFIX = "forge-"
+
+        /** Open-source MCP server presets ready for 1-tap configuration. */
+        val OPEN_SOURCE_PRESETS: List<McpPreset> = listOf(
+            McpPreset(
+                name = "Context7",
+                transport = McpTransport.HTTP,
+                target = "https://mcp.context7.com/mcp",
+            ),
+            McpPreset(
+                name = "Figma",
+                transport = McpTransport.COMMAND,
+                target = "npx -y figma-developer-mcp --stdio",
+                secretName = "FIGMA_API_KEY",
+            ),
+            McpPreset(
+                name = "GitHub",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @modelcontextprotocol/server-github",
+                secretName = "GITHUB_PERSONAL_ACCESS_TOKEN",
+            ),
+            McpPreset(
+                name = "Supabase",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @supabase/mcp-server-supabase@latest",
+                secretName = "SUPABASE_ACCESS_TOKEN",
+            ),
+            McpPreset(
+                name = "Playwright",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @playwright/mcp@latest --headless",
+            ),
+            McpPreset(
+                name = "Sequential Thinking",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @modelcontextprotocol/server-sequential-thinking",
+            ),
+            McpPreset(
+                name = "Memory Graph",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @modelcontextprotocol/server-memory",
+            ),
+            McpPreset(
+                name = "Fetch Web",
+                transport = McpTransport.COMMAND,
+                target = "uvx mcp-server-fetch",
+            ),
+        )
     }
 }
 
