@@ -183,7 +183,7 @@ fun FilesAndDiffScreen(
             title = pluralStringResource(R.plurals.fm_items_count, shownEntries.size, shownEntries.size),
             selecting = selecting,
             selectedCount = selectedPaths.size,
-            enabled = !state.sessionRunning,
+            enabled = !state.activeProjectAgentRunning,
             sort = sort,
             showHidden = showHidden,
             onSort = { sortName = it.name },
@@ -244,8 +244,7 @@ fun FilesAndDiffScreen(
                     selectedPath = state.selectedFilePath,
                     selecting = selecting,
                     selectedPaths = selectedPaths,
-                    // Only an agent working in this project locks its files; one in another project does not.
-                    enabled = state.chats.none { it.id in state.runningChatIds },
+                    enabled = !state.activeProjectAgentRunning,
                     onOpenFolder = { dir ->
                         // Opening a folder from a search result leaves the search and goes there.
                         searching = false
@@ -282,7 +281,7 @@ fun FilesAndDiffScreen(
                 content = state.selectedFileContent,
                 editable = state.selectedFileEditable,
                 dirty = state.selectedFileDirty,
-                sessionRunning = state.sessionRunning,
+                sessionRunning = state.activeProjectAgentRunning,
                 savedBanner = state.fileSavedBanner,
                 onContentChange = viewModel::updateSelectedFileContent,
                 onSave = viewModel::saveSelectedFile,
@@ -292,7 +291,7 @@ fun FilesAndDiffScreen(
             )
             else -> WorkspaceDiffReviewList(
                 changes = state.changedItems,
-                sessionRunning = state.sessionRunning,
+                sessionRunning = state.activeProjectAgentRunning,
                 onOpenFile = { path ->
                     viewModel.openWorkspaceFile(path)
                     mode = "editor"

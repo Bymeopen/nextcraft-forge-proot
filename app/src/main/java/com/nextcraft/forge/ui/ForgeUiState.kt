@@ -282,6 +282,8 @@ data class ForgeUiState(
 
     /** True while the open chat has its own agent turn running (drives its Stop button, status line and composer). */
     val activeChatRunning: Boolean get() = activeChatId in runningChatIds
+    /** An agent works in the open project: its files are locked. Agents in other projects do not lock them. */
+    val activeProjectAgentRunning: Boolean get() = (runningProjectChatCounts[activeProjectId] ?: 0) > 0
 }
 
 /** One interactive/visible Android UI node dumped via uiautomator for Visual Tap-to-Edit with Agent. */
