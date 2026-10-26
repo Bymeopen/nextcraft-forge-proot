@@ -88,8 +88,11 @@ internal class NativeSpawnProcess private constructor(
             killViaRootIfNeeded(pid, 15)
             return
         }
-        // NativeSpawn.kill in forge_spawn.c automatically escalates via `su -c` if kill(-pid, 15) returns EPERM
-        NativeSpawn.kill(pid, 15)
+        // If NativeSpawn.kill returns non-zero (e.g. EPERM when signalling a root-owned process group),
+        // killViaRootIfNeeded escalates via `su -c` with a 2s timeout ONLY when RuntimeEngines.isRootEngine() is true.
+        if (NativeSpawn.kill(pid, 15) != 0) {
+            killViaRootIfNeeded(pid, 15)
+        }
     }
 
     /** Send the same interrupt signal produced by Ctrl+C in a real terminal. */
@@ -100,7 +103,9 @@ internal class NativeSpawnProcess private constructor(
             killViaRootIfNeeded(pid, 2)
             return
         }
-        NativeSpawn.kill(pid, 2)
+        if (NativeSpawn.kill(pid, 2) != 0) {
+            killViaRootIfNeeded(pid, 2)
+        }
     }
 
     override fun destroyForcibly(): Process {
@@ -115,7 +120,9 @@ internal class NativeSpawnProcess private constructor(
             runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
             return this
         }
-        NativeSpawn.kill(pid, 9)
+        if (NativeSpawn.kill(pid, 9) != 0) {
+            killViaRootIfNeeded(pid, 9)
+        }
         runCatching { stdin.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("NativeSpawnProcess", it) }
         return this
     }

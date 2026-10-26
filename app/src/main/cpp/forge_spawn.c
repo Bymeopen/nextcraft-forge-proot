@@ -71,38 +71,6 @@ static void free_spawn_allocations(char **argv, jsize argc, char **envp, jsize e
     free(output_path);
 }
 
-/**
- * Mengirim sinyal ke grup proses (-pid) yang telah ter-elevasi ke UID 0 (root) via `su`.
- * Dipanggil ketika kill(-pid, signal) dari UID aplikasi (u0_aXXX) ditolak kernel dengan EPERM.
- */
-static int kill_root_process_group_via_su(int pid, int sig) {
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd),
-             "kill -%d -%d 2>/dev/null || kill -%d %d 2>/dev/null",
-             sig, pid, sig, pid);
-
-    pid_t helper = fork();
-    if (helper < 0) return -1;
-    if (helper == 0) {
-        prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
-        int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
-        if (null_fd >= 0) {
-            dup2(null_fd, STDIN_FILENO);
-            dup2(null_fd, STDOUT_FILENO);
-            dup2(null_fd, STDERR_FILENO);
-            if (null_fd > STDERR_FILENO) close(null_fd);
-        }
-        close_extra_fds();
-        execlp("su", "su", "-c", cmd, (char *)NULL);
-        _exit(127);
-    }
-    int status = 0;
-    while (waitpid(helper, &status, 0) < 0) {
-        if (errno != EINTR) return -1;
-    }
-    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
-}
-
 JNIEXPORT jintArray JNICALL
 Java_com_nextcraft_forge_runtime_NativeSpawn_spawn(JNIEnv *env, jobject self, jobjectArray java_argv,
                                                    jobjectArray java_env, jstring java_cwd,
@@ -277,12 +245,9 @@ Java_com_nextcraft_forge_runtime_NativeSpawn_kill(JNIEnv *env, jobject self, jin
     if (result != 0 && errno == ESRCH) {
         result = kill((pid_t)pid, signal);
     }
-    // Jika proses berjalan sebagai UID 0 (root) di dalam Chroot, kill() dari UID app (u0_aXXX)
-    // akan gagal dengan errno == EPERM. Eskalasi otomatis sinyal tersebut via su -c!
-    if (result != 0 && errno == EPERM) {
-        result = kill_root_process_group_via_su((int)pid, (int)signal);
-    }
-    return result;
+    // Root escalation on EPERM is handled by Kotlin's NativeSpawnProcess.killViaRootIfNeeded(),
+    // which checks RuntimeEngines.isRootEngine() and enforces a 2-second timeout.
+    return result == 0 ? 0 : -errno;
 }
 
 JNIEXPORT jint JNICALL

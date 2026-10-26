@@ -2621,7 +2621,8 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             runCatching { rawStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
             val process = runCatching {
                 ProcessBuilder("zstd", "-d", "-c", archive.absolutePath).start()
-            }.getOrElse {
+            }.getOrElse { zstdErr ->
+                if (!RuntimeEngines.isRootEngine()) throw zstdErr
                 val escapedPath = archive.absolutePath.replace("'", "'\"'\"'")
                 val pathExport = "export PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin:${'$'}PATH; "
                 ProcessBuilder("su", "-c", "${pathExport}zstd -d -c '$escapedPath'").start()
