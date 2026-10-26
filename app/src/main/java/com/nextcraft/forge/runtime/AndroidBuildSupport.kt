@@ -306,6 +306,7 @@ internal fun hasAndroidLogcatAccess(context: Context): Boolean {
     if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED) {
         return true
     }
+    if (!RuntimeEngines.isRootEngine()) return false
     return runCatching {
         val process = ProcessBuilder("su", "-c", "id -u").redirectErrorStream(true).start()
         val finished = process.waitFor(1_500L, TimeUnit.MILLISECONDS)
@@ -335,7 +336,8 @@ internal fun startPackageLogcatProcess(
     val since = sinceMillis?.takeIf { it > 0L }?.let {
         SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(it))
     } ?: "1"
-    val useRoot = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED
+    val useRoot = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED &&
+        RuntimeEngines.isRootEngine()
     return if (useRoot) {
         val safeSince = since.replace("'", "")
         val logCommand = "/system/bin/logcat --uid=$uid -v threadtime -T '$safeSince'"

@@ -98,6 +98,7 @@ object AndroidAppInstaller {
      * never needs direct SELinux filesystem access to the app's private data directory.
      */
     internal fun installSilentlyViaRoot(apk: File): Boolean = runCatching {
+        if (!RuntimeEngines.isRootEngine()) return@runCatching false
         val sizeBytes = apk.length()
         if (sizeBytes <= 0L) return@runCatching false
         val proc = ProcessBuilder("su", "-c", "pm install -r -d -S $sizeBytes")

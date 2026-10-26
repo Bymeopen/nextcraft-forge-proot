@@ -449,13 +449,17 @@ class DshRuntimeBridge(
         val mcpPatchYaml = ForgeMcpServer.toDshCordisPatchYaml(
             runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull(),
         )
-        File(home, "settings.yaml").writeText(body)
-        File(home, "cordis.patch.yml").writeText(mcpPatchYaml)
+        fun writeRestricted(target: File, text: String) {
+            target.writeText(text)
+            runCatching { android.system.Os.chmod(target.absolutePath, 0b110000000) } // 0600
+        }
+        writeRestricted(File(home, "settings.yaml"), body)
+        writeRestricted(File(home, "cordis.patch.yml"), mcpPatchYaml)
         if (guestHomePath != DSH_HOME_GUEST_PATH) {
             val defaultHome = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
             runCatching {
-                File(defaultHome, "settings.yaml").writeText(body)
-                File(defaultHome, "cordis.patch.yml").writeText(mcpPatchYaml)
+                writeRestricted(File(defaultHome, "settings.yaml"), body)
+                writeRestricted(File(defaultHome, "cordis.patch.yml"), mcpPatchYaml)
             }
         }
         return home

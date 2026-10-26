@@ -1222,6 +1222,7 @@ Covers end-to-end delivery from local live preview in NextCraft Forge to product
                     mcpServers.keys().forEach { key -> existingServers.put(key, mcpServers.get(key)) }
                     existingRoot.put("mcpServers", existingServers)
                     write(mcpFile, existingRoot.toString(2) + "\n")
+                    runCatching { android.system.Os.chmod(mcpFile.absolutePath, 0b110000000) } // 0600 (contains MCP bearer secrets)
                 }
             }
         }

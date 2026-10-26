@@ -35,6 +35,7 @@ object SilentSelfUpdate {
 
     /** Blocking; call off the main thread. Returns false when root is missing or the install failed (nothing was replaced). */
     fun install(context: Context, apk: File): Boolean = runCatching {
+        if (!com.nextcraft.forge.runtime.RuntimeEngines.isRootEngine()) return@runCatching false
         if (!apk.isFile || apk.length() <= 0L) return@runCatching false
         val component = context.packageManager.getLaunchIntentForPackage(context.packageName)?.component
             ?.flattenToShortString()?.replace("/.", "/${context.packageName}.")

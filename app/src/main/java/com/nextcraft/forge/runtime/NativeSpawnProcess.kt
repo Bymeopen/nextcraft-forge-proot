@@ -122,7 +122,7 @@ internal class NativeSpawnProcess private constructor(
 
     private fun killViaRootIfNeeded(targetPid: Int, sig: Int) {
         // Guard against -1 (all processes), 0 (current process group), and 1 (init).
-        if (targetPid <= 1) return
+        if (targetPid <= 1 || !RuntimeEngines.isRootEngine()) return
         runCatching {
             val proc = ProcessBuilder("su", "-c", "kill -s $sig -$targetPid $targetPid 2>/dev/null || true").start()
             if (!proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {

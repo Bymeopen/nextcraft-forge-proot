@@ -268,7 +268,8 @@ class AntigravityRuntimeBridge(
                 val script = "for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do " +
                     "ppid=\$(awk '/^PPid:/{print \$2}' /proc/\$p/status 2>/dev/null); " +
                     "[ \"\$ppid\" = \"1\" ] && kill -9 \$p 2>/dev/null; done; true"
-                val proc = ProcessBuilder("su", "-c", script)
+                val argv = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", script) else listOf("/system/bin/sh", "-c", script)
+                val proc = ProcessBuilder(argv)
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
                     .start()
