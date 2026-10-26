@@ -2,6 +2,8 @@ package com.nextcraft.forge.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
+import com.nextcraft.forge.runtime.McpConnector
 import com.nextcraft.forge.runtime.McpTransport
 import kotlinx.coroutines.launch
 
@@ -76,6 +79,7 @@ internal fun ConnectorsSheet(state: ForgeUiState, viewModel: MainViewModel, onDi
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state: ForgeUiState, viewModel: MainViewModel) {
     if (state.connectors.isEmpty()) {
         item { ForgeEmptyState(glyph = ForgeGlyph.LINK, title = stringResource(R.string.connectors_empty)) }
@@ -113,11 +117,30 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
         // The secret uses plain remember: rememberSaveable would write it into the saved-instance Bundle.
         var secret by remember { mutableStateOf("") }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = { name = "Context7"; kind = 0; target = "https://mcp.context7.com/mcp"; envName = "" },
-                shape = RoundedCornerShape(100),
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(stringResource(R.string.connector_preset_context7)) }
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                McpConnector.OPEN_SOURCE_PRESETS.forEach { preset ->
+                    OutlinedButton(
+                        onClick = {
+                            name = preset.name
+                            kind = if (preset.transport == McpTransport.HTTP) 0 else 1
+                            target = preset.target
+                            envName = preset.secretName
+                        },
+                        shape = RoundedCornerShape(100),
+                    ) {
+                        val label = if (preset.name == "Context7") {
+                            stringResource(R.string.connector_preset_context7)
+                        } else {
+                            preset.name
+                        }
+                        Text(label)
+                    }
+                }
+            }
             ForgeTextField(
                 value = name,
                 onValueChange = { name = it.take(40) },
