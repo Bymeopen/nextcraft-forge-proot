@@ -97,7 +97,8 @@ data class AndroidBuildRecord(
 
 private val SAFE_GRADLE_TASK_REGEX = Regex("^[A-Za-z0-9_.:-]+(\\s+[A-Za-z0-9_.:-]+)*$")
 
-internal fun androidGradleCommand(root: File, task: String): String {
+/** [extraFlags] is a fixed app constant such as [BuildVerification.LOW_MEMORY_FLAGS], never user text. */
+internal fun androidGradleCommand(root: File, task: String, extraFlags: String = ""): String {
     val cleanTask = task.trim()
     require(cleanTask.isNotEmpty() && SAFE_GRADLE_TASK_REGEX.matches(cleanTask)) {
         "Unsafe Gradle task name: '$task'"
@@ -106,7 +107,8 @@ internal fun androidGradleCommand(root: File, task: String): String {
         .takeIf { it.isFile && !Files.isSymbolicLink(it.toPath()) }
         ?.let { "bash ./gradlew" }
         ?: "gradle"
-    return "$launcher ${AndroidToolchain.GRADLE_BASE_FLAGS} $cleanTask --console=plain --stacktrace"
+    val flags = if (extraFlags.isBlank()) "" else " ${extraFlags.trim()}"
+    return "$launcher ${AndroidToolchain.GRADLE_BASE_FLAGS}$flags $cleanTask --console=plain --stacktrace"
 }
 
 internal fun findAndroidProjectRoot(workspace: File): File? {

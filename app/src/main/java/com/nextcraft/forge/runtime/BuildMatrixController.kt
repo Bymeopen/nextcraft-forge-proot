@@ -42,6 +42,9 @@ data class BuildMatrixState(
     val iosProject: String? = null,
 )
 
+/** The slowest, most memory-hungry Gradle targets: off until the user switches them on. */
+private val OPT_IN_TARGETS = setOf("gradle:assembleRelease", "gradle:lint", "gradle:clean")
+
 /** A build target found in a project folder: stable id, label and the shell command that builds it. */
 internal data class DetectedTarget(val id: String, val name: String, val command: String)
 
@@ -109,7 +112,7 @@ class BuildMatrixController(
             val detected = withContext(Dispatchers.IO) { workspace?.let { runCatching { detectBuildTargets(it) }.getOrDefault(emptyList()) }.orEmpty() }
             val stored = readStored(project.id)
             val targets = detected.map {
-                BuildTarget(it.id, it.name, it.command, detected = true, enabled = it.id !in stored.disabled)
+                BuildTarget(it.id, it.name, it.command, detected = true, enabled = stored.isEnabled(it.id))
             } + stored.custom.map { BuildTarget(it.id, it.name, it.command, detected = false, enabled = it.id !in stored.disabled) }
             val cross = withContext(Dispatchers.IO) { workspace?.let { runCatching { detectCrossTargets(it) }.getOrDefault(emptyList()) }.orEmpty() }
             val iosProject = withContext(Dispatchers.IO) { workspace?.let { runCatching { findXcodeProject(it) }.getOrNull() } }
@@ -182,8 +185,11 @@ class BuildMatrixController(
     fun toggle(id: String) {
         val project = mutable.value.projectId ?: return
         val stored = readStored(project)
-        val disabled = stored.disabled.toMutableSet().also { if (!it.add(id)) it.remove(id) }
-        writeStored(project, stored.copy(disabled = disabled))
+        writeStored(
+            project,
+            if (id in OPT_IN_TARGETS) stored.copy(optIn = stored.optIn.toMutableSet().also { if (!it.add(id)) it.remove(id) })
+            else stored.copy(disabled = stored.disabled.toMutableSet().also { if (!it.add(id)) it.remove(id) }),
+        )
         mutable.update { s -> s.copy(targets = s.targets.map { if (it.id == id) it.copy(enabled = !it.enabled) else it }) }
     }
 
@@ -214,8 +220,9 @@ class BuildMatrixController(
         job = scope.launch {
             try {
                 val workspace = withContext(Dispatchers.IO) { workspaceFor(project.id) }
-                for (target in selected) {
-                    mutable.update { it.copy(statuses = it.statuses + (target.id to TargetStatus.RUNNING), log = appendLog(it.log, "\n▶ ${target.name}\n")) }
+                for (step in withContext(Dispatchers.IO) { withGradleBatched(workspace, selected) }) {
+                    val target = step.target
+                    mutable.update { s -> s.copy(statuses = s.statuses + step.ids.associateWith { TargetStatus.RUNNING }, log = appendLog(s.log, "\n▶ ${target.name}\n")) }
                     val result = runCatching {
                         runner.run(workspace, project.slug, target.command, timeoutMillis = 45 * 60_000L) { chunk ->
                             mutable.update { it.copy(log = appendLog(it.log, chunk)) }
@@ -230,7 +237,7 @@ class BuildMatrixController(
                         ok -> "✓ ${target.name}\n"
                         else -> "✕ ${target.name} (exit ${result.getOrNull()?.exitCode})\n"
                     }
-                    mutable.update { it.copy(statuses = it.statuses + (target.id to if (ok) TargetStatus.OK else TargetStatus.FAILED), log = appendLog(it.log, note)) }
+                    mutable.update { s -> s.copy(statuses = s.statuses + step.ids.associateWith { if (ok) TargetStatus.OK else TargetStatus.FAILED }, log = appendLog(s.log, note)) }
                 }
             } catch (cancelled: CancellationException) {
                 mutable.update { it.copy(log = appendLog(it.log, "\n■ stopped\n")) }
@@ -247,18 +254,23 @@ class BuildMatrixController(
     }
 
     private data class StoredTarget(val id: String, val name: String, val command: String)
-    private data class Stored(val custom: List<StoredTarget>, val disabled: Set<String>)
+    /** [optIn]: the [OPT_IN_TARGETS] the user switched on; every other target is on unless it is in [disabled]. */
+    private data class Stored(val custom: List<StoredTarget>, val disabled: Set<String>, val optIn: Set<String> = emptySet()) {
+        fun isEnabled(id: String) = if (id in OPT_IN_TARGETS) id in optIn else id !in disabled
+    }
 
     private fun readStored(projectId: String): Stored = runCatching {
         val json = JSONObject(prefs.getString(prefKey(projectId), "{}") ?: "{}")
         val custom = json.optJSONArray("custom") ?: JSONArray()
         val disabled = json.optJSONArray("disabled") ?: JSONArray()
+        val optIn = json.optJSONArray("optIn") ?: JSONArray()
         Stored(
             custom = (0 until custom.length()).mapNotNull { i ->
                 custom.optJSONObject(i)?.let { StoredTarget(it.optString("id"), it.optString("name"), it.optString("command")) }
                     ?.takeIf { it.id.isNotBlank() && it.command.isNotBlank() }
             },
             disabled = (0 until disabled.length()).map { disabled.optString(it) }.toSet(),
+            optIn = (0 until optIn.length()).map { optIn.optString(it) }.toSet(),
         )
     }.getOrDefault(Stored(emptyList(), emptySet()))
 
@@ -266,6 +278,7 @@ class BuildMatrixController(
         val json = JSONObject()
             .put("custom", JSONArray(stored.custom.map { JSONObject().put("id", it.id).put("name", it.name).put("command", it.command) }))
             .put("disabled", JSONArray(stored.disabled.toList()))
+            .put("optIn", JSONArray(stored.optIn.toList()))
         prefs.edit().putString(prefKey(projectId), json.toString()).apply()
     }
 
@@ -273,5 +286,33 @@ class BuildMatrixController(
 
     private companion object {
         const val MAX_LOG_CHARS = 80_000
+    }
+}
+
+/** One run of the matrix: a target, or several Gradle targets merged into it ([ids] all get its result). */
+internal data class MatrixStep(val target: BuildTarget, val ids: List<String>)
+
+/**
+ * The selected targets in run order, with the detected Gradle tasks (except clean, which must run alone) merged into
+ * one Gradle invocation at the place of the first: Gradle start-up and configuration take minutes on a phone, so
+ * paying them once instead of once per task is most of the time saved.
+ */
+internal fun withGradleBatched(workspace: File, selected: List<BuildTarget>): List<MatrixStep> {
+    val gradle = selected.filter { it.detected && it.id.startsWith("gradle:") && it.id != "gradle:clean" }
+    val root = if (gradle.size < 2) null else findAndroidProjectRoot(workspace)
+    if (root == null) return selected.map { MatrixStep(it, listOf(it.id)) }
+    val relative = root.relativeTo(workspace).invariantSeparatorsPath
+    val tasks = gradle.joinToString(" ") { it.id.removePrefix("gradle:") }
+    val command = androidGradleCommand(root, tasks).let { if (relative.isEmpty()) it else "cd ${ChrootRunner.quote(relative)} && $it" }
+    val merged = MatrixStep(
+        BuildTarget(gradle.first().id, gradle.joinToString(" + ") { it.name }, command, detected = true, enabled = true),
+        gradle.map { it.id },
+    )
+    return selected.mapNotNull { target ->
+        when {
+            target == gradle.first() -> merged
+            target in gradle -> null
+            else -> MatrixStep(target, listOf(target.id))
+        }
     }
 }
