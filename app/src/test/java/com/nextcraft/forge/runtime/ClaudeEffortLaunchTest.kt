@@ -61,7 +61,13 @@ class ClaudeEffortLaunchTest {
 
             assertTrue(agentsMd.isFile)
             assertTrue(hooksJson.isFile)
+            assertTrue(hooksJson.readText().contains("run_command|write_file|edit_file"))
             assertTrue(securityGate.isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/scripts/session_search.py").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/scripts/context_compressor.py").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/scripts/skill_hub.py").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/scripts/hermes_init.py").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/scripts/web_and_ui_tool.py").isFile)
             assertTrue(userMd.isFile)
             assertTrue(memoryMd.isFile)
             assertTrue(skillCreator.isFile)
