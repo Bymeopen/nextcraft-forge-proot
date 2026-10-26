@@ -287,8 +287,39 @@ class AntigravityRuntimeBridge(
         }, "forge-agy-orphan-reaper").apply { isDaemon = true }.start()
     }
 
+    /**
+     * Adjusts CPU core affinity (`taskset`) and low-power DSP/NPU (`remoteproc`) state for warm standby vs active turns:
+     * - When [standby] is true (turn finished, warm `agy` waiting for next message): pins `agy` to Efficiency Cores
+     *   (`0x0f` = `cpu0`..`cpu3`) and ensures CDSP/NPU power control is set to `auto` so Gold/Prime cores sleep.
+     * - When [standby] is false (new turn begins): restores full 8-core affinity (`0xff` = `cpu0`..`cpu7`) immediately
+     *   so tool execution and streaming never lag.
+     */
+    private fun setStandbyPowerProfile(standby: Boolean) {
+        Thread({
+            runCatching {
+                val mask = if (standby) "0f" else "ff"
+                val script = buildString {
+                    append("for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do ")
+                    append("taskset -ap $mask \$p >/dev/null 2>&1 || true; ")
+                    append("done; ")
+                    if (standby) {
+                        append("for r in /sys/class/remoteproc/remoteproc*/power/control; do [ -w \"\$r\" ] && echo auto > \"\$r\" 2>/dev/null || true; done; ")
+                    }
+                    append("true")
+                }
+                val argv = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", script) else listOf("/system/bin/sh", "-c", script)
+                val proc = ProcessBuilder(argv)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
+                    .start()
+                if (!proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) proc.destroyForcibly()
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+        }, "forge-agy-standby-power").apply { isDaemon = true }.start()
+    }
+
     /** An idle warm agy holds memory in the chroot; let it go after a while without messages. */
     private fun scheduleWarmExpiry(entry: WarmAgy) {
+        setStandbyPowerProfile(standby = true)
         val generation = ++warmGeneration
         Thread {
             runCatching { Thread.sleep(WARM_IDLE_MS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
@@ -496,6 +527,7 @@ class AntigravityRuntimeBridge(
             val process: Process
             val tailer: InotifyLogTailer
             if (reuse != null) {
+                setStandbyPowerProfile(standby = false)
                 process = reuse.process
                 tailer = reuse.tailer
                 spawnedOutputFile = reuse.outputFile
