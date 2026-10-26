@@ -37,7 +37,8 @@ data class AntigravityAuthState(
 
 internal sealed interface AntigravityParsedEvent {
     data class Initialized(val conversationId: String) : AntigravityParsedEvent
-    data class Text(val value: String) : AntigravityParsedEvent
+    data class Text(val value: String, val done: Boolean = false) : AntigravityParsedEvent
+    data object ResponseDone : AntigravityParsedEvent
     data class ToolStarted(val name: String, val detail: String) : AntigravityParsedEvent
     data class ToolCompleted(val name: String, val detail: String) : AntigravityParsedEvent
     data class Result(
@@ -57,16 +58,25 @@ internal object AntigravityEventParser {
                 ?.let(AntigravityParsedEvent::Initialized)
             "step_update" -> {
                 val step = root.optJSONObject("step_update") ?: return null
-                val delta = step.stringOrEmpty("text_delta")
-                if (delta.isNotEmpty()) return AntigravityParsedEvent.Text(delta)
+                val state = step.stringOrEmpty("state")
                 val type = step.stringOrEmpty("step_type")
+                val delta = step.stringOrEmpty("text_delta")
+                if (delta.isNotEmpty()) {
+                    return AntigravityParsedEvent.Text(
+                        value = delta,
+                        done = type.equals("agent_response", true) && state == "DONE",
+                    )
+                }
+                if (type.equals("agent_response", true) && state == "DONE") {
+                    return AntigravityParsedEvent.ResponseDone
+                }
                 if (type.contains("tool", true) || type.contains("command", true)) {
                     val rawName = step.stringOrEmpty("tool_name").ifBlank {
                         step.optJSONObject("tool_info")?.stringOrEmpty("name").orEmpty()
                     }.ifBlank { type.ifBlank { "Tool" } }
                     val name = antigravityToolDisplayName(rawName)
                     val detail = antigravityToolDetail(step, rawName).ifBlank { name }
-                    if (step.stringOrEmpty("state") in setOf("DONE", "ERROR")) {
+                    if (state in setOf("DONE", "ERROR")) {
                         val output = step.optJSONObject("tool_info")
                             ?.stringOrEmpty("output")
                             ?.takeIf(String::isNotBlank)
@@ -525,6 +535,7 @@ class AntigravityRuntimeBridge(
             var lastDiagnostic = ""
             var resultSeen = false
             var assistantTextSeen = false
+            var lastAgentResponseDone = false
             var activeToolName: String? = null
             var activeToolDetail = ""
             var activeToolStartedAtMillis = 0L
@@ -541,10 +552,15 @@ class AntigravityRuntimeBridge(
                     is AntigravityParsedEvent.Initialized -> remember(event.conversationId)
                     is AntigravityParsedEvent.Text -> {
                         assistantTextSeen = true
+                        lastAgentResponseDone = event.done
                         pushForegroundProgress("Antigravity is working…")
                         eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, event.value))
                     }
+                    is AntigravityParsedEvent.ResponseDone -> {
+                        if (assistantTextSeen) lastAgentResponseDone = true
+                    }
                     is AntigravityParsedEvent.ToolStarted -> {
+                        lastAgentResponseDone = false
                         activeToolName = event.name
                         activeToolDetail = event.detail
                         activeToolStartedAtMillis = System.currentTimeMillis()
@@ -559,7 +575,8 @@ class AntigravityRuntimeBridge(
                     }
                     is AntigravityParsedEvent.Result -> {
                         event.conversationId?.let(::remember)
-                        if (event.status.equals("SUCCESS", ignoreCase = true)) {
+                        val completedBeforeDisconnect = assistantTextSeen && lastAgentResponseDone && activeToolName == null
+                        if (event.status.equals("SUCCESS", ignoreCase = true) || completedBeforeDisconnect) {
                             if (!assistantTextSeen && !event.response.isNullOrBlank()) {
                                 assistantTextSeen = true
                                 eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, event.response))
@@ -649,6 +666,10 @@ class AntigravityRuntimeBridge(
                 keptWarm = true
                 scheduleWarmExpiry(entry)
             } else if (resultSeen) {
+                stopAfterTerminalResult(process)
+            } else if (assistantTextSeen && lastAgentResponseDone && activeToolName == null) {
+                // agy finished streaming the final agent_response (state=DONE) before the connection or process dropped.
+                resultSeen = true
                 stopAfterTerminalResult(process)
             } else {
                 val exit = process.waitFor()

@@ -2453,7 +2453,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * message is shown with "Try again" as before.
      */
     private fun tryAutoRetry(run: ChatRun, reason: String): Boolean {
-        if (!isTransientAgentFailure(reason) || !autoRetriedPrompts.add(run.lastPrompt.id)) return false
+        if (!isTransientAgentFailure(reason)) return false
+        // Never restart from 0s when the agent already delivered a substantial answer or completed its tool work.
+        if (run.hasSubstantialReplyOrCompletedWork()) return false
+        if (!autoRetriedPrompts.add(run.lastPrompt.id)) return false
         val project = _state.value.projects.firstOrNull { it.id == run.projectId } ?: return false
         appendAssistantText(run, "\n\n[" + reason + "]\n" + str(R.string.agent_auto_retry_notice))
         finishRun(run)
@@ -2473,6 +2476,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun tryFailover(run: ChatRun, reason: String): Boolean {
         if (!AgentRouter.failsOver(_state.value.routing.mode)) return false
+        if (run.hasSubstantialReplyOrCompletedWork()) return false
         val tried = run.tried + run.agent
         val next = routeFor(run.lastPrompt.text, tried) ?: return false
         val project = _state.value.projects.firstOrNull { it.id == run.projectId } ?: return false

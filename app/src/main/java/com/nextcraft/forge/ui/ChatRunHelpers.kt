@@ -72,4 +72,18 @@ internal class ChatRun(
     var steering: Boolean = false
     /** The agent changed project files this turn: the local build check has something to verify. */
     var changedFiles: Boolean = false
+    /** True once the assistant has streamed reply text in this turn. */
+    var assistantReplied: Boolean = false
+
+    /**
+     * Whether this turn already produced a substantial reply or completed all tool work without any tool left hanging,
+     * so an end-of-turn disconnect must not auto-retry the entire prompt from 0s.
+     */
+    fun hasSubstantialReplyOrCompletedWork(): Boolean {
+        val lastAssistant = messages.lastOrNull { !it.fromUser }
+        val textLen = (lastAssistant?.text?.length ?: 0) + pendingText.length
+        val items = lastAssistant?.workItems.orEmpty()
+        val hasRunningTool = pendingTool != null || items.any { !it.isComplete }
+        return !hasRunningTool && (textLen >= 160 || (textLen > 0 && items.isNotEmpty()) || changedFiles)
+    }
 }

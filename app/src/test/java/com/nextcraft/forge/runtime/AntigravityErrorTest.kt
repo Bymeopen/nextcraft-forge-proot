@@ -62,4 +62,22 @@ class AntigravityErrorTest {
         val log = "E1020 11:38:17.780000 121 errorreport.go:224] error getting token source: You are not logged into Antigravity."
         assertTrue(antigravityFriendlyError("agy exited with code 1", log).contains("sign-in"))
     }
+
+    @Test
+    fun eventParser_recognizesFinalAgentResponseCompletion() {
+        val activeLine = """{"event":"step_update","step_update":{"step_index":10,"state":"ACTIVE","step_type":"agent_response","text_delta":"Halo "}}"""
+        val doneWithDelta = """{"event":"step_update","step_update":{"step_index":10,"state":"DONE","step_type":"agent_response","text_delta":"dunia"}}"""
+        val doneNoDelta = """{"event":"step_update","step_update":{"step_index":10,"state":"DONE","step_type":"agent_response"}}"""
+
+        val ev1 = AntigravityEventParser.parse(activeLine) as AntigravityParsedEvent.Text
+        assertEquals("Halo ", ev1.value)
+        assertEquals(false, ev1.done)
+
+        val ev2 = AntigravityEventParser.parse(doneWithDelta) as AntigravityParsedEvent.Text
+        assertEquals("dunia", ev2.value)
+        assertEquals(true, ev2.done)
+
+        val ev3 = AntigravityEventParser.parse(doneNoDelta)
+        assertTrue(ev3 is AntigravityParsedEvent.ResponseDone)
+    }
 }
