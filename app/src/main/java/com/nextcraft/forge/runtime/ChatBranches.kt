@@ -124,7 +124,9 @@ class ChatBranches(context: Context) {
         name: String,
         onWaitingForLock: (() -> Unit)? = null,
     ): RepoOpResult = withContext(Dispatchers.IO) {
-        parseRepoOp(gitProject(project, SWITCH_BRANCH_SCRIPT, "NAME" to name, onWaitingForLock = onWaitingForLock))
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("-")) return@withContext RepoOpResult.Failed("Invalid branch name")
+        parseRepoOp(gitProject(project, SWITCH_BRANCH_SCRIPT, "NAME" to trimmed, onWaitingForLock = onWaitingForLock))
     }
 
     /** Safe delete (`git branch -d`): refuses a branch with commits that are not merged. */
@@ -133,7 +135,9 @@ class ChatBranches(context: Context) {
         name: String,
         onWaitingForLock: (() -> Unit)? = null,
     ): RepoOpResult = withContext(Dispatchers.IO) {
-        parseRepoOp(gitProject(project, DELETE_BRANCH_SCRIPT, "NAME" to name, onWaitingForLock = onWaitingForLock))
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("-")) return@withContext RepoOpResult.Failed("Invalid branch name")
+        parseRepoOp(gitProject(project, DELETE_BRANCH_SCRIPT, "NAME" to trimmed, onWaitingForLock = onWaitingForLock))
     }
 
     /** Commits the branch now with the user's own message (the turn commit uses the prompt's first line). */
@@ -478,14 +482,16 @@ class ChatBranches(context: Context) {
         /** Switching with uncommitted changes could carry or lose them; the user commits first. */
         private val SWITCH_BRANCH_SCRIPT = script("""
             cd "§M"
+            if ! G check-ref-format --branch "§NAME" >/dev/null 2>&1; then echo "msg=Invalid branch name"; exit 0; fi
             if [ -n "§(G status --porcelain)" ]; then echo RESULT=dirty; exit 0; fi
-            G checkout -q "§NAME" && echo RESULT=ok
+            G checkout -q "§NAME" -- && echo RESULT=ok
         """)
 
         private val DELETE_BRANCH_SCRIPT = script("""
             cd "§M"
+            if ! G check-ref-format --branch "§NAME" >/dev/null 2>&1; then echo "msg=Invalid branch name"; exit 0; fi
             if [ "§(G rev-parse --abbrev-ref HEAD)" = "§NAME" ]; then echo "msg=Switch to another branch first"; exit 0; fi
-            if OUT="§(G branch -d "§NAME" 2>&1)"; then echo RESULT=ok; else echo "msg=§(echo "§OUT" | tail -n 1)"; fi
+            if OUT="§(G branch -d -- "§NAME" 2>&1)"; then echo RESULT=ok; else echo "msg=§(echo "§OUT" | tail -n 1)"; fi
         """)
 
         private val COMMIT_PROJECT_SCRIPT = script("""
