@@ -111,6 +111,7 @@ class DshRuntimeBridge(
             check(installer.isAgentInstalled(AgentKind.DEEPSEEK_HARNESS)) {
                 "DeepSeek is not installed. Open Settings → Coding agent to install it."
             }
+            installer.ensureSettingsAndHooks()
             installer.ensureDshAndroidCompatibility()
             val workspace = checkpoints.ensureWorkspace(projectId)
             checkpoints.createCheckpoint(projectId, workspace)
@@ -445,10 +446,17 @@ class DshRuntimeBridge(
                 appendLine("        - id: ${yamlQuote(provider.model.ifBlank { route.defaultModel })}")
             }
         }
+        val mcpPatchYaml = ForgeMcpServer.toDshCordisPatchYaml(
+            runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull(),
+        )
         File(home, "settings.yaml").writeText(body)
+        File(home, "cordis.patch.yml").writeText(mcpPatchYaml)
         if (guestHomePath != DSH_HOME_GUEST_PATH) {
             val defaultHome = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
-            runCatching { File(defaultHome, "settings.yaml").writeText(body) }
+            runCatching {
+                File(defaultHome, "settings.yaml").writeText(body)
+                File(defaultHome, "cordis.patch.yml").writeText(mcpPatchYaml)
+            }
         }
         return home
     }

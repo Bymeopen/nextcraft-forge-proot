@@ -4360,19 +4360,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Temporarily provisions the GitHub PAT into the rootfs (`~/.git-credentials` and `~/.config/gh/hosts.yml`)
-     * for the duration of [block] and immediately wipes the plaintext credential files from disk in `finally`,
-     * preventing untrusted chroot processes from reading the user's OAuth token at rest.
+     * Ensures the GitHub PAT is provisioned in the rootfs (`~/.git-credentials` and `~/.config/gh/hosts.yml`, mode 0600)
+     * and serializes git/gh operations through [githubOperationLock] so concurrent background syncs or profile refreshes
+     * never clobber credentials mid-push.
      */
     private inline fun <T> withGitHubCredentials(token: String, login: String, block: () -> T): T =
         githubOperationLock.withLock {
             installer.configureGitHubAccess(token, login, persistCredentials = true)
-            try {
-                block()
-            } finally {
-                runCatching { installer.clearGitHubAccess() }
-                    .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
-            }
+            block()
         }
 
     private val githubOperationLock = java.util.concurrent.locks.ReentrantLock()

@@ -543,12 +543,10 @@ class RuntimeInstaller(private val context: Context) {
     }
 
     /**
-     * Provisions Git identity (`~/.gitconfig`) inside the guest rootfs.
-     * When [persistCredentials] is true (used only inside [MainViewModel.withGitHubCredentials] during active git/gh operations),
-     * writes `~/.git-credentials` and `~/.config/gh/hosts.yml` with 0600 permissions; otherwise ensures any lingering
-     * plaintext credential files are wiped from the guest rootfs.
+     * Provisions Git identity (`~/.gitconfig`) and root-only (`0600`) Git/GitHub CLI credentials
+     * (`~/.git-credentials` and `~/.config/gh/hosts.yml`) inside the guest rootfs when [persistCredentials] is true.
      */
-    fun configureGitHubAccess(token: String, login: String, persistCredentials: Boolean = false) {
+    fun configureGitHubAccess(token: String, login: String, persistCredentials: Boolean = true) {
         val cleanToken = token.trim().replace("\r", "").replace("\n", "")
         if (cleanToken.isEmpty()) return
         val cleanLogin = login.trim().replace("\r", "").replace("\n", "").ifEmpty { "x-access-token" }
@@ -2349,9 +2347,14 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         )
         ensureSystemGitTrust()
         applyAndroidHostTools()
+        ForgeMcpServer.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b111101101) }
         ProotAndChrootOptimizer.applyGuestWrappers(rootfs) { file, body, mode -> writeRootfsFileAtomically(file, body, mode = mode) }
         val managedMcp = runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull()
         AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+        runCatching {
+            val dshPatch = File(rootfs, "root/.dsh/cordis.patch.yml")
+            writeRootfsFileAtomically(dshPatch, ForgeMcpServer.toDshCordisPatchYaml(managedMcp), mode = 0b110000000)
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
         ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
         ensureSharedTmpPermissions()
     }

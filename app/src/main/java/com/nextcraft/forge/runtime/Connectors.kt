@@ -38,6 +38,11 @@ data class McpConnector(
         /** Open-source MCP server presets ready for 1-tap configuration. */
         val OPEN_SOURCE_PRESETS: List<McpPreset> = listOf(
             McpPreset(
+                name = "Forge Design & Android",
+                transport = McpTransport.COMMAND,
+                target = "python3 ${ForgeMcpServer.FORGE_MCP_GUEST_PATH}",
+            ),
+            McpPreset(
                 name = "Context7",
                 transport = McpTransport.HTTP,
                 target = "https://mcp.context7.com/mcp",
@@ -49,21 +54,62 @@ data class McpConnector(
                 secretName = "FIGMA_API_KEY",
             ),
             McpPreset(
+                name = "TalkToFigma",
+                transport = McpTransport.COMMAND,
+                target = "npx -y cursor-talk-to-figma-mcp@latest",
+            ),
+            McpPreset(
+                name = "shadcn/ui",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @jpisnice/shadcn-ui-mcp-server",
+            ),
+            McpPreset(
+                name = "Magic UI",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @magicuidesign/mcp@latest",
+            ),
+            McpPreset(
+                name = "Mermaid",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @ustccjw/mcp-mermaid",
+            ),
+            McpPreset(
+                name = "Excalidraw",
+                transport = McpTransport.COMMAND,
+                target = "npx -y mcp-excalidraw",
+            ),
+            McpPreset(
+                name = "Playwright",
+                transport = McpTransport.COMMAND,
+                target = ForgeMcpServer.PLAYWRIGHT_WRAPPER_GUEST_PATH,
+            ),
+            McpPreset(
+                name = "Mobile MCP",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @mobilenext/mobile-mcp@latest",
+            ),
+            McpPreset(
                 name = "GitHub",
                 transport = McpTransport.COMMAND,
                 target = "npx -y @modelcontextprotocol/server-github",
                 secretName = "GITHUB_PERSONAL_ACCESS_TOKEN",
             ),
             McpPreset(
+                name = "SQLite",
+                transport = McpTransport.COMMAND,
+                target = "uvx mcp-server-sqlite --db-path /workspace/app.db",
+            ),
+            McpPreset(
+                name = "PostgreSQL",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @modelcontextprotocol/server-postgres",
+                secretName = "POSTGRES_URL",
+            ),
+            McpPreset(
                 name = "Supabase",
                 transport = McpTransport.COMMAND,
                 target = "npx -y @supabase/mcp-server-supabase@latest",
                 secretName = "SUPABASE_ACCESS_TOKEN",
-            ),
-            McpPreset(
-                name = "Playwright",
-                transport = McpTransport.COMMAND,
-                target = "npx -y @playwright/mcp@latest --headless",
             ),
             McpPreset(
                 name = "Sequential Thinking",
@@ -79,6 +125,26 @@ data class McpConnector(
                 name = "Fetch Web",
                 transport = McpTransport.COMMAND,
                 target = "uvx mcp-server-fetch",
+            ),
+            McpPreset(
+                name = "Desktop Commander",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @wonderwhy-er/desktop-mcp-server",
+            ),
+            McpPreset(
+                name = "Godot Game",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @coding-solo/godot-mcp",
+            ),
+            McpPreset(
+                name = "Unity Game",
+                transport = McpTransport.COMMAND,
+                target = "uvx --from mcp-for-unity mcp-for-unity",
+            ),
+            McpPreset(
+                name = "Blender 3D",
+                transport = McpTransport.COMMAND,
+                target = "uvx blender-mcp",
             ),
         )
     }

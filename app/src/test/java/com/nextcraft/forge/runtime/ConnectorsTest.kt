@@ -32,15 +32,30 @@ class ConnectorsTest {
     @Test
     fun openSourcePresetsAndAntigravityMcpSync() {
         val presets = McpConnector.OPEN_SOURCE_PRESETS
+        assertTrue(presets.any { it.name == "Forge Design & Android" && it.target.contains(ForgeMcpServer.FORGE_MCP_GUEST_PATH) })
         assertTrue(presets.any { it.name == "Figma" && it.secretName == "FIGMA_API_KEY" })
+        assertTrue(presets.any { it.name == "shadcn/ui" })
+        assertTrue(presets.any { it.name == "Magic UI" })
+        assertTrue(presets.any { it.name == "Playwright" && it.target == ForgeMcpServer.PLAYWRIGHT_WRAPPER_GUEST_PATH })
+        assertTrue(presets.any { it.name == "Godot Game" })
+        assertTrue(presets.any { it.name == "Unity Game" })
+        assertTrue(presets.any { it.name == "Blender 3D" })
         assertTrue(presets.any { it.name == "Context7" && it.transport == McpTransport.HTTP })
         assertTrue(presets.all { McpNames.id(it.name) != null })
         assertTrue(presets.filter { it.secretName.isNotEmpty() }.all { McpNames.isEnvName(it.secretName) })
 
         val tempRootfs = java.nio.file.Files.createTempDirectory("mcp-sync-test").toFile()
         try {
+            ForgeMcpServer.apply(tempRootfs) { file, body ->
+                file.parentFile?.mkdirs()
+                file.writeText(body)
+            }
+            assertTrue(java.io.File(tempRootfs, "opt/nextcraft/bin/forge-mcp-server.py").isFile)
+            assertTrue(java.io.File(tempRootfs, "opt/nextcraft/bin/forge-playwright-mcp").isFile)
+
             val managed = org.json.JSONObject()
-                .put("forge-figma", org.json.JSONObject().put("type", "stdio").put("command", "npx"))
+                .put("forge-figma", org.json.JSONObject().put("type", "stdio").put("command", "npx").put("args", org.json.JSONArray().put("-y").put("figma-developer-mcp")))
+                .put("forge-context7", org.json.JSONObject().put("type", "http").put("url", "https://mcp.context7.com/mcp"))
             AntigravityCustomizations.apply(tempRootfs, "/workspace/demo", managed) { file, body ->
                 file.parentFile?.mkdirs()
                 file.writeText(body)
@@ -49,6 +64,12 @@ class ConnectorsTest {
             assertTrue(mcpFile.isFile)
             val parsed = org.json.JSONObject(mcpFile.readText()).getJSONObject("mcpServers")
             assertEquals("npx", parsed.getJSONObject("forge-figma").getString("command"))
+
+            val dshYaml = ForgeMcpServer.toDshCordisPatchYaml(managed)
+            assertTrue(dshYaml.contains("name: '@deepseek-ai/dsh-mcp-client'"))
+            assertTrue(dshYaml.contains("serverName: 'forge-figma'"))
+            assertTrue(dshYaml.contains("transport: streamable-http"))
+            assertTrue(dshYaml.contains("url: 'https://mcp.context7.com/mcp'"))
         } finally {
             tempRootfs.deleteRecursively()
         }
