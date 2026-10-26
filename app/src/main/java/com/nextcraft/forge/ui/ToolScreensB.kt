@@ -205,7 +205,14 @@ fun SshScreen(viewModel: MainViewModel) {
                             OutlinedButton(shape = RoundedCornerShape(100), onClick = { viewModel.ssh.startTunnel(host) }, enabled = ssh.clientInstalled == true) { Text(stringResource(R.string.tool_ssh_start_tunnel)) }
                         }
                     }
-                    ForgeTextButton(onClick = { viewModel.ssh.removeHost(host.id) }) { Text(stringResource(R.string.tool_delete)) }
+                    ConfirmedAction(
+                        title = stringResource(R.string.tool_delete),
+                        message = "${host.alias} (${host.user}@${host.host}:${host.port})",
+                        confirmLabel = stringResource(R.string.tool_delete),
+                        onConfirm = { viewModel.ssh.removeHost(host.id) },
+                    ) { onClick ->
+                        ForgeTextButton(onClick = onClick) { Text(stringResource(R.string.tool_delete)) }
+                    }
                 }
             }
         }
@@ -335,12 +342,19 @@ fun CiCdScreen(viewModel: MainViewModel) {
                             Text(prHeader, fontSize = ForgeType.rowTitle, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(prBranches, fontSize = ForgeType.caption, fontFamily = FontFamily.Monospace, color = scheme.onSurfaceVariant)
                         }
-                        OutlinedButton(
-                            shape = RoundedCornerShape(100),
-                            onClick = { viewModel.cicd.mergePullRequest(pr.number) },
-                            enabled = !ci.loading,
-                        ) {
-                            Text(stringResource(R.string.repo_pr_merge))
+                        ConfirmedAction(
+                            title = stringResource(R.string.repo_pr_merge),
+                            message = "#${pr.number} · ${pr.title} (${pr.headBranch} → ${pr.baseBranch})",
+                            confirmLabel = stringResource(R.string.repo_pr_merge),
+                            onConfirm = { viewModel.cicd.mergePullRequest(pr.number) },
+                        ) { onClick ->
+                            OutlinedButton(
+                                shape = RoundedCornerShape(100),
+                                onClick = onClick,
+                                enabled = !ci.loading,
+                            ) {
+                                Text(stringResource(R.string.repo_pr_merge))
+                            }
                         }
                         ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pr.url))) } }) {
                             Text(stringResource(R.string.tool_open))

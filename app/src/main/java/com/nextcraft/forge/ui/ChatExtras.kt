@@ -1,4 +1,8 @@
-@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(
+    ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
 
 package com.nextcraft.forge.ui
 
@@ -9,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -202,12 +207,19 @@ internal fun ChangedFilesCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(
-                    onClick = onRevertAll,
-                    enabled = enabled,
-                    shape = RoundedCornerShape(100),
-                    modifier = Modifier.weight(1f).heightIn(min = ForgeSpace.minTouch + 4.dp),
-                ) { Text(stringResource(R.string.chat_revert_all), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                ConfirmedAction(
+                    title = stringResource(R.string.chat_revert_all),
+                    message = quantityStringResource(R.plurals.chat_files_changed, changes.size, changes.size),
+                    confirmLabel = stringResource(R.string.chat_revert_all),
+                    onConfirm = onRevertAll,
+                ) { onClick ->
+                    OutlinedButton(
+                        onClick = onClick,
+                        enabled = enabled,
+                        shape = RoundedCornerShape(100),
+                        modifier = Modifier.weight(1f).heightIn(min = ForgeSpace.minTouch + 4.dp),
+                    ) { Text(stringResource(R.string.chat_revert_all), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
                 Button(
                     onClick = onKeepAll,
                     enabled = enabled,
@@ -259,18 +271,19 @@ private fun ChangedFileRow(
     onRevertHunk: ((String, Int) -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
+    var confirmRevert by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
     val name = change.path.substringAfterLast('/')
     val dir = change.path.substringBeforeLast('/', "")
-    // Swipe right keeps the file, left reverts it (the revert has its own Undo snackbar). Only while the row is collapsed:
-    // an open diff scrolls sideways and would fight the swipe.
+    // Swipe right keeps the file, left asks before reverting it so diagonal scroll gestures never lose changes.
+    // Only while the row is collapsed: an open diff scrolls sideways and would fight the swipe.
     val haptics = LocalHapticFeedback.current
     val swipe = androidx.compose.material3.rememberSwipeToDismissBoxState(
         confirmValueChange = { target ->
             when (target) {
                 androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onKeepFile(change.path) }
-                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onRevertFile(change.path) }
+                androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); confirmRevert = true }
                 else -> Unit
             }
             false // the list drops the row itself once the change is resolved; if it is not, the row springs back
@@ -342,7 +355,7 @@ private fun ChangedFileRow(
                     TextButton(onClick = { onOpenFile(change.path) }, modifier = actionHeight) { Text(stringResource(R.string.chat_open_in_files), maxLines = 1) }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { onRevertFile(change.path) }, enabled = enabled, modifier = actionHeight) {
+                    TextButton(onClick = { confirmRevert = true }, enabled = enabled, modifier = actionHeight) {
                         Text(stringResource(R.string.chat_revert), color = tokens.dangerText, maxLines = 1)
                     }
                     Spacer(modifier = Modifier.weight(1f))
@@ -353,6 +366,21 @@ private fun ChangedFileRow(
             }
         }
     }
+    }
+    if (confirmRevert) {
+        ForgeAlertDialog(
+            onDismissRequest = { confirmRevert = false },
+            title = { Text(stringResource(R.string.files_revert_file), fontWeight = FontWeight.SemiBold) },
+            text = { Text(change.path) },
+            confirmButton = {
+                ForgeTextButton(onClick = { confirmRevert = false; onRevertFile(change.path) }) {
+                    Text(stringResource(R.string.chat_revert), color = tokens.dangerText)
+                }
+            },
+            dismissButton = {
+                ForgeTextButton(onClick = { confirmRevert = false }) { Text(stringResource(R.string.agent_cancel)) }
+            },
+        )
     }
 }
 
@@ -635,67 +663,73 @@ internal fun ChatComposer(
             ),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Attach: photos or any file; it lands in attachments/ inside the workspace.
-            Box {
-                IconButton(onClick = { attachMenuOpen = true }) {
-                    ForgeIcon(glyph = ForgeGlyph.PLUS, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 22.dp, description = stringResource(R.string.agent_attach))
-                }
-                DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.agent_attach_camera)) },
-                        onClick = { attachMenuOpen = false; onAttachCamera() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.agent_attach_file)) },
-                        onClick = { attachMenuOpen = false; onAttachFile() },
-                    )
-                    if (onGenerateImage != null) {
+            // Attach and the chips scroll on their own: long model/route labels must never push the mic and send
+            // buttons past the edge of a narrow phone, which left them off-screen and unreachable.
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Attach: photos or any file; it lands in attachments/ inside the workspace.
+                Box {
+                    IconButton(onClick = { attachMenuOpen = true }) {
+                        ForgeIcon(glyph = ForgeGlyph.PLUS, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 22.dp, description = stringResource(R.string.agent_attach))
+                    }
+                    DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.image_menu)) },
-                            onClick = { attachMenuOpen = false; onGenerateImage() },
+                            text = { Text(stringResource(R.string.agent_attach_camera)) },
+                            onClick = { attachMenuOpen = false; onAttachCamera() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.agent_attach_file)) },
+                            onClick = { attachMenuOpen = false; onAttachFile() },
+                        )
+                        if (onGenerateImage != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.image_menu)) },
+                                onClick = { attachMenuOpen = false; onGenerateImage() },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.capture_menu)) },
+                            enabled = captureEnabled,
+                            onClick = { attachMenuOpen = false; onCapture() },
                         )
                     }
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.capture_menu)) },
-                        enabled = captureEnabled,
-                        onClick = { attachMenuOpen = false; onCapture() },
-                    )
+                }
+                if (onModelChip != null && modelChipLabel.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onModelChip),
+                    ) {
+                        Text(
+                            text = modelChipLabel,
+                            fontSize = ForgeType.secondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 150.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                if (onRouteChip != null && routeChipLabel.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onRouteChip),
+                    ) {
+                        Text(
+                            text = routeChipLabel,
+                            fontSize = ForgeType.secondary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 110.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
                 }
             }
-            if (onModelChip != null && modelChipLabel.isNotBlank()) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                    modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onModelChip),
-                ) {
-                    Text(
-                        text = modelChipLabel,
-                        fontSize = ForgeType.secondary,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 150.dp).padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            }
-            if (onRouteChip != null && routeChipLabel.isNotBlank()) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                    modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onRouteChip),
-                ) {
-                    Text(
-                        text = routeChipLabel,
-                        fontSize = ForgeType.secondary,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 110.dp).padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.weight(1f))
             if (onMic != null) {
                 val reduceMotionMic = rememberReduceMotion()
                 val pulseColor = MaterialTheme.colorScheme.error
@@ -724,12 +758,13 @@ internal fun ChatComposer(
             val haptics = LocalHapticFeedback.current
             val reduceMotion = rememberReduceMotion()
             val sendScale by animateFloatAsState(
-                targetValue = if (running || canSend) 1f else 0.86f,
+                targetValue = if (listening || running || canSend) 1f else 0.86f,
                 animationSpec = if (reduceMotion) snap() else ForgeMotion.springSnappy(),
                 label = "sendScale",
             )
             val sendBg by animateColorAsState(
                 targetValue = when {
+                    listening -> MaterialTheme.colorScheme.error
                     canSend -> MaterialTheme.colorScheme.primary
                     running -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
@@ -744,21 +779,49 @@ internal fun ChatComposer(
                     .size(40.dp)
                     .clip(CircleShape)
                     .background(sendBg)
-                    .clickable(
-                        enabled = running || canSend,
+                    .combinedClickable(
+                        enabled = listening || running || canSend || onMic != null,
                         role = Role.Button,
-                        onClickLabel = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
-                    ) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        // While the agent works, sending queues the message; stop is available when nothing is typed.
-                        if (canSend) onSend() else if (running) onStop()
-                    },
+                        onClickLabel = stringResource(
+                            when {
+                                listening -> R.string.voice_stop
+                                running && !canSend -> R.string.agent_stop
+                                else -> R.string.agent_send
+                            },
+                        ),
+                        onLongClick = onMic?.takeIf { !listening && !running }?.let { mic ->
+                            {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                mic()
+                            }
+                        },
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            // While the agent works, sending queues the message; stop is available when nothing is typed.
+                            when {
+                                listening -> onMic?.invoke()
+                                canSend -> onSend()
+                                running -> onStop()
+                            }
+                        },
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (running && !canSend) Icons.Default.Close else Icons.Default.KeyboardArrowUp,
-                    contentDescription = stringResource(if (running && !canSend) R.string.agent_stop else R.string.agent_send),
+                    imageVector = when {
+                        listening -> Icons.Default.Close
+                        running && !canSend -> Icons.Default.Close
+                        else -> Icons.Default.KeyboardArrowUp
+                    },
+                    contentDescription = stringResource(
+                        when {
+                            listening -> R.string.voice_stop
+                            running && !canSend -> R.string.agent_stop
+                            else -> R.string.agent_send
+                        },
+                    ),
                     tint = when {
+                        listening -> MaterialTheme.colorScheme.onError
                         canSend -> MaterialTheme.colorScheme.onPrimary
                         running -> MaterialTheme.colorScheme.onError
                         else -> MaterialTheme.colorScheme.onSurfaceVariant

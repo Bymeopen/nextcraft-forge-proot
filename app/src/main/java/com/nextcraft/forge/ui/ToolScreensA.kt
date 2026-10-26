@@ -278,7 +278,14 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
                     OutlinedButton(shape = RoundedCornerShape(100), onClick = { pendingRestore = snapshot }, enabled = !snaps.busy && !busy) {
                         Text(stringResource(R.string.tool_restore))
                     }
-                    ForgeTextButton(onClick = { viewModel.snapshots.delete(snapshot) }, enabled = !snaps.busy) { Text(stringResource(R.string.tool_delete)) }
+                    ConfirmedAction(
+                        title = stringResource(R.string.tool_delete),
+                        message = snapshot.label,
+                        confirmLabel = stringResource(R.string.tool_delete),
+                        onConfirm = { viewModel.snapshots.delete(snapshot) },
+                    ) { onClick ->
+                        ForgeTextButton(onClick = onClick, enabled = !snaps.busy) { Text(stringResource(R.string.tool_delete)) }
+                    }
                 }
             }
         }

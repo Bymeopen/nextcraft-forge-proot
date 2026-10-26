@@ -57,6 +57,6 @@ fi
 
 # 3. Sync with GitHub remote origin/main
 if git remote get-url origin >/dev/null 2>&1; then
-    git pull --rebase --autostash origin main
+    git pull --rebase=merges --autostash origin main
     git push -u origin main
 fi

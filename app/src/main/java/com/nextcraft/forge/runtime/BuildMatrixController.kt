@@ -89,6 +89,7 @@ class BuildMatrixController(
     private val activeProject: () -> Project?,
     private val workspaceFor: (String) -> File,
     private val onWorkspaceChanged: (String) -> Unit = {},
+    private val onBuildSucceeded: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -218,6 +219,7 @@ class BuildMatrixController(
         if (snapshot.running || selected.isEmpty()) return
         mutable.update { it.copy(running = true, log = "", statuses = selected.associate { t -> t.id to TargetStatus.PENDING }) }
         job = scope.launch {
+            var allOk = true
             try {
                 val workspace = withContext(Dispatchers.IO) { workspaceFor(project.id) }
                 for (step in withContext(Dispatchers.IO) { withGradleBatched(workspace, selected) }) {
@@ -231,6 +233,7 @@ class BuildMatrixController(
                     // runCatching also swallows cancellation; rethrow so Stop really stops the matrix.
                     result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                     val ok = result.getOrNull()?.ok == true
+                    if (!ok) allOk = false
                     val note = when {
                         result.isFailure -> "✕ ${result.exceptionOrNull()?.message ?: "failed to start"}\n"
                         result.getOrNull()?.timedOut == true -> "✕ timed out\n"
@@ -240,11 +243,13 @@ class BuildMatrixController(
                     mutable.update { s -> s.copy(statuses = s.statuses + step.ids.associateWith { if (ok) TargetStatus.OK else TargetStatus.FAILED }, log = appendLog(s.log, note)) }
                 }
             } catch (cancelled: CancellationException) {
+                allOk = false
                 mutable.update { it.copy(log = appendLog(it.log, "\n■ stopped\n")) }
                 throw cancelled
             } finally {
                 mutable.update { it.copy(running = false) }
                 onWorkspaceChanged(project.id)
+                if (allOk) onBuildSucceeded(project.id)
             }
         }
     }

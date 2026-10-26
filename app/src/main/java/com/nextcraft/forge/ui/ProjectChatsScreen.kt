@@ -150,8 +150,15 @@ fun ProjectChatsScreen(
                         )
                     }
                     if (chats.size > 1) {
-                        IconButton(onClick = { viewModel.deleteChat(chat.id) }, enabled = chat.id !in state.runningChatIds) {
-                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                        ConfirmedAction(
+                            title = stringResource(R.string.agent_delete_chat),
+                            message = chat.displayTitle(),
+                            confirmLabel = stringResource(R.string.tool_delete),
+                            onConfirm = { viewModel.deleteChat(chat.id) },
+                        ) { onClick ->
+                            IconButton(onClick = onClick, enabled = chat.id !in state.runningChatIds) {
+                                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                     Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))

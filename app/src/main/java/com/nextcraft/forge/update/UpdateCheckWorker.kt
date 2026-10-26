@@ -22,12 +22,10 @@ class UpdateCheckWorker(context: Context, params: WorkerParameters) : Worker(con
         return Result.success()
     }
 
-    /** Only while nobody uses the app: no open screen (view model gone), no agent or build running, no mobile data. */
+    /** Only while no agent or build is actively running. */
     private fun canInstallNow(): Boolean {
-        if (com.nextcraft.forge.schedule.ScheduleRuntime.tickerActive) return false
         if (com.nextcraft.forge.runtime.RuntimeTaskController.hasActiveTask()) return false
-        val connectivity = applicationContext.getSystemService(android.net.ConnectivityManager::class.java)
-        return connectivity?.isActiveNetworkMetered == false
+        return true
     }
 
     /** Downloads (verified by [AppUpdater]) and starts the silent install. False means nothing changed. */
@@ -36,13 +34,12 @@ class UpdateCheckWorker(context: Context, params: WorkerParameters) : Worker(con
         com.nextcraft.forge.update.SilentSelfUpdate.install(applicationContext, apk)
     }.getOrDefault(false)
 
-
     companion object {
         private const val WORK_NAME = "app-update-check"
 
-        /** Every 6 hours while the network is up; the same request is kept when scheduled again. */
+        /** Every 15 minutes while the network is up; the same request is kept when scheduled again. */
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(6, TimeUnit.HOURS)
+            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, request)

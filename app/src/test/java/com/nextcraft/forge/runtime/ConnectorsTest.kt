@@ -37,5 +37,16 @@ class ConnectorsTest {
         assertEquals("code-review" to "Use when: reviewing a diff", ClaudeSkillStore.parseFrontmatter(text))
         assertTrue(text.endsWith("Check the tests.\n"))
         assertEquals("plain text" , ClaudeSkillStore.parseFrontmatter(ClaudeSkillStore.render("a", "plain text", "x")).second)
+
+        val tempDir = java.nio.file.Files.createTempDirectory("skills-test").toFile()
+        try {
+            val store = ClaudeSkillStore(tempDir)
+            store.save("../Code Review!", "Safe skill", "Body text")
+            assertTrue(java.io.File(tempDir, "code-review/SKILL.md").isFile)
+            assertEquals("Body text", store.body("../Code Review!"))
+            assertTrue(store.delete("../Code Review!"))
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 }

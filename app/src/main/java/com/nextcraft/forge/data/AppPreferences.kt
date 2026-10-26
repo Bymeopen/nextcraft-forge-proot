@@ -153,9 +153,9 @@ class AppPreferences(private val context: Context) {
         get() = preferences.getBoolean("game_templates_enabled", false)
         set(value) { preferences.edit().putBoolean("game_templates_enabled", value).apply() }
 
-    /** Auto-commit and push the workspace to GitHub after every agent turn. Off by default. */
+    /** Auto-commit and push the workspace to GitHub after every agent turn. On by default. */
     var autoSyncGitHub: Boolean
-        get() = preferences.getBoolean("auto_sync_github", false)
+        get() = preferences.getBoolean("auto_sync_github", true)
         set(value) { preferences.edit().putBoolean("auto_sync_github", value).apply() }
 
     /** Announce new app builds with a notification (checked in the background every few hours). On by default. */

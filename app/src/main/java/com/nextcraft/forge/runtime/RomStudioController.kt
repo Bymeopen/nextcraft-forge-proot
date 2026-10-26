@@ -69,7 +69,9 @@ class RomStudioController(context: Context) {
     fun installRepoTool() = launchStep(
         "Install the repo tool",
         "command -v git >/dev/null && command -v python3 >/dev/null || { echo 'git and python3 are required: install the Web and Python stacks in Toolchains first.'; exit 1; }; " +
-            "curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo && chmod +x /usr/local/bin/repo && repo --version",
+            "curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /tmp/repo.tmp && " +
+            "head -n 1 /tmp/repo.tmp | grep -q '^#!/usr/bin/env python' && " +
+            "install -m 0755 /tmp/repo.tmp /usr/local/bin/repo && rm -f /tmp/repo.tmp && /usr/local/bin/repo --version",
     )
 
     fun init() {

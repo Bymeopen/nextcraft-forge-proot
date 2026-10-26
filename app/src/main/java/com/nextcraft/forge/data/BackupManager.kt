@@ -175,6 +175,14 @@ class BackupManager(private val context: Context) {
                         stagedFile.copyTo(File(destDir, fileName), overwrite = true)
                     }
                 }
+                // Always reset privileged host/approval flags after restoring a backup so an untrusted archive
+                // cannot silently enable root host-bridge execution or unprompted high-risk tool runs.
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("android_host_tools", false)
+                    .putBoolean("auto_approve_all_tools", false)
+                    .putBoolean("interactive_high_risk_approvals", true)
+                    .apply()
             }
             File(staging, SECRETS).takeIf { it.isFile }?.let { secrets ->
                 onProgress("keys")

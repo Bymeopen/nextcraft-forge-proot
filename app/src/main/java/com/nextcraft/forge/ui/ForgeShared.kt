@@ -116,8 +116,9 @@ fun ForgeGlyphPillIcon(
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
+            .forgeMinTouch()
             .forgePressScale(interaction, pressedScale = 0.88f)
-            .size(width = 44.dp, height = 38.dp)
+            .size(width = 48.dp, height = 48.dp)
             .clip(RoundedCornerShape(100))
             .clickable(interactionSource = interaction, indication = ripple(), enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
         contentAlignment = Alignment.Center,

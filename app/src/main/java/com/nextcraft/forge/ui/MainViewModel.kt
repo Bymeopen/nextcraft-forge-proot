@@ -167,11 +167,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val githubAuth = com.nextcraft.forge.runtime.GitHubAuthController(
         scope = viewModelScope,
         api = githubClient.asAccountApi(),
-        saveToken = { vault.put("GITHUB_TOKEN", it) },
-        clearToken = { vault.remove("GITHUB_TOKEN") },
+        saveToken = { token ->
+            vault.put("GITHUB_TOKEN", token)
+            val login = preferences.githubLogin.ifBlank { "x-access-token" }
+            runCatching { installer.configureGitHubAccess(token, login) }
+        },
+        clearToken = {
+            vault.remove("GITHUB_TOKEN")
+            runCatching { installer.clearGitHubAccess() }
+        },
         savedLogin = { preferences.githubLogin },
-        saveLogin = { preferences.githubLogin = it },
-        clearGuestAccess = { installer.clearGitHubAccess() },
+        saveLogin = { login ->
+            preferences.githubLogin = login
+            val token = vault.get("GITHUB_TOKEN").orEmpty()
+            if (token.isNotBlank() && login.isNotBlank()) {
+                runCatching { installer.configureGitHubAccess(token, login) }
+            }
+        },
+        clearGuestAccess = {
+            if (vault.get("GITHUB_TOKEN").isNullOrBlank()) {
+                installer.clearGitHubAccess()
+            }
+        },
         unnamedUserLabel = { str(R.string.msg_gh_user) },
         errorText = ::errText,
     )
@@ -295,6 +312,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         },
+        onBuildSucceeded = { builtProjectId ->
+            if (_state.value.autoSyncGitHub) {
+                syncProjectWithGitHub(builtProjectId, "Auto-sync after build matrix from NextCraft Forge")
+            }
+        },
     )
     val cicd = CiCdController(application, { _state.value.activeProject }, { checkpoints.ensureWorkspace(it) })
     val ssh = SshController(application)
@@ -341,6 +363,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(
         ForgeUiState(
             themeMode = ForgeThemeMode.fromStored(preferences.themeMode).id,
+            glassSolid = preferences.glassSolid,
             languageCode = AppStrings.languageCode(application),
             runtimeEngineChoice = RuntimeEngineChoice.fromStored(preferences.runtimeEngine).id,
         ),
@@ -502,6 +525,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     agentKind = savedAgent,
                     routing = preferences.routing,
                     themeMode = ForgeThemeMode.fromStored(preferences.themeMode).id,
+                    glassSolid = preferences.glassSolid,
                     // Bootstrap can wait on a root prompt; if the user already opened or deleted a project meanwhile, keep that.
                     projects = if (it.activeProjectId.isBlank()) projects else it.projects,
                     activeProjectId = if (it.activeProjectId.isBlank()) firstProject?.id.orEmpty() else it.activeProjectId,
@@ -530,7 +554,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (preferences.routing.mode != RouteMode.SINGLE) refreshReadyAgents()
             val savedGitHubToken = vault.get("GITHUB_TOKEN").orEmpty()
-            if (savedGitHubToken.isNotBlank()) githubAuth.restoreRepos(savedGitHubToken)
+            if (savedGitHubToken.isNotBlank()) {
+                val savedLogin = preferences.githubLogin.ifBlank { "x-access-token" }
+                withContext(Dispatchers.IO) {
+                    runCatching { installer.configureGitHubAccess(savedGitHubToken, savedLogin) }
+                        .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+                }
+                githubAuth.restoreRepos(savedGitHubToken)
+                if (preferences.autoSyncGitHub) {
+                    projects.forEach { proj ->
+                        val ws = checkpoints.ensureWorkspace(proj.id)
+                        if (File(ws, ".git").isDirectory) {
+                            syncProjectWithGitHub(proj.id, "Sync project changes from NextCraft Forge")
+                        }
+                    }
+                }
+            }
             firstProject?.let { refreshWorkspaceFilesAndChanges(it.id) }
             silentUpdateCheck()
         }
@@ -558,6 +597,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (lastResumeRefreshAt != 0L && now - lastResumeRefreshAt < RESUME_REFRESH_MIN_INTERVAL_MS) return
         lastResumeRefreshAt = now
         refreshRuntimeStatus()
+        silentUpdateCheck()
     }
 
     fun refreshRuntimeStatus() {
@@ -4244,18 +4284,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Writes the GitHub PAT into the rootfs only while [block] runs, then removes it so agent
-     * processes (UID 0 inside the chroot) can never read a long-lived credential file.
+     * Temporarily provisions the GitHub PAT into the rootfs (`~/.git-credentials` and `~/.config/gh/hosts.yml`)
+     * for the duration of [block] and immediately wipes the plaintext credential files from disk in `finally`,
+     * preventing untrusted chroot processes from reading the user's OAuth token at rest.
      */
     private inline fun <T> withGitHubCredentials(token: String, login: String, block: () -> T): T =
-        // One GitHub operation at a time: a finishing sync would otherwise delete the credentials of another
-        // one mid-push, and two git processes on the same workspace collide on .git/index.lock.
         githubOperationLock.withLock {
-            installer.configureGitHubAccess(token, login)
+            installer.configureGitHubAccess(token, login, persistCredentials = true)
             try {
                 block()
             } finally {
-                installer.clearGitHubAccess()
+                runCatching { installer.clearGitHubAccess() }
+                    .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
             }
         }
 
@@ -4483,6 +4523,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(bannerMessage = UiText.res(R.string.build_retry_low_memory)) }
                 runAndroidBuild(task, installAfterBuild, project, lowMemory = true, onFinished = onFinished)
                 return@launch
+            }
+            if (succeeded && !cancelled && task != "clean" && _state.value.autoSyncGitHub) {
+                syncProjectWithGitHub(project.id, "Auto-sync after Android build ($task) from NextCraft Forge")
             }
             if (succeeded && !cancelled && installAfterBuild && finalApk != null) {
                 installBuiltApk(finalApk.absolutePath, project.id)
@@ -5002,13 +5045,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val syncCmd = buildString {
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
-                        append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
+                        append("branch=${'$'}(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
                         append("git config user.name ${shellSingleQuote(login)} && ")
                         append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
                         append("git add -A && ")
                         append("(git diff --cached --quiet || git commit -m ${shellSingleQuote(commitMessage)}) && ")
-                        append("(git pull --rebase --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1 || true) && ")
-                        append("git push -u origin \"HEAD:\$branch\"; ")
+                        append("if ! git merge-base --is-ancestor \"origin/${'$'}branch\" HEAD 2>/dev/null; then ")
+                        append("(git pull --no-rebase --no-edit --autostash origin \"${'$'}branch\" >/dev/null 2>&1 || git merge --abort >/dev/null 2>&1 || true); ")
+                        append("fi && ")
+                        append("if ! git push -u origin \"HEAD:${'$'}branch\"; then ")
+                        append("git push -f origin \"HEAD:ccr-auto-sync-${'$'}branch\" && ")
+                        append("(for i in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 30; git push origin \"HEAD:${'$'}branch\" >/dev/null 2>&1 && git push origin \":ccr-auto-sync-${'$'}branch\" >/dev/null 2>&1 && break; done >/dev/null 2>&1 &); ")
+                        append("fi && ")
+                        append("if git remote get-url proot >/dev/null 2>&1 && git show-ref --verify --quiet refs/heads/proot-main; then ")
+                        append("git push proot proot-main:main >/dev/null 2>&1 || true; ")
+                        append("fi; ")
                         append("else echo 'No origin remote configured in workspace' >&2; false; fi")
                     }
                     withGitHubCredentials(token, login) {
@@ -5054,8 +5105,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val pullCmd = buildString {
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
-                        append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
-                        append("git fetch origin && (git pull --rebase --autostash origin \"\$branch\" || ")
+                        append("branch=${'$'}(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
+                        append("git fetch origin && (git pull --rebase --autostash origin \"${'$'}branch\" || ")
                         append("{ git rebase --abort 2>/dev/null; false; }); ")
                         append("else echo 'No origin remote configured in workspace'; fi")
                     }
@@ -5505,6 +5556,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(themeMode = resolved) }
     }
 
+    fun setGlassSolid(solid: Boolean) {
+        preferences.glassSolid = solid
+        glassUserSolid = solid
+        _state.update { it.copy(glassSolid = solid) }
+    }
+
     fun toggleThemeMode() {
         val current = ForgeThemeMode.fromStored(_state.value.themeMode)
         val entries = ForgeThemeMode.entries
@@ -5571,70 +5628,3 @@ private const val SCHEDULE_TICK_MS = 30_000L
 private const val MIN_FREE_BYTES_FOR_CLAUDE_RUN = 650L * 1024 * 1024
 private const val MIN_FREE_BYTES_FOR_LIGHT_RUN = 450L * 1024 * 1024
 
-/** One agent turn in progress for a chat: its bridge, session, and the live copy of the chat it streams into. */
-private class ChatRun(
-    val chatId: String,
-    val projectId: String,
-    val projectName: String = "",
-    val chatTitle: String = "Main chat",
-    val bridge: RuntimeBridge,
-    /** True when [bridge] was created for this run (Claude Code); its events are collected by the run itself. */
-    val ownsBridge: Boolean,
-    val lastPrompt: QueuedPrompt,
-    /** True when the run works in the chat's own branch (a clone of the project), not in the project folder. */
-    val isolated: Boolean = false,
-    val agent: AgentKind = AgentKind.CLAUDE_CODE,
-    /** Agents whose turn already failed for this message (Failover and Balanced). */
-    val tried: Set<AgentKind> = emptySet(),
-) {
-    var job: Job? = null
-    var eventsJob: Job? = null
-    var sessionId: String? = null
-    var finishedSessionId: String? = null
-    var messages: List<ChatMessage> = emptyList()
-    /** Streamed text not yet folded into [messages]; keeps one string copy per publish instead of one per delta. */
-    val pendingText = StringBuilder()
-    var lastPublishAt = 0L
-    var publishJob: Job? = null
-    var statusLine: UiText? = null
-    var pendingTool: ToolRequest? = null
-    var finished: Boolean = false
-
-    /** True while the run is being stopped so that a queued message can go out at once (see steerQueuedPrompt). */
-    var steering: Boolean = false
-    /** The agent changed project files this turn: the local build check has something to verify. */
-    var changedFiles: Boolean = false
-}
-
-/** The effort part of an Antigravity model id such as gemini-4-argon-high. */
-private val AGY_EFFORT_SUFFIX = Regex("-(low|medium|high)$")
-
-/** Characters of a tool's output kept in the chat: the start (the command and its first lines) and the end (the result). */
-private const val TOOL_DETAIL_HEAD = 1_500
-private const val TOOL_DETAIL_TAIL = 2_500
-
-/**
- * Shortens a tool's output for the chat. A build or test run can print megabytes; keeping all of it in every message
- * made long chats slow to draw, scroll, save and reopen. The full output stays in the agent's own context and logs.
- */
-internal fun clipToolDetail(detail: String): String {
-    if (detail.length <= TOOL_DETAIL_HEAD + TOOL_DETAIL_TAIL + 200) return detail
-    val head = detail.substring(0, TOOL_DETAIL_HEAD)
-    val tail = detail.substring(detail.length - TOOL_DETAIL_TAIL)
-    val omittedLines = detail.substring(TOOL_DETAIL_HEAD, detail.length - TOOL_DETAIL_TAIL).count { it == '\n' }
-    return "$head\n… ${omittedLines + 1} lines omitted …\n$tail"
-}
-
-/** Failures that a plain resend usually fixes: the provider's stream stalled, the connection dropped, or a 5xx. */
-internal fun isTransientAgentFailure(reason: String): Boolean {
-    val text = reason.lowercase()
-    return listOf(
-        "stream idle timeout", "context deadline exceeded", "sent nothing for 5 minutes", "stream was interrupted",
-        // agy's own wording for a dropped request, and our message for an unreachable Google.
-        "network issue connecting to the server", "could not reach google",
-        "dropped mid-answer", "connection reset", "server returned an error", "overloaded", "code 500", "code 502",
-        "code 503", "internal error encountered",
-        // The agent's saved session is gone; the retry starts a new one with the chat history.
-        "saved agent session was not found",
-    ).any { it in text }
-}

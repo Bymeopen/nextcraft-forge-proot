@@ -139,8 +139,15 @@ internal fun RepoSheet(
                             ForgeTextButton(onClick = { viewModel.switchRepoBranch(name) }, enabled = !state.repoBusy && !anyRunInProject) {
                                 Text(stringResource(R.string.repo_branch_switch))
                             }
-                            ForgeTextButton(onClick = { viewModel.deleteRepoBranch(name) }, enabled = !state.repoBusy && !anyRunInProject) {
-                                Text(stringResource(R.string.repo_branch_delete), color = scheme.error)
+                            ConfirmedAction(
+                                title = stringResource(R.string.repo_branch_delete),
+                                message = name,
+                                confirmLabel = stringResource(R.string.repo_branch_delete),
+                                onConfirm = { viewModel.deleteRepoBranch(name) },
+                            ) { onClick ->
+                                ForgeTextButton(onClick = onClick, enabled = !state.repoBusy && !anyRunInProject) {
+                                    Text(stringResource(R.string.repo_branch_delete), color = scheme.error)
+                                }
                             }
                         }
                     }
@@ -257,8 +264,15 @@ internal fun RepoSheet(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f),
                                     )
-                                    ForgeTextButton(onClick = { viewModel.cicd.mergePullRequest(pr.number) }, enabled = !ci.loading) {
-                                        Text(stringResource(R.string.repo_pr_merge))
+                                    ConfirmedAction(
+                                        title = stringResource(R.string.repo_pr_merge),
+                                        message = prItemLabel,
+                                        confirmLabel = stringResource(R.string.repo_pr_merge),
+                                        onConfirm = { viewModel.cicd.mergePullRequest(pr.number) },
+                                    ) { onClick ->
+                                        ForgeTextButton(onClick = onClick, enabled = !ci.loading) {
+                                            Text(stringResource(R.string.repo_pr_merge))
+                                        }
                                     }
                                 }
                             }

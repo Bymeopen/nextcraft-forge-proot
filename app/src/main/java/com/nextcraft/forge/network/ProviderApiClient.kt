@@ -231,7 +231,7 @@ class ProviderApiClient(@Suppress("UNUSED_PARAMETER") private val context: Conte
                     setRequestProperty("anthropic-version", "2023-06-01")
                 }
                 if (endpoint.startsWith("https://opencode.ai/zen/")) {
-                    setRequestProperty("User-Agent", "opencode/1.18.20")
+                    setRequestProperty("User-Agent", "NextCraft-Forge-Android/1.0")
                     setRequestProperty("x-session-id", "session-${UUID.randomUUID()}")
                 }
                 if (body != null) doOutput = true

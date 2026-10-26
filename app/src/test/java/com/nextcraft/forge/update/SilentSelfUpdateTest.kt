@@ -11,6 +11,8 @@ class SilentSelfUpdateTest {
         val script = SilentSelfUpdate.detachedScript("com.nextcraft.forge/com.nextcraft.forge.MainActivity")
         assertNotNull(script)
         assertTrue(script!!.contains("pm install -r ${SilentSelfUpdate.STAGING_APK}"))
+        assertFalse(script.contains("-d "))
+        assertTrue(script.contains("chmod 700 ${SilentSelfUpdate.STAGING_DIR}"))
         assertTrue(script.contains("am start --user 0 -n com.nextcraft.forge/com.nextcraft.forge.MainActivity"))
         assertTrue(script.endsWith("&"))
         assertNull(SilentSelfUpdate.detachedScript("x/y; rm -rf /"))

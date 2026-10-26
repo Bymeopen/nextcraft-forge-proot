@@ -299,8 +299,15 @@ fun AgentConfigScreen(
                                     modifier = Modifier.weight(1f),
                                     fontWeight = if (keyInfo.isActive) FontWeight.SemiBold else FontWeight.Normal,
                                 )
-                                IconButton(onClick = { viewModel.removeApiKey(keyInfo.id) }) {
-                                    ForgeIcon(glyph = ForgeGlyph.TRASH, tint = scheme.onSurfaceVariant, size = 18.dp, description = stringResource(R.string.settings_delete_key))
+                                ConfirmedAction(
+                                    title = stringResource(R.string.settings_delete_key),
+                                    message = keyInfo.name,
+                                    confirmLabel = stringResource(R.string.tool_delete),
+                                    onConfirm = { viewModel.removeApiKey(keyInfo.id) },
+                                ) { onClick ->
+                                    IconButton(onClick = onClick) {
+                                        ForgeIcon(glyph = ForgeGlyph.TRASH, tint = scheme.onSurfaceVariant, size = 18.dp, description = stringResource(R.string.settings_delete_key))
+                                    }
                                 }
                             }
                         }

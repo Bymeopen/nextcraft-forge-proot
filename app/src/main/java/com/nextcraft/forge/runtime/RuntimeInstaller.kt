@@ -542,16 +542,25 @@ class RuntimeInstaller(private val context: Context) {
         onProgress(RuntimeInstallProgress("GitHub CLI is ready", 1f))
     }
 
-    /** Provisions Git credential store and GitHub CLI hosts.yml inside the guest rootfs with 0600 permissions. */
-    fun configureGitHubAccess(token: String, login: String) {
+    /**
+     * Provisions Git identity (`~/.gitconfig`) inside the guest rootfs.
+     * When [persistCredentials] is true (used only inside [MainViewModel.withGitHubCredentials] during active git/gh operations),
+     * writes `~/.git-credentials` and `~/.config/gh/hosts.yml` with 0600 permissions; otherwise ensures any lingering
+     * plaintext credential files are wiped from the guest rootfs.
+     */
+    fun configureGitHubAccess(token: String, login: String, persistCredentials: Boolean = false) {
         val cleanToken = token.trim().replace("\r", "").replace("\n", "")
         if (cleanToken.isEmpty()) return
         val cleanLogin = login.trim().replace("\r", "").replace("\n", "").ifEmpty { "x-access-token" }
         val rootHome = File(rootfs, "root").apply { mkdirs() }
-        val gitCredentials = File(rootHome, ".git-credentials")
-        // git/gh rewrite these as root inside the chroot; reclaim ownership instead of failing with EACCES.
-        writeRootfsFileAtomically(gitCredentials, "https://$cleanLogin:$cleanToken@github.com\n")
-        runCatching { Os.chmod(gitCredentials.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        if (persistCredentials) {
+            val gitCredentials = File(rootHome, ".git-credentials")
+            // git/gh rewrite these as root inside the chroot; reclaim ownership instead of failing with EACCES.
+            writeRootfsFileAtomically(gitCredentials, "https://$cleanLogin:$cleanToken@github.com\n")
+            runCatching { Os.chmod(gitCredentials.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        } else {
+            clearGitHubAccess()
+        }
 
         // Merge instead of replacing: the user's own name, email, aliases and editor settings must survive connecting
         // GitHub. Only the credential helper is forced; identity and default branch are filled in when missing.
@@ -579,18 +588,20 @@ class RuntimeInstaller(private val context: Context) {
         )
         runCatching { Os.chmod(gitConfig.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
 
-        val ghConfigDir = File(rootHome, ".config/gh").apply { mkdirs() }
-        val ghHosts = File(ghConfigDir, "hosts.yml")
-        writeRootfsFileAtomically(
-            ghHosts,
-            buildString {
-                appendLine("github.com:")
-                appendLine("    oauth_token: $cleanToken")
-                appendLine("    user: $cleanLogin")
-                appendLine("    git_protocol: https")
-            },
-        )
-        runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        if (persistCredentials) {
+            val ghConfigDir = File(rootHome, ".config/gh").apply { mkdirs() }
+            val ghHosts = File(ghConfigDir, "hosts.yml")
+            writeRootfsFileAtomically(
+                ghHosts,
+                buildString {
+                    appendLine("github.com:")
+                    appendLine("    oauth_token: $cleanToken")
+                    appendLine("    user: $cleanLogin")
+                    appendLine("    git_protocol: https")
+                },
+            )
+            runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        }
     }
 
     /** Removes stored Git and GitHub CLI credentials from the guest rootfs. */
@@ -2097,6 +2108,7 @@ class RuntimeInstaller(private val context: Context) {
         File(targetRootfs, guestWorkspacePath.removePrefix("/")).mkdirs()
         writeAndroidGradleConfiguration(targetRootfs)
         AntigravityCustomizations.apply(targetRootfs, guestWorkspacePath) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+        AntigravityCustomizations.applyWorkspace(workspace, guestWorkspacePath)
         // ~/.claude.json belongs to Claude Code; other agents never read it, so they skip the parse + fsync per launch.
         if (trustClaudeWorkspace && guestWorkspacePath != "/root") {
             ensureWorkspaceTrust(guestWorkspacePath, environment, claudeMcpServers)
@@ -2129,7 +2141,9 @@ class RuntimeInstaller(private val context: Context) {
             put("LANG", "C.UTF-8")
             put("TERM", "xterm-256color")
             put("GLIBC_TUNABLES", "glibc.pthread.rseq=0")
-            putAll(prootConfig.environmentVars)
+            // PROOT_TMP_DIR/PROOT_L2S_DIR here are bare "/tmp/..." -- real top-level host paths the app has no
+            // permission to write to. chroot-exec.sh/proot-exec.sh compute their own rootfs versions of both.
+            putAll(prootConfig.environmentVars.filterKeys { it != "PROOT_TMP_DIR" && it != "PROOT_L2S_DIR" })
             putAll(environment)
         }
 
@@ -2264,6 +2278,19 @@ printf '%s\n' "${'$'}1" > "${'$'}BRIDGE/claude-login-url.tmp" && mv "${'$'}BRIDG
 """,
             mode = 0b111101101,
         )
+        writeRootfsFileAtomically(
+            File(rootfs, "etc/profile.d/nextcraft-browser.sh"),
+            "export BROWSER=\"${'$'}{BROWSER:-/opt/nextcraft/open-url.sh}\"\n",
+            mode = 0b110100100,
+        )
+        listOf("usr/bin/xdg-open", "usr/local/bin/xdg-open", "usr/bin/www-browser", "usr/bin/sensible-browser").forEach { path ->
+            val link = File(rootfs, path)
+            runCatching {
+                link.parentFile?.mkdirs()
+                if (java.nio.file.Files.isSymbolicLink(link.toPath()) || link.exists()) link.delete()
+                Os.symlink("/opt/nextcraft/open-url.sh", link.absolutePath)
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+        }
 
         val settingsContent = JSONObject()
             .put("disableAllHooks", false)
@@ -2324,6 +2351,21 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         ProotAndChrootOptimizer.applyGuestWrappers(rootfs) { file, body, mode -> writeRootfsFileAtomically(file, body, mode = mode) }
         AntigravityCustomizations.apply(rootfs) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
         ensureWorkspaceTrust("/workspace")
+        ensureSharedTmpPermissions()
+    }
+
+    private fun ensureSharedTmpPermissions() {
+        val sharedSticky = listOf("tmp", "var/tmp").map { File(rootfs, it) }
+        sharedSticky.forEach { dir ->
+            runCatching {
+                dir.mkdirs()
+                Os.chmod(dir.absolutePath, 0b1_111_111_111) // 01777: sticky + rwxrwxrwx
+            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+        }
+        runCatching {
+            val run = File(rootfs, "run").apply { mkdirs() }
+            Os.chmod(run.absolutePath, 0b111_101_101) // 0755
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
     }
 
     private fun ensureWorkspaceTrust(
@@ -2496,13 +2538,17 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         ensureAppAccess()
         val manager = context.getSystemService(ConnectivityManager::class.java)
         val dns = manager?.getLinkProperties(manager.activeNetwork)?.dnsServers.orEmpty()
-        val servers = dns.mapNotNull { it.hostAddress }.ifEmpty { listOf("8.8.8.8", "1.1.1.1") }
+        val deviceServers = dns.mapNotNull { it.hostAddress }
+        // glibc only reads the first MAXNS=3 "nameserver" lines, so the device's own servers are capped to 1 here --
+        // otherwise two DoT-only device entries would push both public fallbacks off the end of the list.
+        val fallbacks = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9", "8.8.4.4", "1.0.0.1")
+        val servers = (deviceServers.take(1) + fallbacks).distinct().take(3)
         val resolvFile = File(rootfs, "etc/resolv.conf")
         resolvFile.parentFile?.mkdirs()
         if (java.nio.file.Files.isSymbolicLink(resolvFile.toPath())) {
             resolvFile.delete()
         }
-        val resolver = servers.joinToString("\n") { "nameserver $it" } + "\n"
+        val resolver = servers.joinToString("\n") { "nameserver $it" } + "\noptions timeout:2 attempts:2 rotate\n"
         try {
             // A link that survived the delete above (not ours to unlink) would send the write into /run, which is root's.
             if (java.nio.file.Files.isSymbolicLink(resolvFile.toPath())) throw java.io.IOException("resolv.conf is still a symlink")
