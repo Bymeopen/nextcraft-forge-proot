@@ -161,22 +161,28 @@ class ClaudeSkillStore(private val skillsDir: File) {
         }
         .sortedBy { it.name }
 
+    private fun safeSkillDir(name: String): File {
+        val clean = skillName(name) ?: throw IllegalArgumentException("Invalid skill name")
+        return RootPathGuard.resolveChild(skillsDir, clean)
+    }
+
     /** The instructions part of a saved skill, for editing. */
     fun body(name: String): String = runCatching {
-        val text = File(File(skillsDir, name), "SKILL.md").readText()
+        val text = File(safeSkillDir(name), "SKILL.md").readText()
         if (text.startsWith("---")) text.substringAfter("\n---", "").substringAfter('\n').trim() else text.trim()
     }.getOrDefault("")
 
     fun save(name: String, description: String, body: String) {
-        val dir = File(skillsDir, name)
+        val clean = skillName(name) ?: throw IllegalArgumentException("Invalid skill name")
+        val dir = safeSkillDir(clean)
         dir.mkdirs()
-        File(dir, "SKILL.md").writeText(render(name, description, body))
+        File(dir, "SKILL.md").writeText(render(clean, description, body))
     }
 
-    fun delete(name: String): Boolean {
-        val dir = File(skillsDir, name)
-        return !dir.exists() || dir.deleteRecursivelyNoFollow()
-    }
+    fun delete(name: String): Boolean = runCatching {
+        val dir = safeSkillDir(name)
+        !dir.exists() || dir.deleteRecursivelyNoFollow()
+    }.getOrDefault(false)
 
     companion object {
         /** Skill directory name: lowercase letters, digits and dashes (Claude's rule), at most 64 characters. */

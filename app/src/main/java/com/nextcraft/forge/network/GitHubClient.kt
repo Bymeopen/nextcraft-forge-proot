@@ -383,9 +383,10 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
     }
 
     companion object {
+        /** Default GitHub OAuth Device Flow client ID; overridable per caller. */
         const val DEFAULT_CLIENT_ID = "178c6fc778ccc68e1d6a"
         const val DEFAULT_SCOPES = "repo read:user user:email workflow"
-        private const val USER_AGENT = "NextCraft-Forge-Android"
+        const val USER_AGENT = "NextCraft-Forge-Android/1.0"
         private const val MAX_GITHUB_RESPONSE_CHARS = 4 * 1024 * 1024
     }
 }

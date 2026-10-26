@@ -524,16 +524,25 @@ class RuntimeInstaller(private val context: Context) {
         onProgress(RuntimeInstallProgress("GitHub CLI is ready", 1f))
     }
 
-    /** Provisions Git credential store and GitHub CLI hosts.yml inside the guest rootfs with 0600 permissions. */
-    fun configureGitHubAccess(token: String, login: String) {
+    /**
+     * Provisions Git identity (`~/.gitconfig`) inside the guest rootfs.
+     * When [persistCredentials] is true (used only inside [MainViewModel.withGitHubCredentials] during active git/gh operations),
+     * writes `~/.git-credentials` and `~/.config/gh/hosts.yml` with 0600 permissions; otherwise ensures any lingering
+     * plaintext credential files are wiped from the guest rootfs.
+     */
+    fun configureGitHubAccess(token: String, login: String, persistCredentials: Boolean = false) {
         val cleanToken = token.trim().replace("\r", "").replace("\n", "")
         if (cleanToken.isEmpty()) return
         val cleanLogin = login.trim().replace("\r", "").replace("\n", "").ifEmpty { "x-access-token" }
         val rootHome = File(rootfs, "root").apply { mkdirs() }
-        val gitCredentials = File(rootHome, ".git-credentials")
-        // git/gh rewrite these as root inside the chroot; reclaim ownership instead of failing with EACCES.
-        writeRootfsFileAtomically(gitCredentials, "https://$cleanLogin:$cleanToken@github.com\n")
-        runCatching { Os.chmod(gitCredentials.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        if (persistCredentials) {
+            val gitCredentials = File(rootHome, ".git-credentials")
+            // git/gh rewrite these as root inside the chroot; reclaim ownership instead of failing with EACCES.
+            writeRootfsFileAtomically(gitCredentials, "https://$cleanLogin:$cleanToken@github.com\n")
+            runCatching { Os.chmod(gitCredentials.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        } else {
+            clearGitHubAccess()
+        }
 
         // Merge instead of replacing: the user's own name, email, aliases and editor settings must survive connecting
         // GitHub. Only the credential helper is forced; identity and default branch are filled in when missing.
@@ -561,18 +570,20 @@ class RuntimeInstaller(private val context: Context) {
         )
         runCatching { Os.chmod(gitConfig.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
 
-        val ghConfigDir = File(rootHome, ".config/gh").apply { mkdirs() }
-        val ghHosts = File(ghConfigDir, "hosts.yml")
-        writeRootfsFileAtomically(
-            ghHosts,
-            buildString {
-                appendLine("github.com:")
-                appendLine("    oauth_token: $cleanToken")
-                appendLine("    user: $cleanLogin")
-                appendLine("    git_protocol: https")
-            },
-        )
-        runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        if (persistCredentials) {
+            val ghConfigDir = File(rootHome, ".config/gh").apply { mkdirs() }
+            val ghHosts = File(ghConfigDir, "hosts.yml")
+            writeRootfsFileAtomically(
+                ghHosts,
+                buildString {
+                    appendLine("github.com:")
+                    appendLine("    oauth_token: $cleanToken")
+                    appendLine("    user: $cleanLogin")
+                    appendLine("    git_protocol: https")
+                },
+            )
+            runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
+        }
     }
 
     /** Removes stored Git and GitHub CLI credentials from the guest rootfs. */

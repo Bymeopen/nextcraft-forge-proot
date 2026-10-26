@@ -1,6 +1,7 @@
 package com.nextcraft.forge.runtime
 
 import com.nextcraft.forge.BuildConfig
+import java.io.File
 
 /**
  * Root helpers (`rm -rf`, `mv`, `chown`, writing files as root) must only ever touch this app's own data.
@@ -9,6 +10,16 @@ import com.nextcraft.forge.BuildConfig
 internal object RootPathGuard {
     private val appDataRoots = Regex("""/data/(data|user/\d+|user_de/\d+)""")
     private val sharedAppRoots = Regex("""/(storage/emulated/\d+|sdcard)/Android/(data|media)""")
+
+    /** Resolves [childName] strictly inside [parentDir], rejecting any traversal outside [parentDir]. */
+    fun resolveChild(parentDir: File, childName: String): File {
+        val canonicalParent = parentDir.canonicalFile
+        val resolved = File(canonicalParent, childName).canonicalFile
+        require(resolved.path.startsWith(canonicalParent.path + File.separator)) {
+            "Path escapes parent directory: $childName"
+        }
+        return resolved
+    }
 
     /**
      * True when [canonicalPath] (already canonical: no `..`, symlinks resolved) is strictly *inside* the app's own

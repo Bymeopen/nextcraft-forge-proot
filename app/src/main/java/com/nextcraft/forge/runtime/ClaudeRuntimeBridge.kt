@@ -224,11 +224,13 @@ class ClaudeRuntimeBridge(
             openRouterGateway = if (
                 provider.kind == ProviderKind.LLM_ROUTER && provider.openRouterProviders.isNotEmpty()
             ) OpenRouterRoutingGateway(provider, secret) { rotateSecretFor(provider) }.start() else null
+            val activeGateway = formatGateway ?: openRouterGateway
+            val guestAuthToken = formatGateway?.sessionToken ?: openRouterGateway?.sessionToken ?: secret
             val launch = RuntimeLaunchConfigBuilder.build(
                 provider,
-                authToken = secret,
+                authToken = guestAuthToken,
                 localGatewayUrl = formatGateway?.url ?: openRouterGateway?.url,
-                useStoredLogin = storedLogin,
+                useStoredLogin = storedLogin && activeGateway == null,
                 claudeEffort = claudeEffort(),
             )
             Log.d("ClaudeBridge", "Provider: ${provider.kind}, Model: ${provider.model}")

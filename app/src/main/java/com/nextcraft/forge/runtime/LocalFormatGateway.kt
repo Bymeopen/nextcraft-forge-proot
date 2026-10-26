@@ -25,6 +25,7 @@ import org.json.JSONObject
 internal class LocalFormatGateway(
     private val profile: ProviderProfile,
     private val apiKey: String,
+    val sessionToken: String = "forge-local-${UUID.randomUUID()}",
     private val onRotateApiKey: (() -> String?)? = null,
 ) : AutoCloseable {
     private val running = AtomicBoolean(true)
@@ -430,7 +431,7 @@ internal class LocalFormatGateway(
                 connection.setRequestProperty("Authorization", "Bearer $currentKey")
             }
             if (endpoint.startsWith("https://opencode.ai/zen/")) {
-                connection.setRequestProperty("User-Agent", "opencode/1.18.20")
+                connection.setRequestProperty("User-Agent", "NextCraft-Forge-Android/1.0")
                 connection.setRequestProperty("x-session-id", "session-${UUID.randomUUID()}")
             }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -807,14 +808,16 @@ internal class LocalFormatGateway(
     }
 
     /**
-     * Only forward requests that present the active provider key.
+     * Only forward requests that present the ephemeral loopback session token or active provider key.
      */
     private fun isAuthorized(headers: Map<String, String>): Boolean {
         val presented = headers["x-api-key"]
             ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
             ?: return false
         val presentedBytes = presented.toByteArray()
-        return MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
+        return MessageDigest.isEqual(presentedBytes, sessionToken.toByteArray()) ||
+            MessageDigest.isEqual(presentedBytes, activeApiKey.toByteArray()) ||
+            MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
     }
 
     /** Reads an HTTP/1.1 chunked body, or returns null when it is malformed or larger than [MAX_REQUEST_BYTES]. */

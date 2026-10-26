@@ -31,6 +31,7 @@ internal fun applyOpenRouterRouting(source: JSONObject, profile: ProviderProfile
 internal class OpenRouterRoutingGateway(
     private val profile: ProviderProfile,
     private val apiKey: String,
+    val sessionToken: String = "forge-local-${java.util.UUID.randomUUID()}",
     private val onRotateApiKey: (() -> String?)? = null,
 ) : AutoCloseable {
     private val running = AtomicBoolean(true)
@@ -225,7 +226,9 @@ internal class OpenRouterRoutingGateway(
             ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
             ?: return false
         val presentedBytes = presented.toByteArray()
-        return MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
+        return MessageDigest.isEqual(presentedBytes, sessionToken.toByteArray()) ||
+            MessageDigest.isEqual(presentedBytes, activeApiKey.toByteArray()) ||
+            MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
     }
 
     /**

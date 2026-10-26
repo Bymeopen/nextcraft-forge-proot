@@ -4276,14 +4276,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Provisions the GitHub PAT into the rootfs (`~/.git-credentials` and `~/.config/gh/hosts.yml`)
-     * and serializes concurrent GitHub operations on `.git/index.lock`. Credentials remain configured
-     * while the GitHub account is connected so git/gh commands inside the workspace remain authenticated.
+     * Temporarily provisions the GitHub PAT into the rootfs (`~/.git-credentials` and `~/.config/gh/hosts.yml`)
+     * for the duration of [block] and immediately wipes the plaintext credential files from disk in `finally`,
+     * preventing untrusted chroot processes from reading the user's OAuth token at rest.
      */
     private inline fun <T> withGitHubCredentials(token: String, login: String, block: () -> T): T =
         githubOperationLock.withLock {
-            installer.configureGitHubAccess(token, login)
-            block()
+            installer.configureGitHubAccess(token, login, persistCredentials = true)
+            try {
+                block()
+            } finally {
+                runCatching { installer.clearGitHubAccess() }
+                    .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+            }
         }
 
     private val githubOperationLock = java.util.concurrent.locks.ReentrantLock()
@@ -5606,70 +5611,3 @@ private const val SCHEDULE_TICK_MS = 30_000L
 private const val MIN_FREE_BYTES_FOR_CLAUDE_RUN = 650L * 1024 * 1024
 private const val MIN_FREE_BYTES_FOR_LIGHT_RUN = 450L * 1024 * 1024
 
-/** One agent turn in progress for a chat: its bridge, session, and the live copy of the chat it streams into. */
-private class ChatRun(
-    val chatId: String,
-    val projectId: String,
-    val projectName: String = "",
-    val chatTitle: String = "Main chat",
-    val bridge: RuntimeBridge,
-    /** True when [bridge] was created for this run (Claude Code); its events are collected by the run itself. */
-    val ownsBridge: Boolean,
-    val lastPrompt: QueuedPrompt,
-    /** True when the run works in the chat's own branch (a clone of the project), not in the project folder. */
-    val isolated: Boolean = false,
-    val agent: AgentKind = AgentKind.CLAUDE_CODE,
-    /** Agents whose turn already failed for this message (Failover and Balanced). */
-    val tried: Set<AgentKind> = emptySet(),
-) {
-    var job: Job? = null
-    var eventsJob: Job? = null
-    var sessionId: String? = null
-    var finishedSessionId: String? = null
-    var messages: List<ChatMessage> = emptyList()
-    /** Streamed text not yet folded into [messages]; keeps one string copy per publish instead of one per delta. */
-    val pendingText = StringBuilder()
-    var lastPublishAt = 0L
-    var publishJob: Job? = null
-    var statusLine: UiText? = null
-    var pendingTool: ToolRequest? = null
-    var finished: Boolean = false
-
-    /** True while the run is being stopped so that a queued message can go out at once (see steerQueuedPrompt). */
-    var steering: Boolean = false
-    /** The agent changed project files this turn: the local build check has something to verify. */
-    var changedFiles: Boolean = false
-}
-
-/** The effort part of an Antigravity model id such as gemini-4-argon-high. */
-private val AGY_EFFORT_SUFFIX = Regex("-(low|medium|high)$")
-
-/** Characters of a tool's output kept in the chat: the start (the command and its first lines) and the end (the result). */
-private const val TOOL_DETAIL_HEAD = 1_500
-private const val TOOL_DETAIL_TAIL = 2_500
-
-/**
- * Shortens a tool's output for the chat. A build or test run can print megabytes; keeping all of it in every message
- * made long chats slow to draw, scroll, save and reopen. The full output stays in the agent's own context and logs.
- */
-internal fun clipToolDetail(detail: String): String {
-    if (detail.length <= TOOL_DETAIL_HEAD + TOOL_DETAIL_TAIL + 200) return detail
-    val head = detail.substring(0, TOOL_DETAIL_HEAD)
-    val tail = detail.substring(detail.length - TOOL_DETAIL_TAIL)
-    val omittedLines = detail.substring(TOOL_DETAIL_HEAD, detail.length - TOOL_DETAIL_TAIL).count { it == '\n' }
-    return "$head\n… ${omittedLines + 1} lines omitted …\n$tail"
-}
-
-/** Failures that a plain resend usually fixes: the provider's stream stalled, the connection dropped, or a 5xx. */
-internal fun isTransientAgentFailure(reason: String): Boolean {
-    val text = reason.lowercase()
-    return listOf(
-        "stream idle timeout", "context deadline exceeded", "sent nothing for 5 minutes", "stream was interrupted",
-        // agy's own wording for a dropped request, and our message for an unreachable Google.
-        "network issue connecting to the server", "could not reach google",
-        "dropped mid-answer", "connection reset", "server returned an error", "overloaded", "code 500", "code 502",
-        "code 503", "internal error encountered",
-        // The agent's saved session is gone; the retry starts a new one with the chat history.
-        "saved agent session was not found",
-    ).any { it in text }
-}

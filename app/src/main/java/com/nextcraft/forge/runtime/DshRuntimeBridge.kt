@@ -126,10 +126,11 @@ class DshRuntimeBridge(
             }
             val sessionGuestHome = "$DSH_HOME_GUEST_PATH/sessions/$sessionId"
             sessionHomeHostDir = writeDshSettings(installed.rootfs, route, provider, sessionGuestHome)
+            val guestAuthToken = openRouterGateway?.sessionToken ?: secret
             val environment = linkedMapOf(
                 "DSH_HOME" to sessionGuestHome,
                 "DSH_PERMISSION_MODE" to "danger-full-access",
-                route.keyEnv to secret,
+                route.keyEnv to guestAuthToken,
             )
             if (route.keyEnv != FALLBACK_KEY_ENV) environment.remove(FALLBACK_KEY_ENV)
 

@@ -11,18 +11,19 @@ import java.util.concurrent.TimeUnit
  * dies (success) or the log reports a failure (the caller then falls back to the normal installer dialog).
  */
 object SilentSelfUpdate {
-    internal const val STAGING_APK = "/data/local/tmp/forge-self-update.apk"
-    internal const val LOG_FILE = "/data/local/tmp/forge-self-update.log"
+    internal const val STAGING_DIR = "/data/adb/.forge-update"
+    internal const val STAGING_APK = "$STAGING_DIR/forge-self-update.apk"
+    internal const val LOG_FILE = "$STAGING_DIR/forge-self-update.log"
     private const val WATCH_SECONDS = 150L
     private val SAFE_COMPONENT = Regex("""[A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+""")
 
     /** The shell script that runs detached as root; [component] is `package/Activity` (validated, never free text). */
     internal fun detachedScript(component: String): String? {
         if (!SAFE_COMPONENT.matches(component)) return null
-        val inner = "pm install -r -d $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
+        val inner = "pm install -r $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
             "echo rc=\$rc >> $LOG_FILE; " +
             "if [ \$rc -eq 0 ]; then am start --user 0 -n $component >/dev/null 2>&1; fi"
-        return "rm -f $LOG_FILE; nohup setsid sh -c '$inner' >/dev/null 2>&1 &"
+        return "mkdir -p $STAGING_DIR && chmod 700 $STAGING_DIR && rm -f $LOG_FILE; nohup setsid sh -c '$inner' >/dev/null 2>&1 &"
     }
 
     /** True when the log written by the detached script ends with a failed install (`rc=` other than 0). */
@@ -51,7 +52,9 @@ object SilentSelfUpdate {
     }.getOrDefault(false)
 
     private fun stage(apk: File): Boolean {
-        val proc = ProcessBuilder("su", "-c", "cat > $STAGING_APK && chmod 644 $STAGING_APK")
+        val cmd = "mkdir -p $STAGING_DIR && chown 0:0 $STAGING_DIR && chmod 700 $STAGING_DIR && " +
+            "rm -f $STAGING_APK && cat > $STAGING_APK && chown 0:0 $STAGING_APK && chmod 600 $STAGING_APK"
+        val proc = ProcessBuilder("su", "-c", cmd)
             .redirectErrorStream(true)
             .start()
         return try {
