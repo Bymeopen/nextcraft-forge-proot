@@ -76,47 +76,73 @@ class ChatBranches(context: Context) {
     }
 
     /** Creates the project repository if needed, snapshots uncommitted work, and clones it for the chat. */
-    suspend fun ensure(project: Project, chatId: String): ChatBranch = withContext(Dispatchers.IO) {
+    suspend fun ensure(project: Project, chatId: String, onWaitingForLock: (() -> Unit)? = null): ChatBranch = withContext(Dispatchers.IO) {
         val branch = branchFor(project, chatId)
         val id = branchId(chatId)
-        val result = git(project, chatId, ENSURE_SCRIPT)
+        val result = git(project, chatId, ENSURE_SCRIPT, onWaitingForLock = onWaitingForLock)
         check(result.ok) { "Could not prepare the chat branch: ${result.output.trim().takeLast(300)}" }
         branch.also { check(File(it.cloneDir, ".git").exists()) { "The chat branch clone is missing ($id)." } }
     }
 
     /** Commits what the agent changed in the branch (one commit per turn). */
-    suspend fun commitTurn(project: Project, chatId: String, message: String) = withContext(Dispatchers.IO) {
+    suspend fun commitTurn(
+        project: Project,
+        chatId: String,
+        message: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ) = withContext(Dispatchers.IO) {
         branchFor(project, chatId)
-        git(project, chatId, COMMIT_SCRIPT, "MSG" to commitMessage(message))
+        git(project, chatId, COMMIT_SCRIPT, "MSG" to commitMessage(message), onWaitingForLock = onWaitingForLock)
     }
 
     /** State and latest commits of the project's own repository (not a chat branch). */
-    suspend fun repoInfo(project: Project): ProjectRepoInfo = withContext(Dispatchers.IO) {
-        val result = gitProject(project, REPO_INFO_SCRIPT)
+    suspend fun repoInfo(project: Project, onWaitingForLock: (() -> Unit)? = null): ProjectRepoInfo = withContext(Dispatchers.IO) {
+        val result = gitProject(project, REPO_INFO_SCRIPT, onWaitingForLock = onWaitingForLock)
         if (result.ok) parseRepoInfo(result.output) else ProjectRepoInfo()
     }
 
     /** Commits everything in the project folder (creating the repository first when there is none). */
-    suspend fun commitProject(project: Project, message: String): ChrootResult = withContext(Dispatchers.IO) {
-        gitProject(project, COMMIT_PROJECT_SCRIPT, "MSG" to commitMessage(message))
+    suspend fun commitProject(
+        project: Project,
+        message: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): ChrootResult = withContext(Dispatchers.IO) {
+        gitProject(project, COMMIT_PROJECT_SCRIPT, "MSG" to commitMessage(message), onWaitingForLock = onWaitingForLock)
     }
 
-    suspend fun createBranch(project: Project, name: String): RepoOpResult = withContext(Dispatchers.IO) {
+    suspend fun createBranch(
+        project: Project,
+        name: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): RepoOpResult = withContext(Dispatchers.IO) {
         val clean = branchName(name) ?: return@withContext RepoOpResult.Failed("Invalid branch name")
-        parseRepoOp(gitProject(project, CREATE_BRANCH_SCRIPT, "NAME" to clean))
+        parseRepoOp(gitProject(project, CREATE_BRANCH_SCRIPT, "NAME" to clean, onWaitingForLock = onWaitingForLock))
     }
 
-    suspend fun switchBranch(project: Project, name: String): RepoOpResult = withContext(Dispatchers.IO) {
-        parseRepoOp(gitProject(project, SWITCH_BRANCH_SCRIPT, "NAME" to name))
+    suspend fun switchBranch(
+        project: Project,
+        name: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): RepoOpResult = withContext(Dispatchers.IO) {
+        parseRepoOp(gitProject(project, SWITCH_BRANCH_SCRIPT, "NAME" to name, onWaitingForLock = onWaitingForLock))
     }
 
     /** Safe delete (`git branch -d`): refuses a branch with commits that are not merged. */
-    suspend fun deleteBranch(project: Project, name: String): RepoOpResult = withContext(Dispatchers.IO) {
-        parseRepoOp(gitProject(project, DELETE_BRANCH_SCRIPT, "NAME" to name))
+    suspend fun deleteBranch(
+        project: Project,
+        name: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): RepoOpResult = withContext(Dispatchers.IO) {
+        parseRepoOp(gitProject(project, DELETE_BRANCH_SCRIPT, "NAME" to name, onWaitingForLock = onWaitingForLock))
     }
 
     /** Commits the branch now with the user's own message (the turn commit uses the prompt's first line). */
-    suspend fun commitNow(project: Project, chatId: String, message: String) = commitTurn(project, chatId, message)
+    suspend fun commitNow(
+        project: Project,
+        chatId: String,
+        message: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ) = commitTurn(project, chatId, message, onWaitingForLock)
 
     suspend fun status(project: Project, chatId: String): BranchStatus? = withContext(Dispatchers.IO) {
         val branch = branchFor(project, chatId)
@@ -132,53 +158,134 @@ class ChatBranches(context: Context) {
         result.output.take(MAX_DIFF_CHARS).ifBlank { "" }
     }
 
-    suspend fun mergeIntoMain(project: Project, chatId: String, title: String): BranchMergeResult = withContext(Dispatchers.IO) {
+    suspend fun mergeIntoMain(
+        project: Project,
+        chatId: String,
+        title: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): BranchMergeResult = withContext(Dispatchers.IO) {
         branchFor(project, chatId)
-        val result = git(project, chatId, MERGE_SCRIPT, "TITLE" to commitMessage("Merge chat: $title"))
+        val result = git(project, chatId, MERGE_SCRIPT, "TITLE" to commitMessage("Merge chat: $title"), onWaitingForLock = onWaitingForLock)
         parseMergeResult(result.output, result.ok)
     }
 
     /** Brings the project's newer commits into the branch; conflicts are left in the branch for the agent to resolve. */
-    suspend fun updateFromMain(project: Project, chatId: String): BranchMergeResult = withContext(Dispatchers.IO) {
+    suspend fun updateFromMain(
+        project: Project,
+        chatId: String,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): BranchMergeResult = withContext(Dispatchers.IO) {
         branchFor(project, chatId)
-        val result = git(project, chatId, UPDATE_SCRIPT)
+        val result = git(project, chatId, UPDATE_SCRIPT, onWaitingForLock = onWaitingForLock)
         parseMergeResult(result.output, result.ok)
     }
 
-    suspend fun discard(project: Project, chatId: String) = withContext(Dispatchers.IO) {
+    suspend fun discard(project: Project, chatId: String, onWaitingForLock: (() -> Unit)? = null) = withContext(Dispatchers.IO) {
         val branch = branchFor(project, chatId)
-        git(project, chatId, DISCARD_SCRIPT)
+        git(project, chatId, DISCARD_SCRIPT, onWaitingForLock = onWaitingForLock)
         WorkspaceCheckpoints.clearWorkspaceOverride(branch.pseudoProjectId)
     }
 
-    private suspend fun gitProject(project: Project, script: String, vararg extra: Pair<String, String>): ChrootResult {
+    private suspend fun gitProject(
+        project: Project,
+        script: String,
+        vararg extra: Pair<String, String>,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): ChrootResult {
         val main = checkpoints.ensureWorkspace(project.id)
         val env = mapOf("FORGE_ID" to "main", "FORGE_SLUG" to project.slug) + extra.toMap()
-        return runner.run(
+        var notified = false
+        val raw = runner.run(
             workspaceDir = main,
             slug = project.slug,
             command = script,
             environment = env,
             timeoutMillis = GIT_TIMEOUT_MS,
+            onChunk = if (onWaitingForLock != null) {
+                { chunk ->
+                    if (!notified && chunk.contains(WAIT_TOKEN)) {
+                        notified = true
+                        onWaitingForLock()
+                    }
+                }
+            } else {
+                null
+            },
         )
+        return raw.copy(output = stripWaitTokens(raw.output))
     }
 
-    private suspend fun git(project: Project, chatId: String, script: String, vararg extra: Pair<String, String>): ChrootResult {
+    private suspend fun git(
+        project: Project,
+        chatId: String,
+        script: String,
+        vararg extra: Pair<String, String>,
+        onWaitingForLock: (() -> Unit)? = null,
+    ): ChrootResult {
         val id = branchId(chatId)
         val main = checkpoints.ensureWorkspace(project.id)
         val env = mapOf("FORGE_ID" to id, "FORGE_SLUG" to project.slug) + extra.toMap()
-        return runner.run(
+        var notified = false
+        val raw = runner.run(
             workspaceDir = main,
             slug = project.slug,
             command = script,
             environment = env,
             timeoutMillis = GIT_TIMEOUT_MS,
+            onChunk = if (onWaitingForLock != null) {
+                { chunk ->
+                    if (!notified && chunk.contains(WAIT_TOKEN)) {
+                        notified = true
+                        onWaitingForLock()
+                    }
+                }
+            } else {
+                null
+            },
         )
+        return raw.copy(output = stripWaitTokens(raw.output))
     }
 
     companion object {
         private const val GIT_TIMEOUT_MS = 3 * 60_000L
         const val MAX_DIFF_CHARS = 120_000
+        const val WAIT_TOKEN = "[FORGE_GIT_WAITING]"
+
+        fun stripWaitTokens(output: String): String =
+            output.lineSequence().filterNot { it.trim() == WAIT_TOKEN }.joinToString("\n")
+
+        /**
+         * Shell helper snippet that queues behind any active git operation in the current repository (or `$M` / `$C`),
+         * emits [WAIT_TOKEN] once when waiting so the UI can inform the user, and cleans up stale `.git/index.lock`
+         * files left behind by crashed processes.
+         */
+        val GIT_QUEUE_WAIT_SH: String = """
+            forge_wait_git_lock() {
+              local notified=0
+              local waited=0
+              while [ -f ".git/index.lock" ] || { [ -n "${'$'}{M:-}" ] && [ -f "${'$'}M/.git/index.lock" ]; } || { [ -n "${'$'}{C:-}" ] && [ -f "${'$'}C/.git/index.lock" ]; }; do
+                if ! pgrep -x git >/dev/null 2>&1; then
+                  sleep 0.2
+                  if ! pgrep -x git >/dev/null 2>&1; then
+                    rm -f ".git/index.lock" "${'$'}{M:-.}/.git/index.lock" "${'$'}{C:-.}/.git/index.lock" 2>/dev/null || true
+                    break
+                  fi
+                fi
+                if [ "${'$'}notified" -eq 0 ]; then
+                  echo "$WAIT_TOKEN"
+                  notified=1
+                fi
+                sleep 0.5
+                waited=${'$'}((waited + 1))
+                if [ "${'$'}waited" -ge 120 ]; then
+                  if ! pgrep -x git >/dev/null 2>&1; then
+                    rm -f ".git/index.lock" "${'$'}{M:-.}/.git/index.lock" "${'$'}{C:-.}/.git/index.lock" 2>/dev/null || true
+                  fi
+                  break
+                fi
+              done
+            }
+        """.trimIndent()
 
         /** Eight letters or digits of the chat id: short, safe in paths, refs and branch names. */
         fun branchId(chatId: String): String =
@@ -281,11 +388,52 @@ class ChatBranches(context: Context) {
         }
 
         // Shell scripts: § stands for $ so that Kotlin does not read them as templates.
-        private fun script(body: String): String = ("""
+        internal fun script(body: String): String = ("""
             set -e
             M="/workspace/§FORGE_SLUG"
             C="§M/.forge/chats/§FORGE_ID"
-            G() { git -c user.name="NextCraft Forge" -c user.email="forge@localhost" -c safe.directory='*' -c core.fileMode=false "§@"; }
+            forge_wait_git_lock() {
+              local notified=0
+              local waited=0
+              while [ -f ".git/index.lock" ] || [ -f "§M/.git/index.lock" ] || [ -f "§C/.git/index.lock" ]; do
+                if ! pgrep -x git >/dev/null 2>&1; then
+                  sleep 0.2
+                  if ! pgrep -x git >/dev/null 2>&1; then
+                    rm -f ".git/index.lock" "§M/.git/index.lock" "§C/.git/index.lock" 2>/dev/null || true
+                    break
+                  fi
+                fi
+                if [ "§notified" -eq 0 ]; then
+                  echo "[FORGE_GIT_WAITING]"
+                  notified=1
+                fi
+                sleep 0.5
+                waited=§((waited + 1))
+                if [ "§waited" -ge 120 ]; then
+                  if ! pgrep -x git >/dev/null 2>&1; then
+                    rm -f ".git/index.lock" "§M/.git/index.lock" "§C/.git/index.lock" 2>/dev/null || true
+                  fi
+                  break
+                fi
+              done
+            }
+            G() {
+              local attempt=0
+              while true; do
+                forge_wait_git_lock
+                if git -c user.name="NextCraft Forge" -c user.email="forge@localhost" -c safe.directory='*' -c core.fileMode=false "§@"; then
+                  return 0
+                fi
+                local rc=§?
+                if [ "§attempt" -lt 6 ] && { [ -f ".git/index.lock" ] || [ -f "§M/.git/index.lock" ] || [ -f "§C/.git/index.lock" ] || pgrep -x git >/dev/null 2>&1; }; then
+                  if [ "§attempt" -eq 0 ]; then echo "[FORGE_GIT_WAITING]"; fi
+                  attempt=§((attempt + 1))
+                  sleep 0.5
+                  continue
+                fi
+                return "§rc"
+              done
+            }
         """.trimIndent() + "\n" + body.trimIndent()).replace('§', '$')
 
         /** Makes sure the project is a git repository with everything committed, then clones it for the chat. */

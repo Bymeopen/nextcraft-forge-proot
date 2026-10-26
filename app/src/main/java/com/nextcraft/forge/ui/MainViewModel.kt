@@ -1742,6 +1742,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Notifies the user when a Git operation is waiting in queue behind another Git process in the same repository. */
+    private fun notifyGitWaitingInQueue() {
+        _state.update { it.copy(bannerMessage = UiText.res(R.string.msg_git_waiting_queue)) }
+    }
+
     /** Runs a branch operation on the project repository; refused while a chat writes in the project folder. */
     private fun repoBranchOp(success: Int, op: suspend (Project) -> RepoOpResult) {
         val project = _state.value.activeProject ?: return
@@ -1767,11 +1772,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun createRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_created) { chatBranches.createBranch(it, name) }
+    fun createRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_created) { chatBranches.createBranch(it, name, ::notifyGitWaitingInQueue) }
 
-    fun switchRepoBranch(name: String) = leaveOpenFile { repoBranchOp(R.string.repo_branch_switched) { chatBranches.switchBranch(it, name) } }
+    fun switchRepoBranch(name: String) = leaveOpenFile { repoBranchOp(R.string.repo_branch_switched) { chatBranches.switchBranch(it, name, ::notifyGitWaitingInQueue) } }
 
-    fun deleteRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_deleted) { chatBranches.deleteBranch(it, name) }
+    fun deleteRepoBranch(name: String) = repoBranchOp(R.string.repo_branch_deleted) { chatBranches.deleteBranch(it, name, ::notifyGitWaitingInQueue) }
 
     /** Commits everything in the project folder with the user's message. */
     fun commitProjectRepo(message: String) {
@@ -1785,7 +1790,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _state.update { it.copy(repoBusy = true) }
         viewModelScope.launch {
-            val result = runCatching { chatBranches.commitProject(project, clean) }
+            val result = runCatching { chatBranches.commitProject(project, clean, ::notifyGitWaitingInQueue) }
             val failure = result.exceptionOrNull()?.message ?: result.getOrNull()?.takeIf { !it.ok }?.output?.trim()?.takeLast(200)
             _state.update {
                 it.copy(
@@ -1803,7 +1808,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val clean = message.trim()
         if (clean.isEmpty()) return
         withBranchBusy(chatId) {
-            branchLock(chatId).withLock { chatBranches.commitNow(project, chatId, clean) }
+            branchLock(chatId).withLock { chatBranches.commitNow(project, chatId, clean, ::notifyGitWaitingInQueue) }
             _state.update { it.copy(bannerMessage = UiText.res(R.string.branch_committed)) }
             refreshBranchStatus(chatId)
         }
@@ -1822,12 +1827,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val title = _state.value.chats.firstOrNull { it.id == chatId }?.title.orEmpty()
         withBranchBusy(chatId) {
             val result = branchLock(chatId).withLock {
-                val saved = chatBranches.commitTurn(project, chatId, "Forge: save work before merge")
+                val saved = chatBranches.commitTurn(project, chatId, "Forge: save work before merge", ::notifyGitWaitingInQueue)
                 // Conflict markers still in the branch must be fixed first; merging now would put them in the project.
                 if (!saved.ok && saved.output.contains("unresolved conflict")) {
                     BranchMergeResult.Failed(saved.output.trim().takeLast(200))
                 } else {
-                    chatBranches.mergeIntoMain(project, chatId, title)
+                    chatBranches.mergeIntoMain(project, chatId, title, ::notifyGitWaitingInQueue)
                 }
             }
             val message = when (result) {
@@ -1848,7 +1853,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         if (projectFolderBusy(project.id)) return
         withBranchBusy(chatId) {
-            val result = branchLock(chatId).withLock { chatBranches.updateFromMain(project, chatId) }
+            val result = branchLock(chatId).withLock { chatBranches.updateFromMain(project, chatId, ::notifyGitWaitingInQueue) }
             val message = when (result) {
                 BranchMergeResult.Done -> UiText.res(R.string.branch_updated)
                 is BranchMergeResult.Conflict -> UiText.res(R.string.branch_update_conflict, result.files.joinToString(", ").take(200))
@@ -1862,7 +1867,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun discardChatBranch(chatId: String) {
         val project = _state.value.activeProject ?: return
         withBranchBusy(chatId) {
-            chatBranches.discard(project, chatId)
+            chatBranches.discard(project, chatId, ::notifyGitWaitingInQueue)
             val updated = _state.value.chats.map { if (it.id == chatId) it.copy(isolated = false) else it }
             preferences.saveProjectChats(project.id, updated)
             _state.update { it.copy(chats = updated, branchStatus = it.branchStatus - chatId, branchDiff = it.branchDiff - chatId) }
@@ -2654,9 +2659,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // A GitHub sync writes the token into the rootfs while it runs; never let an agent (root in the
                 // same chroot) start before that sync has removed it again.
+                val chatMutex = branchLock(project.id, chatId)
+                if (githubOperationLock.isLocked || (run.isolated && chatMutex.isLocked)) {
+                    setRunStatus(run, UiText.res(R.string.msg_git_waiting_queue))
+                }
                 withContext(Dispatchers.IO) { githubOperationLock.withLock { } }
                 // An isolated chat works in its own clone of the project (created on first use).
-                val branch = if (run.isolated) branchLock(project.id, chatId).withLock { chatBranches.ensure(project, chatId) } else null
+                val branch = if (run.isolated) {
+                    chatMutex.withLock {
+                        chatBranches.ensure(project, chatId) {
+                            setRunStatus(run, UiText.res(R.string.msg_git_waiting_queue))
+                            notifyGitWaitingInQueue()
+                        }
+                    }
+                } else {
+                    null
+                }
+                setRunStatus(run, UiText.res(R.string.agent_status_starting, agent.title))
                 bridge.startSession(
                     projectId = branch?.pseudoProjectId ?: project.id,
                     projectSlug = branch?.slug ?: project.slug,
@@ -5115,6 +5134,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val syncCmd = buildString {
+                        append(com.nextcraft.forge.runtime.ChatBranches.GIT_QUEUE_WAIT_SH).append("\n")
+                        append("forge_wait_git_lock\n")
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
                         append("branch=${'$'}(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
                         append("git config user.name ${shellSingleQuote(login)} && ")
@@ -5125,8 +5146,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         append("(git pull --no-rebase --no-edit --autostash origin \"${'$'}branch\" >/dev/null 2>&1 || git merge --abort >/dev/null 2>&1 || true); ")
                         append("fi && ")
                         append("if ! git push -u origin \"HEAD:${'$'}branch\"; then ")
-                        append("git push -f origin \"HEAD:ccr-auto-sync-${'$'}branch\" && ")
-                        append("(for i in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 30; git push origin \"HEAD:${'$'}branch\" >/dev/null 2>&1 && git push origin \":ccr-auto-sync-${'$'}branch\" >/dev/null 2>&1 && break; done >/dev/null 2>&1 &); ")
+                        append("git push -f origin \"HEAD:ccr-auto-sync-${'$'}branch\" >/dev/null 2>&1 || true; ")
                         append("fi && ")
                         append("if git remote get-url proot >/dev/null 2>&1; then ")
                         append("git branch -f proot-main HEAD >/dev/null 2>&1 || true; ")
@@ -5176,6 +5196,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val ws = checkpoints.ensureWorkspace(project.id)
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val pullCmd = buildString {
+                        append(com.nextcraft.forge.runtime.ChatBranches.GIT_QUEUE_WAIT_SH).append("\n")
+                        append("forge_wait_git_lock\n")
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
                         append("branch=${'$'}(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
                         append("git fetch origin && (git pull --rebase --autostash origin \"${'$'}branch\" || ")

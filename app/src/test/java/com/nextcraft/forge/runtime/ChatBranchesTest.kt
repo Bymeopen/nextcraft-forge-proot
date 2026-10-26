@@ -91,4 +91,16 @@ class ChatBranchesTest {
         val info = ChatBranches.parseRepoInfo("repo=yes\nbranch=dev\nuncommitted=0\nB main\nB dev")
         assertEquals(listOf("main", "dev"), info.branches)
     }
+
+    @Test
+    fun waitTokensAreStrippedAndScriptsQueueBehindIndexLock() {
+        val raw = "${ChatBranches.WAIT_TOKEN}\nRESULT=merged\n"
+        val cleaned = ChatBranches.stripWaitTokens(raw)
+        assertEquals("RESULT=merged\n", cleaned)
+        assertEquals(BranchMergeResult.Done, ChatBranches.parseMergeResult(cleaned, true))
+        val generated = ChatBranches.script("G status")
+        assertTrue(generated.contains("forge_wait_git_lock"))
+        assertTrue(generated.contains("index.lock"))
+        assertTrue(generated.contains(ChatBranches.WAIT_TOKEN))
+    }
 }

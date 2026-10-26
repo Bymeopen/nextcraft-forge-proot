@@ -1533,4 +1533,5 @@
     <string name="verify_now">Check build now (build + tests)</string>
     <string name="verify_auto_toggle">Check build after agent changes</string>
     <string name="verify_autofix_toggle">Let the agent fix build errors</string>
+    <string name="msg_git_waiting_queue">Waiting in queue: another Git operation is running in this repository…</string>
 </resources>
