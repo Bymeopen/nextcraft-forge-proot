@@ -119,18 +119,22 @@ class AppUpdateControllerTest {
     }
 
     @Test
-    fun silentCheck_ignoresErrors_andKeepsAnInfoThatIsAlreadyShown() {
+    fun silentCheck_ignoresErrors_andUpdatesWhenNewerVersionCodeArrives() {
         val r = Rig(Source().apply { result = { throw IOException("offline") } })
         r.controller.silentCheck()
         assertNull(r.state.info)
         assertNull(r.state.statusMessage)
         r.source.result = { info }
         r.controller.silentCheck(force = true)
-        val other = info.copy(versionName = "9.9.9")
-        r.source.result = { other }
+        val sameCode = info.copy(versionName = "9.9.9")
+        r.source.result = { sameCode }
         r.controller.silentCheck(force = true)
-        assertEquals(info, r.state.info) // the first newer build stays; it is still announced
-        assertEquals(listOf(info, other), r.announced)
+        assertEquals(info, r.state.info) // same versionCode stays
+        val newerCode = info.copy(versionName = "1.2.4", versionCode = 124)
+        r.source.result = { newerCode }
+        r.controller.silentCheck(force = true)
+        assertEquals(newerCode, r.state.info) // higher versionCode replaces stale info
+        assertEquals(listOf(info, sameCode, newerCode), r.announced)
     }
 
     @Test

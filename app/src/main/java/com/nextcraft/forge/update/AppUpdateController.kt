@@ -99,7 +99,7 @@ class AppUpdateController(
         lastSilentCheck = time
         scope.launch {
             val info = withContext(io) { runCatching { source.check("") }.getOrNull() } ?: return@launch
-            if (mutable.value.info == null) {
+            if (mutable.value.info == null || info.versionCode > (mutable.value.info?.versionCode ?: 0L)) {
                 mutable.update { it.copy(info = info, statusMessage = str(R.string.upd_available, info.versionName, info.versionCode)) }
             }
             withContext(io) { announce(info) }
@@ -135,33 +135,52 @@ class AppUpdateController(
     }
 
     fun downloadAndInstall() {
-        val info = mutable.value.info ?: return
+        val currentInfo = mutable.value.info ?: return
         if (mutable.value.progress != null) return
         scope.launch {
-            mutable.update { it.copy(progress = 0f, statusMessage = str(R.string.upd_downloading, info.versionName)) }
+            var activeInfo = currentInfo
+            mutable.update { it.copy(progress = 0f, statusMessage = str(R.string.upd_downloading, activeInfo.versionName)) }
             val result = withContext(io) {
                 runCatching {
-                    var lastReported = -1
-                    val apk = source.download(info) { downloaded, total ->
-                        val fraction = if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else null
-                        // Report whole-percent steps only; per-chunk state updates would recompose the screen constantly.
-                        val step = fraction?.let { (it * 100).toInt() } ?: (downloaded / (512 * 1024)).toInt()
-                        if (step != lastReported) {
-                            lastReported = step
-                            val mb = "%.1f".format(downloaded / 1_048_576.0)
-                            val msg = if (fraction != null) {
-                                str(R.string.upd_progress_total, info.versionName, mb, "%.1f".format(total / 1_048_576.0))
-                            } else {
-                                str(R.string.upd_progress, info.versionName, mb)
+                    fun downloadWithProgress(target: AppUpdateInfo): File {
+                        var lastReported = -1
+                        return source.download(target) { downloaded, total ->
+                            val fraction = if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else null
+                            // Report whole-percent steps only; per-chunk state updates would recompose the screen constantly.
+                            val step = fraction?.let { (it * 100).toInt() } ?: (downloaded / (512 * 1024)).toInt()
+                            if (step != lastReported) {
+                                lastReported = step
+                                val mb = "%.1f".format(downloaded / 1_048_576.0)
+                                val msg = if (fraction != null) {
+                                    str(R.string.upd_progress_total, target.versionName, mb, "%.1f".format(total / 1_048_576.0))
+                                } else {
+                                    str(R.string.upd_progress, target.versionName, mb)
+                                }
+                                mutable.update { it.copy(progress = fraction ?: 0f, statusMessage = msg) }
                             }
-                            mutable.update { it.copy(progress = fraction ?: 0f, statusMessage = msg) }
+                        }
+                    }
+                    val apk = try {
+                        downloadWithProgress(activeInfo)
+                    } catch (e: Throwable) {
+                        if (e.message?.contains("404") == true) {
+                            val refreshed = runCatching { source.check("") }.getOrNull()
+                            if (refreshed != null && refreshed.apkUrl != activeInfo.apkUrl) {
+                                activeInfo = refreshed
+                                mutable.update { it.copy(info = refreshed, progress = 0f, statusMessage = str(R.string.upd_downloading, refreshed.versionName)) }
+                                downloadWithProgress(refreshed)
+                            } else {
+                                throw e
+                            }
+                        } else {
+                            throw e
                         }
                     }
                     source.install(apk)
                 }.onFailure { ErrorLog.swallowed("AppUpdate", it) }
             }
             result.onSuccess {
-                mutable.update { it.copy(progress = null, statusMessage = str(R.string.upd_installing, info.versionName)) }
+                mutable.update { it.copy(progress = null, statusMessage = str(R.string.upd_installing, activeInfo.versionName)) }
             }.onFailure { err ->
                 mutable.update { it.copy(progress = null, statusMessage = str(R.string.upd_install_failed, err.message?.let(localize).orEmpty())) }
             }
