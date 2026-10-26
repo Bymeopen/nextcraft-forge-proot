@@ -450,6 +450,10 @@ fun SettingsScreenModern(
             ThinDivider()
             // What changed in this build: read here instead of a phone notification after each update.
             var whatsNewOpen by rememberSaveable { mutableStateOf(false) }
+            val dynamicNotes = remember(state.updateInfo, whatsNewOpen) {
+                state.updateInfo?.notes?.takeIf { it.isNotBlank() }
+                    ?: runCatching { com.nextcraft.forge.data.AppPreferences(context).latestReleaseNotes.takeIf { it.isNotBlank() } }.getOrNull()
+            }
             SettingsRow(
                 icon = ForgeGlyph.INFO,
                 title = stringResource(R.string.chg_notif_channel),
@@ -458,7 +462,7 @@ fun SettingsScreenModern(
             )
             if (whatsNewOpen) {
                 Text(
-                    stringResource(R.string.chg_notif_text),
+                    dynamicNotes ?: stringResource(R.string.chg_notif_text),
                     fontSize = ForgeType.secondary,
                     color = scheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),

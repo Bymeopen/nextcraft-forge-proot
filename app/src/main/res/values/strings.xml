@@ -1435,7 +1435,7 @@
     <string name="settings_schedule_agent_subtitle">The agent may repeat or monitor something by adding a timer to the chat (up to 3 per chat).</string>
     <string name="chg_notif_channel">What\'s new</string>
     <string name="chg_notif_title">NextCraft Dev updated</string>
-    <string name="chg_notif_text">• Faster, smoother chats: no more freezes during long agent turns\n• Agent file changes are saved automatically\n• Gradle builds sized to your phone (heap, daemon, cache): repeat builds much faster\n• Room/KSP projects (e.g. NewPipe) build on the first try\n• Stop now really stops the agent; clear download caches in Settings\n• Runtime 2026.10.2: Claude Code 2.1.308, Antigravity 1.4.5, DeepSeek 0.2.1\n• Quick projects are numbered: Quick project 1, 2, 3…</string>
+    <string name="chg_notif_text">• In-app updater automatically refreshes rolling release manifests and live changelog notes on every update\n• GitHub MCP Connector auto-provisions and syncs from your connected GITHUB_TOKEN\n• 5-Pillar Fullstack Audit hardening (100/100): Chroot &amp; PRoot isolation, HTTPS redirect verification, and UI performance tuning\n• Built-in Design, Mobile, Game &amp; ARM64 Playwright MCP suite in /opt/nextcraft/bin\n• Faster, smoother agent chats and hardware-tuned Gradle builds with automatic GitHub sync</string>
     <string name="notif_channel_sign_in">Sign-in</string>
     <string name="notif_sign_in_return">Tap to return to NextCraft Dev</string>
     <string name="settings_android_host_tools">Android system access</string>
