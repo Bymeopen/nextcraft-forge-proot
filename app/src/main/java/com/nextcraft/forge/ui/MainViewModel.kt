@@ -3928,7 +3928,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun captureUiInspectorHierarchy() {
         if (_state.value.uiInspectorBusy) return
-        if (!RuntimeEngines.isRootEngine(_state.value.runtimeEngine)) {
+        if (!RuntimeEngines.isRootEngine()) {
             _state.update { it.copy(uiInspectorNodes = emptyList(), bannerMessage = UiText.res(R.string.mt_root_required)) }
             return
         }
