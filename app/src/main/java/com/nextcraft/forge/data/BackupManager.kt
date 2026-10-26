@@ -128,7 +128,8 @@ class BackupManager(private val context: Context) {
      */
     fun restore(input: InputStream, password: CharArray?, onProgress: (String) -> Unit = {}): Result {
         val buffered = input as? BufferedInputStream ?: BufferedInputStream(input)
-        val source = if (isEncrypted(buffered)) {
+        val encrypted = isEncrypted(buffered)
+        val source = if (encrypted) {
             if (password == null || password.isEmpty()) throw NeedsPasswordException()
             BackupCrypto.decrypt(buffered, password)
         } else {
@@ -141,13 +142,23 @@ class BackupManager(private val context: Context) {
         try {
             onProgress("reading")
             ZipInputStream(source).use { zip ->
+                val buffer = ByteArray(64 * 1024)
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (entry.isDirectory) continue
+                    require(files < MAX_RESTORE_FILES) { "Backup archive has too many files" }
                     val target = File(staging, entry.name).canonicalFile
                     require(target.toPath().startsWith(stagingRoot)) { "Unsafe path in backup: ${entry.name}" }
                     target.parentFile?.mkdirs()
-                    target.outputStream().use { bytes += zip.copyTo(it) }
+                    target.outputStream().use { out ->
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            bytes += count
+                            require(bytes <= MAX_RESTORE_BYTES) { "Backup archive exceeds maximum restore size" }
+                            out.write(buffer, 0, count)
+                        }
+                    }
                     files++
                 }
             }
@@ -156,12 +167,14 @@ class BackupManager(private val context: Context) {
             require(manifest.optInt("format") == 1) { "Unsupported backup format" }
 
             File(staging, "workspaces").listFiles()?.forEach { project ->
+                require(SAFE_RESTORE_NAME.matches(project.name)) { "Invalid project directory name: ${project.name}" }
                 onProgress("projects")
                 replaceDir(project, File(filesDir, "workspaces/${project.name}"))
             }
             File(staging, "chats").takeIf { it.isDirectory }?.let { chats ->
                 onProgress("chats")
                 chats.listFiles()?.forEach { item ->
+                    require(SAFE_RESTORE_NAME.matches(item.name)) { "Invalid chat entry name: ${item.name}" }
                     val dest = File(filesDir, "chats/${item.name}")
                     if (item.isDirectory) replaceDir(item, dest) else item.copyTo(dest, overwrite = true)
                 }
@@ -170,6 +183,8 @@ class BackupManager(private val context: Context) {
                 onProgress("settings")
                 val destDir = File(context.applicationInfo.dataDir, "shared_prefs").apply { mkdirs() }
                 SETTINGS_PREFS_FILES.forEach { fileName ->
+                    // Unencrypted backups cannot overwrite schedule or custom build-matrix shell commands.
+                    if (!encrypted && fileName != "$PREFS_NAME.xml") return@forEach
                     val stagedFile = File(prefsDir, fileName)
                     if (stagedFile.isFile) {
                         stagedFile.copyTo(File(destDir, fileName), overwrite = true)
@@ -243,6 +258,9 @@ class BackupManager(private val context: Context) {
         )
         private const val MANIFEST = "nextcraft-backup.json"
         private const val SECRETS = "api-keys.json"
+        private const val MAX_RESTORE_FILES = 100_000
+        private const val MAX_RESTORE_BYTES = 4L * 1024 * 1024 * 1024
+        private val SAFE_RESTORE_NAME = Regex("[A-Za-z0-9._-]{1,128}")
 
         /** Rebuilt by the next build or install; skipping them keeps a backup small. */
         val SKIPPED_DIRS = setOf("build", ".gradle", "node_modules", ".cxx", ".kotlin", "__pycache__", ".venv", "venv", ".next")

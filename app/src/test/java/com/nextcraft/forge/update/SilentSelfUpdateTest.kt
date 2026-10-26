@@ -15,6 +15,8 @@ class SilentSelfUpdateTest {
         assertTrue(script.contains("chmod 700 ${SilentSelfUpdate.STAGING_DIR}"))
         assertTrue(script.contains("am start --user 0 -n com.nextcraft.forge/com.nextcraft.forge.MainActivity"))
         assertTrue(script.endsWith("&"))
+        val debugDowngradeScript = SilentSelfUpdate.detachedScript("com.nextcraft.forge/com.nextcraft.forge.MainActivity", allowDowngrade = true)
+        assertTrue(debugDowngradeScript!!.contains("pm install -r -d ${SilentSelfUpdate.STAGING_APK}"))
         assertNull(SilentSelfUpdate.detachedScript("x/y; rm -rf /"))
         assertNull(SilentSelfUpdate.detachedScript("com.a/b' ; id #"))
     }
