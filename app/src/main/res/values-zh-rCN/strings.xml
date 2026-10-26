@@ -1508,4 +1508,12 @@
     <string name="verify_auto_toggle">智能体修改后检查构建</string>
     <string name="verify_autofix_toggle">让智能体修复构建错误</string>
     <string name="msg_git_waiting_queue">正在排队等待：此仓库中有另一个 Git 操作正在运行…</string>
+    <string name="projects_connect_figma">连接 Figma</string>
+    <string name="projects_figma_subtitle">从 Figma 导入 UI/UX 设计与令牌</string>
+    <string name="projects_figma_connected">已连接 Figma MCP · 可随时导入设计</string>
+    <string name="projects_figma_description">连接您的 Figma 个人访问令牌 (figd_…) 以在所有编码智能体中启用 Figma MCP，或粘贴 Figma 设计链接以生成 UI 代码。</string>
+    <string name="projects_figma_token_hint">粘贴 Figma 个人访问令牌 (figd_…)</string>
+    <string name="projects_figma_open_settings">打开 Figma 令牌设置</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="projects_figma_import_url">将 Figma 设计导入项目</string>
 </resources>

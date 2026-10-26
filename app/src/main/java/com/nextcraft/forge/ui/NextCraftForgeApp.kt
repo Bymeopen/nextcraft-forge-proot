@@ -149,6 +149,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
     var showNewProjectDialog by rememberSaveable { mutableStateOf(false) }
     var paletteOpen by rememberSaveable { mutableStateOf(false) }
     var showGitHubDialog by rememberSaveable { mutableStateOf(false) }
+    var showFigmaDialog by rememberSaveable { mutableStateOf(false) }
     if (paletteOpen) ForgeCommandPalette(onDismiss = { paletteOpen = false }, onOpen = viewModel::selectTab)
 
     if (!state.runtimeInstalled && !bypassSetupGate) {
@@ -429,6 +430,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                             onImportZip = viewModel::importZipProject,
                             onCloneGitUrl = viewModel::cloneGitUrl,
                             onConnectGitHub = { showGitHubDialog = true },
+                            onConnectFigma = { showFigmaDialog = true },
                             onDeleteProject = viewModel::deleteProject,
                             onRenameProject = viewModel::renameProject,
                             onNewQuickProject = viewModel::createQuickProject,
@@ -500,6 +502,15 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
             title = { Text(stringResource(R.string.settings_github)) },
             text = { GitHubSection(state, viewModel) },
             confirmButton = { ForgeTextButton(onClick = { showGitHubDialog = false }) { Text(stringResource(R.string.agent_close)) } },
+        )
+    }
+
+    if (showFigmaDialog) {
+        ForgeAlertDialog(
+            onDismissRequest = { showFigmaDialog = false },
+            title = { Text(stringResource(R.string.projects_connect_figma)) },
+            text = { FigmaSection(state = state, viewModel = viewModel, onClose = { showFigmaDialog = false }) },
+            confirmButton = { ForgeTextButton(onClick = { showFigmaDialog = false }) { Text(stringResource(R.string.agent_close)) } },
         )
     }
 

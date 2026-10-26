@@ -1608,4 +1608,12 @@
     <string name="verify_auto_toggle">فحص البناء بعد تغييرات الوكيل</string>
     <string name="verify_autofix_toggle">السماح للوكيل بإصلاح أخطاء البناء</string>
     <string name="msg_git_waiting_queue">في قائمة الانتظار: توجد عملية Git أخرى قيد التشغيل في هذا المستودع…</string>
+    <string name="projects_connect_figma">الاتصال بـ Figma</string>
+    <string name="projects_figma_subtitle">استيراد تصميمات واجهة المستخدم والرموز من Figma</string>
+    <string name="projects_figma_connected">متصل بـ Figma MCP · جاهز لاستيراد التصميمات</string>
+    <string name="projects_figma_description">اربط رمز الوصول الشخصي لـ Figma (figd_…) لتفعيل Figma MCP لجميع الوكلاء، أو الصق رابط تصميم Figma لتوليد كود الواجهة.</string>
+    <string name="projects_figma_token_hint">الصق رمز الوصول الشخصي لـ Figma (figd_…)</string>
+    <string name="projects_figma_open_settings">فتح إعدادات رمز Figma</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="projects_figma_import_url">استيراد تصميم Figma إلى المشروع</string>
 </resources>

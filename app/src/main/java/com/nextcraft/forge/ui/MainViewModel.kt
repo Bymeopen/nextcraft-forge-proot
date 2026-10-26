@@ -516,6 +516,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            val connectors = withContext(Dispatchers.IO) { runCatching { connectorStore.list() }.getOrDefault(emptyList()) }
+            val skills = withContext(Dispatchers.IO) { runCatching { skillStore()?.list() }.getOrNull().orEmpty() }
+
             _state.update {
                 it.copy(
                     arm64Supported = arm64,
@@ -537,6 +540,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     androidBuild = if (it.androidBuild.phase == AndroidBuildPhase.BUILDING) it.androidBuild else initialBuildRecord,
                     providerProfile = profile,
                     savedApiKeys = keys,
+                    connectors = connectors,
+                    skills = skills,
                     languageCode = AppStrings.languageCode(getApplication()),
                     interactiveHighRiskApprovals = preferences.interactiveHighRiskApprovals,
                     autoApproveAllTools = preferences.autoApproveAllTools,
@@ -1514,6 +1519,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { connectorStore.delete(id) }
             loadConnectors()
+        }
+    }
+
+    /** Connects the official open-source Figma MCP server (`figma-developer-mcp`) with a Figma Personal Access Token. */
+    fun connectFigma(token: String) {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return
+        saveConnector(
+            name = "Figma",
+            transport = McpTransport.COMMAND,
+            target = "npx -y figma-developer-mcp --stdio",
+            secretName = "FIGMA_API_KEY",
+            secret = cleanToken,
+        )
+    }
+
+    /** Disconnects the Figma MCP server and removes its stored token from the Android Keystore vault. */
+    fun disconnectFigma() {
+        deleteConnector("figma")
+    }
+
+    /** Imports a Figma frame/design URL into the active project (or a new Quick project) and starts a design-to-code turn. */
+    fun importFigmaDesignUrl(figmaUrl: String) {
+        val cleanUrl = figmaUrl.trim()
+        if (cleanUrl.isEmpty()) return
+        val prompt = "Implement the UI/UX design from this Figma link ($cleanUrl) using the Figma MCP / design tools, matching layout, typography, colors, spacing, and responsive components."
+        val active = _state.value.activeProject
+        if (active != null) {
+            _state.update {
+                it.copy(
+                    activeTab = ForgeTab.PROJECTS,
+                    projectView = ProjectView.CONVERSATION,
+                )
+            }
+            sendPrompt(prompt)
+        } else {
+            viewModelScope.launch {
+                val project = withContext(Dispatchers.IO) {
+                    val identity = generateQuickChatIdentity(_state.value.projects.map { it.slug }.toSet(), str(R.string.quick_project_name))
+                    val project = Project(
+                        name = identity.displayName,
+                        description = "Figma design project",
+                        language = "Multi-language",
+                        slug = identity.slug,
+                        kind = ProjectKind.QUICK_PROJECT,
+                    )
+                    checkpoints.ensureWorkspace(project.id)
+                    project
+                }
+                configureAllProjectRoots(prependProject(project))
+                leaveOpenFile {
+                    selectProject(project.id)
+                    openConversation()
+                    sendPrompt(prompt)
+                }
+            }
         }
     }
 

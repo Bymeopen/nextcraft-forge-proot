@@ -98,6 +98,7 @@ fun ProjectsScreen(
     onImportZip: (Uri) -> Unit,
     onCloneGitUrl: (String) -> Unit,
     onConnectGitHub: () -> Unit,
+    onConnectFigma: () -> Unit = {},
     onDeleteProject: (String) -> Unit,
     onRenameProject: (String, String) -> Unit = { _, _ -> },
     onNewQuickProject: () -> Unit = {},
@@ -132,10 +133,12 @@ fun ProjectsScreen(
         item(key = "import") {
             BringExistingProjectCard(
                 githubLogin = state.githubLogin,
+                figmaConnected = state.figmaConnected,
                 // Any type: file managers often label .zip as application/octet-stream, which would grey it out.
                 onPickZip = { zipPicker.launch(arrayOf("*/*")) },
                 onGitUrl = { showCloneDialog = true },
                 onConnectGitHub = onConnectGitHub,
+                onConnectFigma = onConnectFigma,
             )
         }
         item(key = "header-yours") {
@@ -320,13 +323,15 @@ private fun ProjectsHero(onQuickProject: () -> Unit, onNewProject: () -> Unit) {
     }
 }
 
-/** Collapsible import card: header toggles; body offers ZIP, Git URL and GitHub. */
+/** Collapsible import card: header toggles; body offers ZIP, Git URL, GitHub and Figma. */
 @Composable
 private fun BringExistingProjectCard(
     githubLogin: String,
+    figmaConnected: Boolean = false,
     onPickZip: () -> Unit,
     onGitUrl: () -> Unit,
     onConnectGitHub: () -> Unit,
+    onConnectFigma: () -> Unit = {},
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     val tokens = LocalForgeThemeTokens.current
@@ -422,6 +427,47 @@ private fun BringExistingProjectCard(
                                 } else {
                                     stringResource(R.string.projects_github_connected, githubLogin)
                                 },
+                                fontSize = ForgeType.secondary,
+                                color = scheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = scheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(tokens.cardElevatedColor)
+                            .clickable(role = Role.Button, onClick = onConnectFigma)
+                            .heightIn(min = 60.dp)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = scheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.projects_connect_figma),
+                                fontSize = ForgeType.body,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                text = stringResource(
+                                    if (figmaConnected) R.string.projects_figma_connected else R.string.projects_figma_subtitle,
+                                ),
                                 fontSize = ForgeType.secondary,
                                 color = scheme.onSurfaceVariant,
                                 maxLines = 1,

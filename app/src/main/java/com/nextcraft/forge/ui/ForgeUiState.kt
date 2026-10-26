@@ -287,6 +287,8 @@ data class ForgeUiState(
     val activeChatRunning: Boolean get() = activeChatId in runningChatIds
     /** An agent works in the open project: its files are locked. Agents in other projects do not lock them. */
     val activeProjectAgentRunning: Boolean get() = (runningProjectChatCounts[activeProjectId] ?: 0) > 0
+    /** True when the Figma MCP connector is configured and enabled. */
+    val figmaConnected: Boolean get() = connectors.any { (it.id == "figma" || it.name.equals("Figma", ignoreCase = true)) && it.enabled }
 }
 
 /** One interactive/visible Android UI node dumped via uiautomator for Visual Tap-to-Edit with Agent. */
