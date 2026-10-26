@@ -1025,6 +1025,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (index < 0) return
         val removed = currentProjects[index]
         closeProjectTerminals(removed.id)
+        if (pendingChatDelete?.project?.id == removed.id) {
+            finalizePendingChatDelete()
+        }
         // A second delete inside the undo window makes the first one final.
         finalizePendingDelete()
         val updated = currentProjects.filterNot { it.id == projectId }
@@ -1228,21 +1231,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.containsKey(runKey(project.id, chatId))) return
         val currentChats = _state.value.chats
         if (currentChats.size <= 1) return
+        val index = currentChats.indexOfFirst { it.id == chatId }
+        if (index < 0) return
+        val removed = currentChats[index]
         val updatedChats = currentChats.filterNot { it.id == chatId }
-        if (updatedChats.size == currentChats.size) return
         // Its shell may sit in the branch folder that is about to be removed.
         closeChatTerminal(chatId)
-        if (currentChats.firstOrNull { it.id == chatId }?.isolated == true) {
-            viewModelScope.launch { runCatching { chatBranches.discard(project, chatId) } }
-        }
+        // A second chat delete inside the undo window makes the first one final.
+        finalizePendingChatDelete()
         preferences.saveProjectChats(project.id, updatedChats)
-        viewModelScope.launch(Dispatchers.IO) {
-            AgentKind.entries.forEach { agent ->
-                preferences.saveAgentConversation(agent, project.id, chatId, null)
-            }
-            runCatching {
-                File(getApplication<Application>().filesDir, "chats/${project.id}/$chatId.json").delete()
-            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+        pendingChatDelete = PendingChatDelete(project, removed, index)
+        pendingChatDeleteJob = viewModelScope.launch {
+            delay(UNDO_WINDOW_MS)
+            finalizePendingChatDelete()
         }
         val nextChatId = if (_state.value.activeChatId == chatId) {
             updatedChats.first().id
@@ -1251,7 +1252,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val nextRun = runs[runKey(project.id, nextChatId)]
         val messages = nextRun?.messages ?: preferences.loadMessages(project.id, nextChatId)
-        dropScheduledTasks { it.projectId == project.id && it.chatId == chatId }
         _state.update {
             it.copy(
                 chats = updatedChats,
@@ -1261,9 +1261,83 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pendingToolRequest = nextRun?.pendingTool,
                 queuedPrompts = it.queuedPrompts.filterNot { q -> q.projectId == project.id && q.chatId == chatId },
                 retryPrompts = it.retryPrompts - chatId,
+                undoChatDelete = ChatUndo(project.id, removed.id, removed.title),
             )
         }
     }
+
+    /** Restores the chat removed by [deleteChat] if its undo window is still open. */
+    fun undoDeleteChat() {
+        val pending = pendingChatDelete ?: return
+        pendingChatDeleteJob?.cancel()
+        pendingChatDelete = null
+        val projectId = pending.project.id
+        val currentChats = if (_state.value.activeProjectId == projectId) {
+            _state.value.chats
+        } else {
+            preferences.loadProjectChats(projectId)
+        }
+        if (currentChats.any { it.id == pending.chat.id }) {
+            _state.update { it.copy(undoChatDelete = null) }
+            return
+        }
+        val restored = currentChats.toMutableList().also {
+            it.add(pending.index.coerceIn(0, it.size), pending.chat)
+        }
+        preferences.saveProjectChats(projectId, restored)
+        if (_state.value.activeProjectId == projectId) {
+            val messages = preferences.loadMessages(projectId, pending.chat.id)
+            _state.update {
+                it.copy(
+                    chats = restored,
+                    activeChatId = pending.chat.id,
+                    messages = messages,
+                    activeStatusLine = null,
+                    pendingToolRequest = null,
+                    undoChatDelete = null,
+                )
+            }
+            if (pending.chat.isolated) refreshBranchStatus(pending.chat.id)
+        } else {
+            _state.update { it.copy(undoChatDelete = null) }
+        }
+    }
+
+    /** The chat Undo Snackbar was dismissed or timed out on its own; the deletion stays pending until its window ends. */
+    fun clearChatUndoPrompt() {
+        _state.update { it.copy(undoChatDelete = null) }
+    }
+
+    /** Wipes the files and branch of the chat waiting in the undo window. Safe to call when nothing is pending. */
+    private fun finalizePendingChatDelete() {
+        val pending = pendingChatDelete ?: return
+        pendingChatDelete = null
+        pendingChatDeleteJob?.cancel()
+        val project = pending.project
+        val chat = pending.chat
+        dropScheduledTasks { it.projectId == project.id && it.chatId == chat.id }
+        _state.update { it.copy(undoChatDelete = null) }
+        if (chat.isolated) {
+            viewModelScope.launch { runCatching { chatBranches.discard(project, chat.id) } }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            wipeChatData(project.id, chat.id)
+        }
+    }
+
+    private fun wipeChatData(projectId: String, chatId: String) {
+        runCatching {
+            AgentKind.entries.forEach { agent ->
+                preferences.saveAgentConversation(agent, projectId, chatId, null)
+            }
+            File(getApplication<Application>().filesDir, "chats/$projectId/$chatId.json").delete()
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+    }
+
+    private data class PendingChatDelete(val project: Project, val chat: ProjectChat, val index: Int)
+
+    private var pendingChatDelete: PendingChatDelete? = null
+    private var pendingChatDeleteJob: Job? = null
 
     // ── Chat branches ────────────────────────────────────────────────────────────────────────────
 
@@ -5057,8 +5131,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         append("git push -f origin \"HEAD:ccr-auto-sync-${'$'}branch\" && ")
                         append("(for i in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 30; git push origin \"HEAD:${'$'}branch\" >/dev/null 2>&1 && git push origin \":ccr-auto-sync-${'$'}branch\" >/dev/null 2>&1 && break; done >/dev/null 2>&1 &); ")
                         append("fi && ")
-                        append("if git remote get-url proot >/dev/null 2>&1 && git show-ref --verify --quiet refs/heads/proot-main; then ")
-                        append("git push proot proot-main:main >/dev/null 2>&1 || true; ")
+                        append("if git remote get-url proot >/dev/null 2>&1; then ")
+                        append("git branch -f proot-main HEAD >/dev/null 2>&1 || true; ")
+                        append("git push -f proot HEAD:main >/dev/null 2>&1 || true; ")
                         append("fi; ")
                         append("else echo 'No origin remote configured in workspace' >&2; false; fi")
                     }
@@ -5586,8 +5661,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         ScheduleRuntime.tickerActive = false
-        // viewModelScope is cancelled here, so a project still in its undo window is wiped on a plain thread.
+        // viewModelScope is cancelled here, so a project or chat still in its undo window is wiped on a plain thread.
         pendingDelete?.project?.let { project -> Thread { wipeProjectData(project) }.start() }
+        pendingChatDelete?.let { pending -> Thread { wipeChatData(pending.project.id, pending.chat.id) }.start() }
         RuntimeTaskController.requestStop()
         projectBuildHandles.values.forEach { stopChrootProcess(it.process) }
         activeLogcatProcess?.destroyForcibly()

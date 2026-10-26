@@ -264,11 +264,11 @@ internal fun RepoSheet(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f),
                                     )
-                                    ConfirmedAction(
+                                    MergePrConfirmed(
                                         title = stringResource(R.string.repo_pr_merge),
                                         message = prItemLabel,
                                         confirmLabel = stringResource(R.string.repo_pr_merge),
-                                        onConfirm = { viewModel.cicd.mergePullRequest(pr.number) },
+                                        onConfirm = { method -> viewModel.cicd.mergePullRequest(pr.number, method) },
                                     ) { onClick ->
                                         ForgeTextButton(onClick = onClick, enabled = !ci.loading) {
                                             Text(stringResource(R.string.repo_pr_merge))
