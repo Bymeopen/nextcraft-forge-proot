@@ -18,9 +18,10 @@ object SilentSelfUpdate {
     private val SAFE_COMPONENT = Regex("""[A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+""")
 
     /** The shell script that runs detached as root; [component] is `package/Activity` (validated, never free text). */
-    internal fun detachedScript(component: String): String? {
+    internal fun detachedScript(component: String, allowDowngrade: Boolean = false): String? {
         if (!SAFE_COMPONENT.matches(component)) return null
-        val inner = "pm install -r $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
+        val flags = if (allowDowngrade) "-r -d" else "-r"
+        val inner = "pm install $flags $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
             "echo rc=\$rc >> $LOG_FILE; " +
             "if [ \$rc -eq 0 ]; then am start --user 0 -n $component >/dev/null 2>&1; fi"
         return "mkdir -p $STAGING_DIR && chmod 700 $STAGING_DIR && rm -f $LOG_FILE; nohup setsid sh -c '$inner' >/dev/null 2>&1 &"
@@ -38,7 +39,8 @@ object SilentSelfUpdate {
         val component = context.packageManager.getLaunchIntentForPackage(context.packageName)?.component
             ?.flattenToShortString()?.replace("/.", "/${context.packageName}.")
             ?: return@runCatching false
-        val script = detachedScript(component) ?: return@runCatching false
+        val allowDebugDowngrade = com.nextcraft.forge.BuildConfig.DEBUG && hasMatchingSignature(context, apk)
+        val script = detachedScript(component, allowDowngrade = allowDebugDowngrade) ?: return@runCatching false
         if (!stage(apk)) return@runCatching false
         if (rootRun(script, 20L) == null) return@runCatching false
         // Success ends this process while the loop waits; only a failure or a silent script gets past it.
@@ -49,6 +51,15 @@ object SilentSelfUpdate {
             if (logShowsFailure(log)) return@runCatching false
         }
         false
+    }.getOrDefault(false)
+
+    @Suppress("DEPRECATION")
+    private fun hasMatchingSignature(context: Context, apk: File): Boolean = runCatching {
+        val pm = context.packageManager
+        val flag = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        val installed = pm.getPackageInfo(context.packageName, flag).signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
+        val archive = pm.getPackageArchiveInfo(apk.absolutePath, flag)?.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
+        !installed.isNullOrEmpty() && installed == archive
     }.getOrDefault(false)
 
     private fun stage(apk: File): Boolean {

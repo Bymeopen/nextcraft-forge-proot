@@ -89,6 +89,7 @@ internal object FileBrowser {
         items.sortedWith(compareByDescending<BrowserEntry> { it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
     private fun runRoot(command: String): ByteArray? = runCatching {
+        if (!RuntimeEngines.isRootEngine()) return@runCatching null
         val process = ProcessBuilder("su", "-c", command).redirectError(ProcessBuilder.Redirect.to(File("/dev/null"))).start()
         val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
         val watchdog = Thread({

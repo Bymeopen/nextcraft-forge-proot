@@ -638,7 +638,7 @@ if __name__ == "__main__":
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $guestWorkspacePath/.agents/scripts/security_gate.py",
+            "command": "python3 scripts/security_gate.py",
             "timeout": 5
           }
         ]
