@@ -1350,7 +1350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = projectOf(run.projectId) ?: return
         viewModelScope.launch {
             branchLock(run.projectId, run.chatId).withLock {
-                runCatching { chatBranches.commitTurn(project, run.chatId, run.lastPrompt.text) }
+                runCatching { chatBranches.commitTurn(project, run.chatId, run.lastPrompt.text, ::notifyGitWaitingInQueue) }
                     .onFailure { Log.w("MainViewModel", "Could not commit the chat branch", it) }
             }
             if (_state.value.activeProjectId == run.projectId) {
@@ -1407,7 +1407,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(bannerMessage = UiText.res(R.string.branch_unmerged)) }
                 return@withBranchBusy
             }
-            chatBranches.discard(project, chatId)
+            chatBranches.discard(project, chatId, ::notifyGitWaitingInQueue)
             val updated = _state.value.chats.map { if (it.id == chatId) it.copy(isolated = false) else it }
             preferences.saveProjectChats(project.id, updated)
             _state.update { it.copy(chats = updated, branchStatus = it.branchStatus - chatId) }
@@ -4094,7 +4094,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun prepareChatBranchFolder(chatId: String) {
         val project = _state.value.activeProject ?: return
         if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated != true) return
-        runCatching { branchLock(chatId).withLock { chatBranches.ensure(project, chatId) } }
+        runCatching { branchLock(chatId).withLock { chatBranches.ensure(project, chatId, ::notifyGitWaitingInQueue) } }
             .onFailure { Log.w("MainViewModel", "chat branch for the terminal failed", it) }
     }
 
@@ -4346,8 +4346,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val n = reader.read(chunk)
                         if (n <= 0) break
                         val text = String(chunk, 0, n)
-                        buffer.append(text)
-                        onOutputChunk?.invoke(text)
+                        if (text.contains(com.nextcraft.forge.runtime.ChatBranches.WAIT_TOKEN)) {
+                            notifyGitWaitingInQueue()
+                        }
+                        val cleaned = com.nextcraft.forge.runtime.ChatBranches.stripWaitTokens(text)
+                        buffer.append(cleaned)
+                        onOutputChunk?.invoke(cleaned)
                     }
                 }
             } finally {
