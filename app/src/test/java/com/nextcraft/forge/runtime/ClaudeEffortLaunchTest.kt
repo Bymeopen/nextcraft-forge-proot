@@ -30,7 +30,7 @@ class ClaudeEffortLaunchTest {
     fun antiHallucinationRulesAreInjectedAcrossAllProvidersAndAgents() {
         val claudeAndDshPrompt = buildAgentWorkspacePrompt(
             currentPrompt = "Fix MainActivity.kt",
-            history = listOf(ChatMessage(fromUser = true, text = "Fix MainActivity.kt")),
+            priorMessages = emptyList(),
             guestWorkspacePath = "/workspace/demo",
             projectKind = ProjectKind.PROJECT,
             androidStackInstalled = true,

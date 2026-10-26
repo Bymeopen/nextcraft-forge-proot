@@ -2334,10 +2334,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return !memory.lowMemory && memory.availMem >= minFreeBytes
     }
 
-    private fun newClaudeBridge(project: Project): ClaudeRuntimeBridge = ClaudeRuntimeBridge(
+    private fun newClaudeBridge(project: Project, chatId: String): ClaudeRuntimeBridge = ClaudeRuntimeBridge(
         context = getApplication(),
         secretFor = ::resolveProviderSecret,
         rotateSecretFor = ::rotateProviderSecret,
+        savedConversation = { preferences.loadAgentConversation(AgentKind.CLAUDE_CODE, project.id, chatId) },
+        saveConversation = { preferences.saveAgentConversation(AgentKind.CLAUDE_CODE, project.id, chatId, it) },
     ).also { it.configureProjectRoot(project.id, project.rootPath) }
 
     private fun newDshBridge(project: Project): DshRuntimeBridge = DshRuntimeBridge(
@@ -2436,7 +2438,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         preferences.saveProjects(updatedProjects)
 
         val bridge: RuntimeBridge = when (agent) {
-            AgentKind.CLAUDE_CODE -> newClaudeBridge(project)
+            AgentKind.CLAUDE_CODE -> newClaudeBridge(project, chatId)
             AgentKind.DEEPSEEK_HARNESS -> newDshBridge(project)
             AgentKind.ANTIGRAVITY -> newAntigravityBridge(project, chatId)
         }
@@ -5523,7 +5525,11 @@ internal fun isTransientAgentFailure(reason: String): Boolean {
     val text = reason.lowercase()
     return listOf(
         "stream idle timeout", "context deadline exceeded", "sent nothing for 5 minutes", "stream was interrupted",
+        // agy's own wording for a dropped request, and our message for an unreachable Google.
+        "network issue connecting to the server", "could not reach google",
         "dropped mid-answer", "connection reset", "server returned an error", "overloaded", "code 500", "code 502",
         "code 503", "internal error encountered",
+        // The agent's saved session is gone; the retry starts a new one with the chat history.
+        "saved agent session was not found",
     ).any { it in text }
 }
