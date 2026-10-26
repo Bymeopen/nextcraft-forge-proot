@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Hermes-Lite Skill & Context Snapshot Exporter/Importer (skill_hub.py)
-Exports and imports .agents/skills/ and memory templates as portable bundles
-with automatic security sanitization before import.
-"""
 import argparse
 import os
 import re
@@ -13,8 +8,7 @@ import tarfile
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
 sys.path.insert(0, SCRIPT_DIR)
-
-from security_gate import SECRET_AND_INJECTION_PATTERNS  # noqa: E402
+from security_gate import SECRET_AND_INJECTION_PATTERNS
 
 SKILLS_DIR = os.path.join(WORKSPACE_ROOT, ".agents/skills")
 
@@ -22,8 +16,7 @@ def audit_skills() -> bool:
     if not os.path.exists(SKILLS_DIR):
         print("No skills directory found.")
         return True
-    ok = True
-    count = 0
+    ok, count = True, 0
     for root, _, files in os.walk(SKILLS_DIR):
         for f in files:
             if f.endswith(".md"):
@@ -49,10 +42,9 @@ def export_bundle(out_path: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Hermes-Lite Skill Auditor & Portable Bundler")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("audit", help="Scan all local SKILL.md files for secrets and prompt injection")
-    p_exp = sub.add_parser("export", help="Export sanitized skills into a .tar.gz bundle")
-    p_exp.add_argument("output", help="Output .tar.gz path inside workspace")
-
+    sub.add_parser("audit")
+    p_exp = sub.add_parser("export")
+    p_exp.add_argument("output")
     args = parser.parse_args()
     if args.cmd == "audit":
         sys.exit(0 if audit_skills() else 1)

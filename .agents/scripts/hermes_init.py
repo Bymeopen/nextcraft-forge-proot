@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Hermes-Lite Project Bootstrapper (hermes_init.py)
-Clones or initializes the Hermes-Lite v2 Cognitive Architecture
-(AGENTS.md, .agents/hooks.json, .agents/scripts/*, .agents/memory/*, .agents/skills/*)
-into any target project workspace directory with dynamic path binding.
-"""
 import argparse
 import os
 import shutil
@@ -23,13 +17,8 @@ def bootstrap_workspace(target_dir: str) -> None:
     if not target_dir.startswith("/workspace"):
         print(f"Error: Target directory must be inside /workspace (got {target_dir})")
         sys.exit(1)
-
-    os.makedirs(target_dir, exist_ok=True)
-    os.makedirs(os.path.join(target_dir, ".agents/memory"), exist_ok=True)
-    os.makedirs(os.path.join(target_dir, ".agents/scripts"), exist_ok=True)
-    os.makedirs(os.path.join(target_dir, ".agents/skills"), exist_ok=True)
-
-    # 1. Copy & adapt scripts (skip if source == destination)
+    for sub in (".agents/memory", ".agents/scripts", ".agents/skills"):
+        os.makedirs(os.path.join(target_dir, sub), exist_ok=True)
     if os.path.abspath(SOURCE_WORKSPACE) != target_dir:
         for script_name in os.listdir(SOURCE_SCRIPTS_DIR):
             if not script_name.endswith(".py"):
@@ -45,8 +34,6 @@ def bootstrap_workspace(target_dir: str) -> None:
         for script_name in os.listdir(SOURCE_SCRIPTS_DIR):
             if script_name.endswith(".py"):
                 make_executable(os.path.join(SOURCE_SCRIPTS_DIR, script_name))
-
-    # 2. Copy & adapt hooks.json
     src_hooks = os.path.join(SOURCE_WORKSPACE, ".agents/hooks.json")
     dst_hooks = os.path.join(target_dir, ".agents/hooks.json")
     if os.path.exists(src_hooks) and os.path.abspath(src_hooks) != os.path.abspath(dst_hooks):
@@ -54,8 +41,6 @@ def bootstrap_workspace(target_dir: str) -> None:
             hooks_content = fh.read().replace(SOURCE_WORKSPACE, target_dir)
         with open(dst_hooks, "w", encoding="utf-8") as fh:
             fh.write(hooks_content)
-
-    # 3. Copy skills if not already present
     src_skills = os.path.join(SOURCE_WORKSPACE, ".agents/skills")
     dst_skills = os.path.join(target_dir, ".agents/skills")
     if os.path.exists(src_skills):
@@ -64,8 +49,6 @@ def bootstrap_workspace(target_dir: str) -> None:
             d_item = os.path.join(dst_skills, item)
             if os.path.isdir(s_item) and not os.path.exists(d_item):
                 shutil.copytree(s_item, d_item)
-
-    # 4. Copy AGENTS.md, USER.md, MEMORY.md (adapt workspace path)
     for rel_path in ["AGENTS.md", ".agents/memory/USER.md", ".agents/memory/MEMORY.md"]:
         src_p = os.path.join(SOURCE_WORKSPACE, rel_path)
         dst_p = os.path.join(target_dir, rel_path)
@@ -74,12 +57,11 @@ def bootstrap_workspace(target_dir: str) -> None:
                 text = fh.read().replace(SOURCE_WORKSPACE, target_dir)
             with open(dst_p, "w", encoding="utf-8") as fh:
                 fh.write(text)
-
     print(f"[OK] Hermes-Lite v2 initialized in: {target_dir}")
 
 def main():
     parser = argparse.ArgumentParser(description="Bootstrap Hermes-Lite v2 into a workspace directory")
-    parser.add_argument("target", nargs="?", default=SOURCE_WORKSPACE, help="Target /workspace/<project> path")
+    parser.add_argument("target", nargs="?", default=SOURCE_WORKSPACE)
     args = parser.parse_args()
     bootstrap_workspace(args.target)
 

@@ -59,6 +59,10 @@ class ClaudeAuthController(
     @Volatile private var process: Process? = null
     private val loginMutex = Mutex()
     @Volatile private var stateBeforeLogin: ClaudeAuthState? = null
+    // Backgrounding the app to open the OAuth browser leaves nothing holding it awake; some OEMs (seen on Motorola)
+    // freeze a backgrounded app's network within seconds, so the CLI's own localhost callback server stops accepting
+    // the browser's connection and the whole sign-in times out. A foreground service for the wait keeps it alive.
+    private val foreground = ForegroundSession(context, "ClaudeAuthController")
 
     init {
         authOutput.delete()
@@ -216,6 +220,8 @@ class ClaudeAuthController(
             return
         }
         process = running
+        foreground.begin()
+        foreground.start("Claude Code")
         // cancel()/logout() bump this so a loop that is still winding down cannot overwrite their state.
         val generation = loginGeneration.get()
         var offset = 0L
@@ -309,6 +315,7 @@ class ClaudeAuthController(
             running.outputFile.delete() // OAuth terminal output is intentionally ephemeral.
             urlFile.delete()
             process = null
+            foreground.cancel()
         }
     }
 

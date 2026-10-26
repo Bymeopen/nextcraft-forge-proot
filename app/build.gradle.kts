@@ -17,8 +17,8 @@ android {
         targetSdk = 35
         // The release workflow passes -PversionCode=... -PversionName=...; local builds use a default versionCode
         // above the 1000..1099 CI series so a locally built APK can always update over installed CI builds.
-        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1750
-        versionName = (project.findProperty("versionName") as String?) ?: "1.0.1750-forge"
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1760
+        versionName = (project.findProperty("versionName") as String?) ?: "1.0.1760-forge"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

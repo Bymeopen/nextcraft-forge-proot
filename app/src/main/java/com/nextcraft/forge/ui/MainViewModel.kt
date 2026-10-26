@@ -161,11 +161,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val githubAuth = com.nextcraft.forge.runtime.GitHubAuthController(
         scope = viewModelScope,
         api = githubClient.asAccountApi(),
-        saveToken = { vault.put("GITHUB_TOKEN", it) },
-        clearToken = { vault.remove("GITHUB_TOKEN") },
+        saveToken = { token ->
+            vault.put("GITHUB_TOKEN", token)
+            val login = preferences.githubLogin.ifBlank { "x-access-token" }
+            runCatching { installer.configureGitHubAccess(token, login) }
+        },
+        clearToken = {
+            vault.remove("GITHUB_TOKEN")
+            runCatching { installer.clearGitHubAccess() }
+        },
         savedLogin = { preferences.githubLogin },
-        saveLogin = { preferences.githubLogin = it },
-        clearGuestAccess = { installer.clearGitHubAccess() },
+        saveLogin = { login ->
+            preferences.githubLogin = login
+            val token = vault.get("GITHUB_TOKEN").orEmpty()
+            if (token.isNotBlank() && login.isNotBlank()) {
+                runCatching { installer.configureGitHubAccess(token, login) }
+            }
+        },
+        clearGuestAccess = {
+            if (vault.get("GITHUB_TOKEN").isNullOrBlank()) {
+                installer.clearGitHubAccess()
+            }
+        },
         unnamedUserLabel = { str(R.string.msg_gh_user) },
         errorText = ::errText,
     )
@@ -520,9 +537,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (preferences.routing.mode != RouteMode.SINGLE) refreshReadyAgents()
             val savedGitHubToken = vault.get("GITHUB_TOKEN").orEmpty()
             if (savedGitHubToken.isNotBlank()) {
+                val savedLogin = preferences.githubLogin.ifBlank { "x-access-token" }
+                withContext(Dispatchers.IO) {
+                    runCatching { installer.configureGitHubAccess(savedGitHubToken, savedLogin) }
+                        .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+                }
                 githubAuth.restoreRepos(savedGitHubToken)
-                if (preferences.autoSyncGitHub && firstProject != null) {
-                    syncProjectWithGitHub(firstProject.id, "Sync project changes from NextCraft Forge")
+                if (preferences.autoSyncGitHub) {
+                    projects.forEach { proj ->
+                        val ws = checkpoints.ensureWorkspace(proj.id)
+                        if (File(ws, ".git").isDirectory) {
+                            syncProjectWithGitHub(proj.id, "Sync project changes from NextCraft Forge")
+                        }
+                    }
                 }
             }
             firstProject?.let { refreshWorkspaceFilesAndChanges(it.id) }
@@ -4180,19 +4207,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Writes the GitHub PAT into the rootfs only while [block] runs, then removes it so agent
-     * processes (UID 0 inside the chroot) can never read a long-lived credential file.
+     * Provisions the GitHub PAT into the rootfs (`~/.git-credentials` and `~/.config/gh/hosts.yml`)
+     * and serializes concurrent GitHub operations on `.git/index.lock`. Credentials remain configured
+     * while the GitHub account is connected so git/gh commands inside the workspace remain authenticated.
      */
     private inline fun <T> withGitHubCredentials(token: String, login: String, block: () -> T): T =
-        // One GitHub operation at a time: a finishing sync would otherwise delete the credentials of another
-        // one mid-push, and two git processes on the same workspace collide on .git/index.lock.
         githubOperationLock.withLock {
             installer.configureGitHubAccess(token, login)
-            try {
-                block()
-            } finally {
-                installer.clearGitHubAccess()
-            }
+            block()
         }
 
     private val githubOperationLock = java.util.concurrent.locks.ReentrantLock()
@@ -4926,13 +4948,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val syncCmd = buildString {
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
-                        append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
+                        append("branch=${'$'}(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
                         append("git config user.name ${shellSingleQuote(login)} && ")
                         append("git config user.email ${shellSingleQuote("$login@users.noreply.github.com")} && ")
                         append("git add -A && ")
                         append("(git diff --cached --quiet || git commit -m ${shellSingleQuote(commitMessage)}) && ")
-                        append("(git pull --rebase=merges --autostash origin \"\$branch\" >/dev/null 2>&1 || git rebase --abort >/dev/null 2>&1 || true) && ")
-                        append("git push -u origin \"HEAD:\$branch\"; ")
+                        append("if ! git merge-base --is-ancestor \"origin/${'$'}branch\" HEAD 2>/dev/null; then ")
+                        append("(git pull --no-rebase --no-edit --autostash origin \"${'$'}branch\" >/dev/null 2>&1 || git merge --abort >/dev/null 2>&1 || true); ")
+                        append("fi && ")
+                        append("git push -u origin \"HEAD:${'$'}branch\" && ")
+                        append("if git remote get-url proot >/dev/null 2>&1 && git show-ref --verify --quiet refs/heads/proot-main; then ")
+                        append("git push proot proot-main:main >/dev/null 2>&1 || true; ")
+                        append("fi; ")
                         append("else echo 'No origin remote configured in workspace' >&2; false; fi")
                     }
                     withGitHubCredentials(token, login) {
@@ -4978,8 +5005,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val login = githubAuth.state.value.login.ifBlank { preferences.githubLogin }.ifBlank { "x-access-token" }
                     val pullCmd = buildString {
                         append("if git remote get-url origin >/dev/null 2>&1; then ")
-                        append("branch=\$(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
-                        append("git fetch origin && (git pull --rebase --autostash origin \"\$branch\" || ")
+                        append("branch=${'$'}(git symbolic-ref --short HEAD 2>/dev/null || echo main); ")
+                        append("git fetch origin && (git pull --rebase --autostash origin \"${'$'}branch\" || ")
                         append("{ git rebase --abort 2>/dev/null; false; }); ")
                         append("else echo 'No origin remote configured in workspace'; fi")
                     }

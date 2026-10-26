@@ -71,6 +71,12 @@ class ClaudeEffortLaunchTest {
             assertTrue(userMd.isFile)
             assertTrue(memoryMd.isFile)
             assertTrue(skillCreator.isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/skills/multi-agent-personas/SKILL.md").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/skills/visual-architecture-canvas/SKILL.md").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/skills/self-healing-loop/SKILL.md").isFile)
+            assertTrue(java.io.File(tempWorkspace, ".agents/skills/deploy-and-preview/SKILL.md").isFile)
+            assertTrue(agentsMd.readText().contains("universal-lead-architect"))
+            assertTrue(agentsMd.readText().contains("universal-fullstack-auditor"))
             assertTrue(memoryMd.readText().contains("/workspace/demo-app"))
 
             // Verify existing user/project memory is never overwritten on subsequent runs

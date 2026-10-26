@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Hermes-Lite Headless Web Reader & Android UI Bridge (web_and_ui_tool.py)
-Provides zero-overhead headless HTML/Markdown extraction (replacing heavy Playwright/CDP)
-and bridges directly to Android native screen/UI inspection via android-shell / android-dumpsys.
-"""
 import argparse
 import html.parser
 import os
@@ -42,22 +37,17 @@ class SimpleHTMLToText(html.parser.HTMLParser):
         return "\n".join(line for line in lines if line)
 
 def fetch_web(url: str, max_chars: int = 6000) -> None:
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "HermesLite-Reader/2.0 (+NextCraftForge)"}
-    )
+    req = urllib.request.Request(url, headers={"User-Agent": "HermesLite-Reader/2.0 (+NextCraftForge)"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw_html = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         print(f"Error fetching {url}: {e}")
         sys.exit(1)
-
     parser = SimpleHTMLToText()
     parser.feed(raw_html)
     text = parser.get_text()
-    print(f"=== Extracted Content from {url} ({len(text)} chars) ===")
-    print(text[:max_chars])
+    print(f"=== Extracted Content from {url} ({len(text)} chars) ===\n{text[:max_chars]}")
 
 def android_ui_status() -> None:
     dumpsys_bin = shutil.which("android-dumpsys") or "/opt/nextcraft/bin/android-dumpsys"
@@ -65,11 +55,7 @@ def android_ui_status() -> None:
         print("android-dumpsys not found.")
         return
     try:
-        out = subprocess.check_output(
-            ["sh", dumpsys_bin, "window", "displays"],
-            stderr=subprocess.DEVNULL,
-            timeout=5
-        ).decode("utf-8", errors="replace")
+        out = subprocess.check_output(["sh", dumpsys_bin, "window", "displays"], stderr=subprocess.DEVNULL, timeout=5).decode("utf-8", errors="replace")
         for line in out.splitlines():
             if any(k in line for k in ("init=", "mCurrentFocus=", "mFocusedApp=")):
                 print(line.strip())
@@ -79,13 +65,10 @@ def android_ui_status() -> None:
 def main():
     parser = argparse.ArgumentParser(description="Hermes-Lite Web Reader & Android UI Bridge")
     sub = parser.add_subparsers(dest="cmd", required=True)
-
-    p_web = sub.add_parser("fetch", help="Fetch URL and extract clean readable text")
-    p_web.add_argument("url", help="HTTP/HTTPS URL to read")
-    p_web.add_argument("-m", "--max-chars", type=int, default=6000, help="Max output chars")
-
-    sub.add_parser("ui-focus", help="Inspect current focused Android window/display via android-dumpsys")
-
+    p_web = sub.add_parser("fetch")
+    p_web.add_argument("url")
+    p_web.add_argument("-m", "--max-chars", type=int, default=6000)
+    sub.add_parser("ui-focus")
     args = parser.parse_args()
     if args.cmd == "fetch":
         fetch_web(args.url, args.max_chars)
