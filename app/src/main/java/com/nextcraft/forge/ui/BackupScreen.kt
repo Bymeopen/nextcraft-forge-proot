@@ -39,6 +39,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** What the auto-backup section shows; read from [com.nextcraft.forge.data.AutoBackupSettings]. */
+data class AutoBackupUiState(
+    val interval: com.nextcraft.forge.data.AutoBackupSettings.Interval = com.nextcraft.forge.data.AutoBackupSettings.Interval.OFF,
+    val targetLabel: String = "",
+    val hasTarget: Boolean = false,
+    val includeApiKeys: Boolean = false,
+    val hasPassword: Boolean = false,
+    val lastRunAt: Long = 0L,
+    val lastError: String = "",
+)
+
 data class BackupUiState(
     val busy: Boolean = false,
     val message: UiText? = null,
@@ -51,6 +62,75 @@ class BackupController(private val app: Application, private val scope: Coroutin
     private val manager = BackupManager(app)
     private val mutable = MutableStateFlow(BackupUiState())
     val state: StateFlow<BackupUiState> = mutable.asStateFlow()
+
+    private val autoSettings = com.nextcraft.forge.data.AutoBackupSettings(app)
+    private val autoMutable = MutableStateFlow(AutoBackupUiState())
+    val autoState: StateFlow<AutoBackupUiState> = autoMutable.asStateFlow()
+
+    /** Reads the auto-backup settings off the main thread (the password check goes through the Keystore). */
+    fun refreshAuto() {
+        scope.launch {
+            autoMutable.value = withContext(Dispatchers.IO) {
+                AutoBackupUiState(
+                    interval = autoSettings.interval,
+                    targetLabel = autoSettings.targetLabel,
+                    hasTarget = autoSettings.target != null,
+                    includeApiKeys = autoSettings.includeApiKeys,
+                    hasPassword = autoSettings.password.isNotEmpty(),
+                    lastRunAt = autoSettings.lastRunAt,
+                    lastError = autoSettings.lastError,
+                )
+            }
+        }
+    }
+
+    /** Keeps write access to the picked file (Drive, a folder…) across restarts and uses it for every auto backup. */
+    fun setAutoTarget(uri: Uri) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                runCatching { app.contentResolver.takePersistableUriPermission(uri, flags) }
+                autoSettings.target?.takeIf { it != uri }?.let { old ->
+                    runCatching { app.contentResolver.releasePersistableUriPermission(old, flags) }
+                }
+                val name = runCatching {
+                    app.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                        if (it.moveToFirst()) it.getString(0) else null
+                    }
+                }.getOrNull()
+                autoSettings.target = uri
+                autoSettings.targetLabel = name ?: uri.lastPathSegment.orEmpty()
+                com.nextcraft.forge.data.AutoBackupWorker.sync(app)
+            }
+            refreshAuto()
+        }
+    }
+
+    fun setAutoInterval(interval: com.nextcraft.forge.data.AutoBackupSettings.Interval) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                autoSettings.interval = interval
+                com.nextcraft.forge.data.AutoBackupWorker.sync(app)
+            }
+            refreshAuto()
+        }
+    }
+
+    /** Saves (or with an empty text, removes) the auto-backup password; without one API keys are left out. */
+    fun setAutoPassword(password: String, includeApiKeys: Boolean) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                autoSettings.password = password
+                autoSettings.includeApiKeys = includeApiKeys && password.isNotEmpty()
+            }
+            refreshAuto()
+        }
+    }
+
+    fun runAutoBackupNow() {
+        com.nextcraft.forge.data.AutoBackupWorker.runNow(app)
+        mutable.value = BackupUiState(message = UiText.res(R.string.auto_backup_started))
+    }
 
     fun backup(uri: Uri, options: BackupManager.Options, password: String) {
         if (mutable.value.busy) return
@@ -160,6 +240,14 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
         }
     }
 
+    val auto by viewModel.backup.autoState.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.backup.refreshAuto() }
+    var autoPassword by remember { mutableStateOf("") }
+    var autoKeys by remember(auto.includeApiKeys) { mutableStateOf(auto.includeApiKeys) }
+    val pickAutoTarget = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri != null) viewModel.backup.setAutoTarget(uri)
+    }
+
     ToolScaffold(
         title = stringResource(R.string.tools_backup),
         subtitle = stringResource(R.string.tools_backup_desc),
@@ -207,6 +295,89 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
                 enabled = canBackup && !agentBusy,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+
+        Text(stringResource(R.string.backup_drive_hint), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
+
+        ToolSectionLabel(stringResource(R.string.auto_backup_section))
+        ToolCard {
+            Text(
+                if (auto.hasTarget) stringResource(R.string.auto_backup_target, auto.targetLabel) else stringResource(R.string.auto_backup_no_target),
+                fontSize = ForgeType.control,
+            )
+            OutlinedButton(
+                shape = RoundedCornerShape(100),
+                onClick = { pickAutoTarget.launch("nextcraft-auto-backup.ncbak") },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.auto_backup_choose_target)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                com.nextcraft.forge.data.AutoBackupSettings.Interval.entries.forEach { option ->
+                    androidx.compose.material3.FilterChip(
+                        selected = auto.interval == option,
+                        onClick = { viewModel.backup.setAutoInterval(option) },
+                        enabled = auto.hasTarget || option == com.nextcraft.forge.data.AutoBackupSettings.Interval.OFF,
+                        label = {
+                            Text(
+                                stringResource(
+                                    when (option) {
+                                        com.nextcraft.forge.data.AutoBackupSettings.Interval.OFF -> R.string.auto_backup_off
+                                        com.nextcraft.forge.data.AutoBackupSettings.Interval.DAILY -> R.string.auto_backup_daily
+                                        com.nextcraft.forge.data.AutoBackupSettings.Interval.WEEKLY -> R.string.auto_backup_weekly
+                                    },
+                                ),
+                            )
+                        },
+                    )
+                }
+            }
+            ForgeTextField(
+                kind = ForgeFieldKind.SECRET, imeAction = ImeAction.Done,
+                value = autoPassword,
+                onValueChange = { autoPassword = it },
+                label = { Text(stringResource(if (auto.hasPassword) R.string.auto_backup_password_set else R.string.backup_password)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            ForgeToggleRow(
+                title = stringResource(R.string.backup_api_keys),
+                subtitle = stringResource(R.string.backup_api_keys_sub),
+                checked = autoKeys,
+                onCheckedChange = { autoKeys = it },
+                enabled = auto.hasPassword || autoPassword.isNotEmpty(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    shape = RoundedCornerShape(100),
+                    onClick = {
+                        viewModel.backup.setAutoPassword(autoPassword, autoKeys)
+                        autoPassword = ""
+                    },
+                    enabled = autoPassword.isNotEmpty() || autoKeys != auto.includeApiKeys,
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.auto_backup_save_password)) }
+                if (auto.hasPassword) {
+                    OutlinedButton(
+                        shape = RoundedCornerShape(100),
+                        onClick = { viewModel.backup.setAutoPassword("", false) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.auto_backup_remove_password)) }
+                }
+            }
+            ForgePrimaryButton(
+                text = stringResource(R.string.auto_backup_run_now),
+                onClick = viewModel.backup::runAutoBackupNow,
+                enabled = auto.hasTarget,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (auto.lastRunAt > 0) {
+                val whenText = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(Date(auto.lastRunAt))
+                Text(
+                    if (auto.lastError.isEmpty()) stringResource(R.string.auto_backup_last_ok, whenText)
+                    else stringResource(R.string.auto_backup_last_failed, whenText, auto.lastError),
+                    fontSize = ForgeType.secondary,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+            Text(stringResource(R.string.auto_backup_note), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
         }
 
         ToolSectionLabel(stringResource(R.string.backup_section_restore))

@@ -134,7 +134,7 @@ class DshRuntimeBridge(
             if (route.keyEnv != FALLBACK_KEY_ENV) environment.remove(FALLBACK_KEY_ENV)
 
             val guestWorkspacePath = "/workspace/$projectSlug"
-            val contextPrompt = buildContextPrompt(prompt, conversationHistory, guestWorkspacePath, projectKind)
+            val contextPrompt = buildContextPrompt(prompt, conversationHistory.unseenBy(null), guestWorkspacePath, projectKind)
             val command = listOf("/usr/local/bin/dsh", "--profile", "sdk")
             Log.d("DshBridge", "Route: ${route.name}, Model: ${provider.model}")
             val process = installer.process(
@@ -534,16 +534,18 @@ class DshRuntimeBridge(
 
     private fun buildContextPrompt(
         currentPrompt: String,
-        history: List<ChatMessage>,
+        priorMessages: List<ChatMessage>,
         guestWorkspacePath: String,
         projectKind: ProjectKind,
+        resumed: Boolean = false,
     ): String = buildAgentWorkspacePrompt(
         currentPrompt = currentPrompt,
-        history = history,
+        priorMessages = priorMessages,
         guestWorkspacePath = guestWorkspacePath,
         projectKind = projectKind,
         androidStackInstalled = installer.isStackInstalled(DevStack.ANDROID),
         maxHistoryChars = MAX_CONVERSATION_HISTORY_CHARACTERS,
+        resumed = resumed,
     )
 
     private fun pushForegroundProgress(detailRaw: String) {
