@@ -203,3 +203,22 @@ internal fun java.io.File.deleteRecursivelyNoFollow(): Boolean {
     if (!isLink && isDirectory) listFiles()?.forEach { it.deleteRecursivelyNoFollow() }
     return delete() || (!exists() && !java.nio.file.Files.isSymbolicLink(toPath()))
 }
+
+/**
+ * [deleteRecursivelyNoFollow], then, on the root engine, removes what the app uid could not: builds and git run as root
+ * in the chroot, so `build/`, `.gradle/` and `.git/` are root-owned. Only call this with a path built from a vetted id.
+ */
+internal fun java.io.File.deleteRecursivelyNoFollowOrRoot(): Boolean {
+    deleteRecursivelyNoFollow()
+    if (!exists() && !java.nio.file.Files.isSymbolicLink(toPath())) return true
+    if (!RuntimeEngines.isRootEngine()) return false
+    runCatching {
+        // rm does not follow symlinks inside the tree; the path is single-quoted.
+        val process = ProcessBuilder("su", "-c", "rm -rf -- ${shellSingleQuote(absolutePath)}")
+            .redirectErrorStream(true)
+            .start()
+        process.outputStream.close()
+        if (!process.waitFor(60, TimeUnit.SECONDS)) process.destroyForcibly()
+    }
+    return !exists()
+}

@@ -1167,7 +1167,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             preferences.deleteProjectChats(projectId)
         }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
         runCatching {
-            File(getApplication<Application>().filesDir, "workspaces/${projectId}").deleteRecursivelyNoFollow()
+            val workspace = File(getApplication<Application>().filesDir, "workspaces/${projectId}")
+            // The root fallback runs `rm -rf` as root: never let a blank or path-like id widen it to the parent.
+            if (projectId.isNotBlank() && '/' !in projectId && !projectId.startsWith(".")) {
+                workspace.deleteRecursivelyNoFollowOrRoot()
+            } else {
+                workspace.deleteRecursivelyNoFollow()
+            }
             checkpoints.checkpointDir(projectId).deleteRecursively()
             File(getApplication<Application>().filesDir, "snapshots/${projectId}").deleteRecursively()
         }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
