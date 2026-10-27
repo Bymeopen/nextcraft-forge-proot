@@ -98,3 +98,10 @@ jobs:
           code=$(curl -sL -o /dev/null -w '%{http_code}' "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/update-manifest.json")
           echo "update-manifest.json via releases/download/$TAG: HTTP $code"
           [ "$draft" = "false" ] && [ "$code" = "200" ]
+      - name: Keep earlier PRoot builds updating
+        # Copies of the earlier PRoot fork read update-manifest.json from the debug-latest release, not dev-latest. The
+        # manifest already holds the dev-latest APK URL, so publishing it there lets those installs find this build.
+        if: endsWith(github.repository, '-proot')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload debug-latest dist/update-manifest.json --clobber
