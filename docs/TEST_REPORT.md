@@ -19,6 +19,7 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 | Crash / ANR | 0 untuk NextCraft | logcat crash, dropbox |
 | UI: proyek cepat, laci obrolan, menu +, lembar agen, lembar model | LULUS | layar overlay |
 | UI: tab File (kosong), Terminal (perintah), Pratinjau (server 3000) | LULUS | layar overlay |
+- **Tab File (UI `.x`, tap nyata, diverifikasi di disk)**: buat file `tes/halo.txt` (folder induk dibuat otomatis), edit + Simpan (isi `halo dunia` tertulis), ganti nama folder (path di editor ikut berubah), hapus file dan folder (dialog konfirmasi + banner). Path `../luar.txt` ditolak, tidak ada berkas di luar proyek.
 
 ## Bug yang ditemukan dan perbaikannya (branch lokal, belum di GitHub)
 
@@ -33,6 +34,7 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - Manifest rilis di repo `proot` menunjuk URL APK ke repo utama (HTTP 404). Akar: `scripts/make-update-manifest.sh` memakai `REPO` bawaan.
 - Server MCP tidak memvalidasi argumen wajib (mis. `items` kosong menghasilkan diagram kosong), dan `platform` tak dikenal diam-diam jatuh ke `tailwind`.
 - 4 error lint Compose (`NonObservableLocale`, `LocalContextGetResourceValueCall` x3): teks bisa basi sampai restart setelah ganti bahasa.
+- Tab File: path `../x` ditolak tanpa pesan galat (dialog menutup begitu saja); dialog hapus folder berjudul "Hapus File". Keduanya kosmetik (LOW).
 
 ## Belum terverifikasi (butuh pengujian ulang)
 - **Bersihkan terminal**: BUG nyata (TerminalSession.reset() tidak menghapus buffer layar). Diperbaiki di `41d4d0f`; diuji ulang di perangkat dengan tap nyata di layar utama (⋮ → Bersihkan terminal): isi lama terhapus, hanya prompt tersisa. 362 tes unit lulus, 0 gagal.
