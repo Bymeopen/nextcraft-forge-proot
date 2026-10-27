@@ -641,6 +641,9 @@ fun MainViewModel.resetRouteWeights() = updateRouting(_state.value.routing.copy(
 
 internal fun MainViewModel.updateRouting(config: RoutingConfig) {
     preferences.routing = config
+    // Routing is per chat: saving only the global copy let one chat's mode leak into every other chat.
+    val here = _state.value
+    if (here.activeProjectId.isNotBlank()) preferences.saveChatRouting(here.activeProjectId, here.activeChatId, config)
     _state.update { it.copy(routing = config) }
 }
 

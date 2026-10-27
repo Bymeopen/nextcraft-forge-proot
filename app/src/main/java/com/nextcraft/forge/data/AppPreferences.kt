@@ -165,15 +165,34 @@ class AppPreferences(private val context: Context) {
             store.edit().putString("selected_dev_stacks", array.toString()).apply()
         }
 
-    private fun decodeRoutingConfig(): RoutingConfig {
-        val parsedAgents = store.getString("routing_agents", null)
+    /** Routing mode, agent list, weights and rules of one chat, or null when that chat never saved its own. */
+    fun loadChatRouting(projectId: String, chatId: String): RoutingConfig? {
+        val scope = chatScope(projectId, chatId)
+        return if (store.contains("routing_mode$scope")) decodeRoutingConfig(scope) else null
+    }
+
+    fun saveChatRouting(projectId: String, chatId: String, cfg: RoutingConfig) =
+        encodeRoutingConfig(cfg, chatScope(projectId, chatId))
+
+    /** The agent a chat answers with in Single mode and for untagged Manual messages, or null when never set. */
+    fun loadChatAgent(projectId: String, chatId: String): AgentKind? =
+        AgentKind.fromStoredOrNull(store.getString("chat_agent${chatScope(projectId, chatId)}", null))
+
+    fun saveChatAgent(projectId: String, chatId: String, agent: AgentKind) {
+        store.edit().putString("chat_agent${chatScope(projectId, chatId)}", agent.stableId).apply()
+    }
+
+    private fun chatScope(projectId: String, chatId: String) = "_chat_${projectId}_$chatId"
+
+    private fun decodeRoutingConfig(scope: String = ""): RoutingConfig {
+        val parsedAgents = store.getString("routing_agents$scope", null)
             ?.splitToSequence(',')
             ?.mapNotNull { AgentKind.fromStoredOrNull(it) }
             ?.distinct()
             ?.toList()
             .orEmpty()
 
-        val parsedWeights = store.getString("routing_weights", null)
+        val parsedWeights = store.getString("routing_weights$scope", null)
             ?.splitToSequence(',')
             ?.mapNotNull { entry ->
                 val delimIdx = entry.indexOf(':')
@@ -186,7 +205,7 @@ class AppPreferences(private val context: Context) {
             .orEmpty()
 
         val parsedRules = runCatching {
-            val rawRules = store.getString("routing_rules", "[]") ?: "[]"
+            val rawRules = store.getString("routing_rules$scope", "[]") ?: "[]"
             val rulesJson = JSONArray(rawRules)
             buildList {
                 for (i in 0 until rulesJson.length()) {
@@ -205,14 +224,14 @@ class AppPreferences(private val context: Context) {
         }.getOrDefault(emptyList())
 
         return RoutingConfig(
-            mode = RouteMode.fromStored(store.getString("routing_mode", null)),
+            mode = RouteMode.fromStored(store.getString("routing_mode$scope", null)),
             agents = parsedAgents.ifEmpty { AgentKind.entries },
             weights = parsedWeights,
             rules = parsedRules,
         )
     }
 
-    private fun encodeRoutingConfig(cfg: RoutingConfig) {
+    private fun encodeRoutingConfig(cfg: RoutingConfig, scope: String = "") {
         val rulesArray = JSONArray().apply {
             for (rule in cfg.rules) {
                 put(
@@ -225,10 +244,10 @@ class AppPreferences(private val context: Context) {
         val agentCsv = cfg.agents.joinToString(",") { it.stableId }
         val weightCsv = cfg.weights.entries.joinToString(",") { "${it.key.stableId}:${it.value}" }
         store.edit()
-            .putString("routing_mode", cfg.mode.stableId)
-            .putString("routing_agents", agentCsv)
-            .putString("routing_rules", rulesArray.toString())
-            .putString("routing_weights", weightCsv)
+            .putString("routing_mode$scope", cfg.mode.stableId)
+            .putString("routing_agents$scope", agentCsv)
+            .putString("routing_rules$scope", rulesArray.toString())
+            .putString("routing_weights$scope", weightCsv)
             .apply()
     }
 

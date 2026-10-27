@@ -572,7 +572,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     claudeEffort = preferences.claudeEffort,
                 )
             }
-            if (preferences.routing.mode != RouteMode.SINGLE) refreshReadyAgents()
+            applyChatSettings(_state.value.activeProjectId, _state.value.activeChatId)
             val savedGitHubToken = vault.get("GITHUB_TOKEN").orEmpty()
             if (savedGitHubToken.isNotBlank()) {
                 val savedLogin = preferences.githubLogin.ifBlank { "x-access-token" }
@@ -854,6 +854,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         preferences.agentKind = agent.stableId
+        applyAgent(agent)
+        // The choice belongs to this chat only: other chats keep their own agent when they are opened.
+        if (_state.value.activeProjectId.isNotBlank()) {
+            preferences.saveChatAgent(_state.value.activeProjectId, _state.value.activeChatId, agent)
+        }
+    }
+
+    private fun applyAgent(agent: AgentKind) {
         val loadedProfile = preferences.loadProvider(vault, agent)
         val profile = loadedProfile.copy(hasSecret = !resolveProviderSecret(loadedProfile).isNullOrBlank())
         val keys = vault.list(profile.kind.name)
@@ -865,6 +873,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 apiStatusMessage = null,
             )
         }
+    }
+
+    /**
+     * Shows the agent and routing mode of chat [chatId]. A chat that never saved its own settings is pinned to the
+     * current global defaults, so changing another chat later can no longer change it.
+     */
+    internal fun applyChatSettings(projectId: String, chatId: String) {
+        if (projectId.isBlank()) return
+        val routing = preferences.loadChatRouting(projectId, chatId)
+            ?: preferences.routing.also { preferences.saveChatRouting(projectId, chatId, it) }
+        val agent = preferences.loadChatAgent(projectId, chatId)
+            ?: (AgentKind.fromStoredOrNull(preferences.agentKind) ?: _state.value.agentKind)
+                .also { preferences.saveChatAgent(projectId, chatId, it) }
+        if (agent != _state.value.agentKind) applyAgent(agent)
+        _state.update { it.copy(routing = routing) }
+        if (routing.mode != RouteMode.SINGLE) refreshReadyAgents()
     }
 
     fun selectProject(projectId: String) {
@@ -904,6 +928,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         publishRunningFlags()
+        applyChatSettings(project.id, chatId)
         if (chats.firstOrNull { it.id == chatId }?.isolated == true) refreshBranchStatus(chatId)
         if (existingProjectBuild == null || existingProjectBuild.phase != AndroidBuildPhase.BUILDING) {
             viewModelScope.launch {
@@ -1186,6 +1211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pendingToolRequest = run?.pendingTool,
             )
         }
+        applyChatSettings(project.id, chatId)
         // A long chat's JSON is megabytes: parse it off the main thread, then show it if the chat is still open.
         if (run == null) loadChatMessagesAsync(project.id, chatId)
         if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated == true) refreshBranchStatus(chatId)
@@ -1257,6 +1283,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 projectView = ProjectView.CONVERSATION,
             )
         }
+        applyChatSettings(project.id, chat.id)
     }
 
     fun deleteChat(chatId: String) {
@@ -1309,6 +1336,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 undoChatDelete = ChatUndo(project.id, removed.id, removed.title),
             )
         }
+        applyChatSettings(project.id, nextChatId)
     }
 
     /** Restores the chat removed by [deleteChat] if its undo window is still open. */
@@ -1342,6 +1370,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     undoChatDelete = null,
                 )
             }
+            applyChatSettings(projectId, pending.chat.id)
             if (pending.chat.isolated) refreshBranchStatus(pending.chat.id)
         } else {
             _state.update { it.copy(undoChatDelete = null) }
