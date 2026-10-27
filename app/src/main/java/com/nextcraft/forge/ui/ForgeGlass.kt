@@ -154,7 +154,8 @@ internal class SheetDepthTracker(private val depth: MutableIntState?) {
         if (visible == counted) return
         counted = visible
         shared.intValue = (shared.intValue + if (visible) 1 else -1).coerceAtLeast(0)
-        Log.d("ForgeGlass", "modal depth -> ${shared.intValue} (visible=$visible)")
+        // android.util.Log is not available in plain JVM unit tests.
+        runCatching { Log.d("ForgeGlass", "modal depth -> ${shared.intValue} (visible=$visible)") }
     }
 }
 
