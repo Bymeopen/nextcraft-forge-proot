@@ -1516,6 +1516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     McpConnector(id, name.trim().take(40), transport, cleanTarget, secretName.trim(), existing?.enabled ?: true),
                     secret.takeIf { it.isNotBlank() },
                 )
+                installer.syncMcpConfigs()
             }
             _state.update { it.copy(bannerMessage = UiText.res(R.string.connector_saved)) }
             loadConnectors()
@@ -1525,14 +1526,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setConnectorEnabled(id: String, enabled: Boolean) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { connectorStore.setEnabled(id, enabled) }
+            withContext(Dispatchers.IO) {
+                connectorStore.setEnabled(id, enabled)
+                installer.syncMcpConfigs()
+            }
             loadConnectors()
         }
     }
 
     fun deleteConnector(id: String) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { connectorStore.delete(id) }
+            withContext(Dispatchers.IO) {
+                connectorStore.delete(id)
+                installer.syncMcpConfigs()
+            }
             loadConnectors()
         }
     }

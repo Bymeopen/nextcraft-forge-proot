@@ -148,7 +148,7 @@ fun AgentConfigScreen(
         ) { agent ->
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         val agentInstalled = agent in state.installedAgents
-        if (agent == AgentKind.CLAUDE_CODE && agentInstalled) {
+        if (agentInstalled) {
             ForgeTextButton(onClick = { connectorsOpen = true }) { Text(stringResource(R.string.connectors_open)) }
         }
 

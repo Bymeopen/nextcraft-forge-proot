@@ -600,13 +600,7 @@ class RuntimeInstaller(private val context: Context) {
             )
             runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
         }
-        runCatching {
-            val managedMcp = ConnectorStore(context).mcpServersJson()
-            AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
-            val dshPatch = File(rootfs, "root/.dsh/cordis.patch.yml")
-            writeRootfsFileAtomically(dshPatch, ForgeMcpServer.toDshCordisPatchYaml(managedMcp), mode = 0b110000000)
-            ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
-        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+        syncMcpConfigs()
     }
 
     /** Removes stored Git and GitHub CLI credentials from the guest rootfs. */
@@ -618,6 +612,11 @@ class RuntimeInstaller(private val context: Context) {
             RootfsRepair.reclaimOwnership(file, AndroidProcess.myUid())
             if (!file.delete() && file.exists()) Log.w("RuntimeInstaller", "Could not remove ${file.name}")
         }
+        syncMcpConfigs()
+    }
+
+    /** Synchronizes enabled MCP connectors into Antigravity (`mcp_config.json`), DeepSeek Harness (`cordis.patch.yml`), and Claude Code (`~/.claude.json`). */
+    fun syncMcpConfigs() {
         runCatching {
             val managedMcp = ConnectorStore(context).mcpServersJson()
             AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }

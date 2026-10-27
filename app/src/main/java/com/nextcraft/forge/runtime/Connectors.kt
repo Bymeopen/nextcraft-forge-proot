@@ -88,6 +88,32 @@ data class McpConnector(
                 target = "npx -y mcp-excalidraw",
             ),
             McpPreset(
+                name = "draw.io",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @drawio/mcp",
+            ),
+            McpPreset(
+                name = "Iconify SVG",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @iconify/mcp",
+            ),
+            McpPreset(
+                name = "21st.dev Magic",
+                transport = McpTransport.COMMAND,
+                target = "npx -y @21st-dev/magic@latest",
+                secretName = "TWENTY_FIRST_API_KEY",
+            ),
+            McpPreset(
+                name = "Markitdown",
+                transport = McpTransport.COMMAND,
+                target = "uvx markitdown-mcp",
+            ),
+            McpPreset(
+                name = "Chrome DevTools",
+                transport = McpTransport.COMMAND,
+                target = "npx -y chrome-devtools-mcp@latest",
+            ),
+            McpPreset(
                 name = "Playwright",
                 transport = McpTransport.COMMAND,
                 target = ForgeMcpServer.PLAYWRIGHT_WRAPPER_GUEST_PATH,
@@ -219,7 +245,13 @@ class ConnectorStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("nextcraft_connectors", Context.MODE_PRIVATE)
     private val vault = ApiKeyVault(context.applicationContext)
 
-    fun list(): List<McpConnector> = runCatching {
+    fun list(): List<McpConnector> {
+        ensureDefaultBuiltInConnectors()
+        syncGitHubConnector()
+        return rawList()
+    }
+
+    private fun rawList(): List<McpConnector> = runCatching {
         val array = JSONArray(prefs.getString(KEY_LIST, "[]"))
         (0 until array.length()).mapNotNull { index ->
             val o = array.optJSONObject(index) ?: return@mapNotNull null
@@ -234,6 +266,36 @@ class ConnectorStore(context: Context) {
             )
         }
     }.getOrDefault(emptyList())
+
+    private fun ensureDefaultBuiltInConnectors() {
+        if (prefs.getBoolean(KEY_DEFAULTS_SEEDED, false)) return
+        val current = rawList().toMutableList()
+        if (current.none { it.id == "forge-design-android" || it.target.contains(ForgeMcpServer.FORGE_MCP_GUEST_PATH) }) {
+            current.add(
+                0,
+                McpConnector(
+                    id = "forge-design-android",
+                    name = "Forge Design & Android",
+                    transport = McpTransport.COMMAND,
+                    target = "python3 ${ForgeMcpServer.FORGE_MCP_GUEST_PATH}",
+                    enabled = true,
+                ),
+            )
+        }
+        if (current.none { it.id == "context7" }) {
+            current.add(
+                McpConnector(
+                    id = "context7",
+                    name = "Context7",
+                    transport = McpTransport.HTTP,
+                    target = "https://mcp.context7.com/mcp",
+                    enabled = true,
+                ),
+            )
+        }
+        save(current)
+        prefs.edit().putBoolean(KEY_DEFAULTS_SEEDED, true).apply()
+    }
 
     private fun save(list: List<McpConnector>) {
         val array = JSONArray()
@@ -273,7 +335,7 @@ class ConnectorStore(context: Context) {
     fun syncGitHubConnector() {
         val ghToken = vault.get("GITHUB_TOKEN")?.trim().orEmpty()
         if (ghToken.isEmpty()) return
-        val current = list()
+        val current = rawList()
         if (current.none { it.id == "github" }) {
             save(
                 current + McpConnector(
@@ -291,7 +353,7 @@ class ConnectorStore(context: Context) {
     /** Removes the auto-provisioned GitHub MCP connector when the user disconnects their GitHub account. */
     fun removeGitHubConnectorIfAuto() {
         if (!vault.contains(vaultId("github"))) {
-            save(list().filterNot { it.id == "github" })
+            save(rawList().filterNot { it.id == "github" })
         }
     }
 
@@ -333,6 +395,7 @@ class ConnectorStore(context: Context) {
 
     private companion object {
         const val KEY_LIST = "connectors"
+        const val KEY_DEFAULTS_SEEDED = "connectors_defaults_seeded_v1"
     }
 }
 
