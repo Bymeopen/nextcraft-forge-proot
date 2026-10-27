@@ -143,6 +143,9 @@ enum class SetupScope { RUNTIME, AGENT }
 
 data class ForgeUiState(
     val arm64Supported: Boolean = true,
+    val ramSupported: Boolean = true,
+    val totalRamLabel: String = "6 GB+",
+    val androidVersionSupported: Boolean = true,
     val rootAvailable: Boolean = false,
     /** No root, but the APK's PRoot engine can run the runtime (slower; ADR-007). */
     val prootAvailable: Boolean = false,

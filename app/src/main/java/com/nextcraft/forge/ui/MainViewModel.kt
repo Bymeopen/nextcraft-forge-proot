@@ -477,6 +477,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val projects = loadOrCreateDefaultProject()
             _state.update { if (it.projects.isEmpty()) it.copy(projects = projects) else it }
             val arm64 = supportsArm64Runtime(Build.SUPPORTED_ABIS, System.getProperty("os.arch"))
+            val hwProfile = withContext(Dispatchers.IO) { com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(getApplication()) }
+            val ramOk = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.meetsMinimumRam(hwProfile.totalRamMb)
+            val androidOk = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.meetsMinimumAndroidVersion()
             val engine = withContext(Dispatchers.IO) { installer.runtimeEngine() }
             val rootOk = engine == RuntimeEngine.CHROOT
             val savedAgent = AgentKind.fromStored(preferences.agentKind)
@@ -529,6 +532,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _state.update {
                 it.copy(
                     arm64Supported = arm64,
+                    ramSupported = ramOk,
+                    totalRamLabel = hwProfile.ramTier.label,
+                    androidVersionSupported = androidOk,
                     rootAvailable = rootOk,
                     prootAvailable = engine == RuntimeEngine.PROOT,
                     runtimeInstalled = installed,
@@ -618,6 +624,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshRuntimeStatus() {
         viewModelScope.launch {
+            val hwProfile = withContext(Dispatchers.IO) { com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(getApplication(), forceRefresh = true) }
+            val ramOk = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.meetsMinimumRam(hwProfile.totalRamMb)
+            val androidOk = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.meetsMinimumAndroidVersion()
             val engine = withContext(Dispatchers.IO) { installer.runtimeEngine() }
             val rootOk = engine == RuntimeEngine.CHROOT
             val installed = withContext(Dispatchers.IO) { installer.isInstalled() }
@@ -631,6 +640,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update {
                 it.copy(
+                    ramSupported = ramOk,
+                    totalRamLabel = hwProfile.ramTier.label,
+                    androidVersionSupported = androidOk,
                     rootAvailable = rootOk,
                     prootAvailable = engine == RuntimeEngine.PROOT,
                     runtimeInstalled = installed,

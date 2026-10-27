@@ -1644,4 +1644,8 @@
     <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
     <string name="composer_cmd_mcp">فتح مدير موصلات MCP والمهارات</string>
     <string name="composer_badge_mcp">MCP</string>
+    <string name="shell_check_android_12">نظام Android 12+ (API 31+)</string>
+    <string name="shell_requires_android_12">يتطلب Android 12 (API 31) أو أحدث</string>
+    <string name="shell_check_ram_6gb">ذاكرة RAM للجهاز 6 جيجابايت كحد أدنى</string>
+    <string name="shell_requires_ram_6gb">يتطلب ذاكرة RAM بسعة 6 جيجابايت أو أعلى</string>
 </resources>

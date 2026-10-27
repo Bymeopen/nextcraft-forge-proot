@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "com.nextcraft.forge"
-        minSdk = 26
+        minSdk = 31
         targetSdk = 35
         // The release workflow passes -PversionCode=... -PversionName=...; local builds keep the defaults.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 100

@@ -152,7 +152,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
     var showFigmaDialog by rememberSaveable { mutableStateOf(false) }
     if (paletteOpen) ForgeCommandPalette(onDismiss = { paletteOpen = false }, onOpen = viewModel::selectTab)
 
-    if (!state.runtimeInstalled && !bypassSetupGate) {
+    if ((!state.runtimeInstalled && !bypassSetupGate) || !state.ramSupported || !state.androidVersionSupported) {
         RuntimeOnboardingScreen(
             state = state,
             onToggleStack = viewModel::toggleDevStack,
