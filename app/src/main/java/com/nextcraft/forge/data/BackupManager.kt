@@ -266,7 +266,7 @@ class BackupManager(private val context: Context) {
 }
 
 /**
- * The `shared_prefs/*.xml` format (`<map>` of `string`, `boolean`, `int`, `long`, `float` and `set` entries) as
+ * The `shared_prefs` XML format (`<map>` of `string`, `boolean`, `int`, `long`, `float` and `set` entries) as
  * written by Android, parsed back into values that can be loaded into a live [android.content.SharedPreferences].
  */
 internal object PrefsXml {

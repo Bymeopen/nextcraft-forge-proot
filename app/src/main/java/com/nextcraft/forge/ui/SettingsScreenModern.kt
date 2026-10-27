@@ -86,7 +86,6 @@ import com.nextcraft.forge.runtime.RuntimeEngineChoice
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
 import kotlinx.coroutines.launch
 
-private val AGY_EFFORT_SUFFIX = Regex("-(low|medium|high)$")
 
 /**
  * Settings, grouped the way the reference layout does: General (appearance, language, safety),
