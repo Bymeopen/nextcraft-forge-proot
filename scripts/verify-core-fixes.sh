@@ -1618,6 +1618,7 @@ grep -q "os.path.realpath(" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/run
 grep -q "_SafePreviewRedirectHandler" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/ForgeMcpServer.kt" || fail "Missing _SafePreviewRedirectHandler SSRF guard in ForgeMcpServer.kt"
 grep -q "G branch -d --" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/ChatBranches.kt" || fail "Missing git option-injection guard in ChatBranches.kt"
 grep -q "ssh.stopAllTunnels()" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/ui/MainViewModel.kt" || fail "Missing ssh.stopAllTunnels() cleanup in MainViewModel.onCleared()"
+! grep -rEq '\$RuntimeInstaller\.[A-Z_0-9]+' "$ROOT_DIR/app/src/main" || fail "Unbraced \$RuntimeInstaller.CONST in a string template (prints the object's toString, not the constant)"
 pass "C-1..C-3, H-1..H-6, BUG-036..041, UPGRADE-001..004, ForgeMcpServer, ChatBranches & MainViewModel security/resource invariants verified"
 
 echo "=================================================================="

@@ -108,9 +108,9 @@ suspend fun RuntimeInstaller.ensureGitHubCliInstalled(onProgress: suspend (Runti
     if (isGitHubCliInstalled()) return
     writeResolver()
     downloads.mkdirs()
-    val downloaded = File(downloads, "gh-$RuntimeInstaller.GITHUB_CLI_VERSION-linux-arm64.tar.gz")
+    val downloaded = File(downloads, "gh-${RuntimeInstaller.GITHUB_CLI_VERSION}-linux-arm64.tar.gz")
     onProgress(RuntimeInstallProgress("Downloading GitHub CLI…", 0.05f))
-    val githubDownloadLabel = "Downloading GitHub CLI $RuntimeInstaller.GITHUB_CLI_VERSION…"
+    val githubDownloadLabel = "Downloading GitHub CLI ${RuntimeInstaller.GITHUB_CLI_VERSION}…"
     downloadVerified(RuntimeInstaller.GITHUB_CLI_RELEASE_URL, downloaded, RuntimeInstaller.GITHUB_CLI_RELEASE_SHA256) { bytes, total ->
         val ratio = if (total > 0L) bytes.toFloat() / total else 0f
         onProgress(
@@ -123,7 +123,7 @@ suspend fun RuntimeInstaller.ensureGitHubCliInstalled(onProgress: suspend (Runti
             ),
         )
     }
-    onProgress(RuntimeInstallProgress("Installing GitHub CLI $RuntimeInstaller.GITHUB_CLI_VERSION…", 0.85f, indeterminate = true))
+    onProgress(RuntimeInstallProgress("Installing GitHub CLI ${RuntimeInstaller.GITHUB_CLI_VERSION}…", 0.85f, indeterminate = true))
     val destination = File(rootfs, RuntimeInstaller.GITHUB_CLI_GUEST_PATH.removePrefix("/"))
     destination.parentFile?.mkdirs()
     var found = false
@@ -133,7 +133,7 @@ suspend fun RuntimeInstaller.ensureGitHubCliInstalled(onProgress: suspend (Runti
             var entry = archive.nextTarEntry
             while (entry != null) {
                 if (entry.isFile && entry.name.removePrefix("./").endsWith("/bin/gh")) {
-                    val staged = File(destination.parentFile, ".gh-$RuntimeInstaller.GITHUB_CLI_VERSION.installing")
+                    val staged = File(destination.parentFile, ".gh-${RuntimeInstaller.GITHUB_CLI_VERSION}.installing")
                     try {
                         FileOutputStream(staged).use { archive.copyTo(it) }
                         Os.chmod(staged.absolutePath, 0b111101101)
@@ -154,7 +154,7 @@ suspend fun RuntimeInstaller.ensureGitHubCliInstalled(onProgress: suspend (Runti
     }
     verifyGuest(
         chrootExec = installedRuntime().chrootExec,
-        command = "$RuntimeInstaller.GITHUB_CLI_GUEST_PATH --version",
+        command = "${RuntimeInstaller.GITHUB_CLI_GUEST_PATH} --version",
         failureMessage = "Failed to verify GitHub CLI",
     )
     githubCliMarker.writeMarker(RuntimeInstaller.GITHUB_CLI_VERSION)
@@ -347,7 +347,7 @@ internal suspend fun RuntimeInstaller.updateClaude(
     onProgress: suspend (RuntimeInstallProgress) -> Unit,
 ) {
     check(RuntimeEngines.current() != RuntimeEngine.PROOT) {
-        "Claude Code stays at $RuntimeInstaller.CLAUDE_NPM_VERSION on the PRoot engine: newer releases are Bun binaries that Android's app sandbox cannot run without root."
+        "Claude Code stays at ${RuntimeInstaller.CLAUDE_NPM_VERSION} on the PRoot engine: newer releases are Bun binaries that Android's app sandbox cannot run without root."
     }
     val latest = JSONObject(fetchText("https://registry.npmjs.org/@anthropic-ai/claude-code/latest")).getString("version")
     check(latest == expectedVersion) { "A newer Claude Code release is available. Refresh updates and try again." }
@@ -377,7 +377,7 @@ internal suspend fun RuntimeInstaller.updateClaude(
                     throw e
                 }
             },
-            verify = { verifyGuest(runtime.chrootExec, "$RuntimeInstaller.CLAUDE_GUEST_PATH --version", "Failed to verify updated Claude Code") },
+            verify = { verifyGuest(runtime.chrootExec, "${RuntimeInstaller.CLAUDE_GUEST_PATH} --version", "Failed to verify updated Claude Code") },
         )
     } finally {
         downloaded.delete()
@@ -406,7 +406,7 @@ internal suspend fun RuntimeInstaller.updateAgy(
     try {
       replaceBinaryWithRollback(
         target = destination,
-        verify = { verifyGuest(runtime.chrootExec, "$RuntimeInstaller.AGY_GUEST_PATH --version", "Failed to verify updated Antigravity CLI") },
+        verify = { verifyGuest(runtime.chrootExec, "${RuntimeInstaller.AGY_GUEST_PATH} --version", "Failed to verify updated Antigravity CLI") },
         install = {
         @Suppress("DEPRECATION")
         TarArchiveInputStream(GzipCompressorInputStream(BufferedInputStream(downloaded.inputStream()))).use { archive ->
@@ -553,12 +553,12 @@ internal suspend fun RuntimeInstaller.ensureClaudeInstalled(
     }
     installRuntimeOverlay(
         bundle = RuntimeInstaller.CLAUDE_BUNDLE,
-        message = "Installing Claude Code $RuntimeInstaller.CLAUDE_BUNDLED_VERSION…",
+        message = "Installing Claude Code ${RuntimeInstaller.CLAUDE_BUNDLED_VERSION}…",
         from = fraction,
         to = 0.995f,
         onProgress = onProgress,
     )
-    verifyGuest(chrootExec, "$RuntimeInstaller.CLAUDE_GUEST_PATH --version", "Failed to verify Claude Code")
+    verifyGuest(chrootExec, "${RuntimeInstaller.CLAUDE_GUEST_PATH} --version", "Failed to verify Claude Code")
     migrateLegacyClaudeMarker()
     require(claudeMarker.readTextOrNull() == RuntimeInstaller.CLAUDE_BUNDLED_VERSION) {
         "The Claude Code runtime bundle is incomplete"
@@ -580,16 +580,16 @@ internal suspend fun RuntimeInstaller.installClaudeViaNpm(
     check(RuntimeInstaller.CLAUDE_VERSION_PATTERN.matches(version)) { "Invalid Claude Code version" }
     runGuestCommand(
         chrootExec = chrootExec,
-        command = "set -e; dir=$RuntimeInstaller.CLAUDE_NPM_GUEST_DIR; rm -rf \"${'$'}dir\"; mkdir -p \"${'$'}dir\"; cd \"${'$'}dir\"; " +
+        command = "set -e; dir=${RuntimeInstaller.CLAUDE_NPM_GUEST_DIR}; rm -rf \"${'$'}dir\"; mkdir -p \"${'$'}dir\"; cd \"${'$'}dir\"; " +
             "npm init -y >/dev/null; npm install --omit=dev --no-audit --no-fund @anthropic-ai/claude-code@$version; " +
-            "ln -sfn $RuntimeInstaller.CLAUDE_NPM_GUEST_DIR/node_modules/.bin/claude $RuntimeInstaller.CLAUDE_GUEST_PATH",
+            "ln -sfn ${RuntimeInstaller.CLAUDE_NPM_GUEST_DIR}/node_modules/.bin/claude ${RuntimeInstaller.CLAUDE_GUEST_PATH}",
         displayCommand = "npm install @anthropic-ai/claude-code@$version",
         fraction = fraction,
         timeoutMs = 20 * 60 * 1_000L,
         onProgress = onProgress,
         failureMessage = "Failed to install Claude Code from npm",
     )
-    verifyGuest(chrootExec, "$RuntimeInstaller.CLAUDE_GUEST_PATH --version", "Failed to verify Claude Code")
+    verifyGuest(chrootExec, "${RuntimeInstaller.CLAUDE_GUEST_PATH} --version", "Failed to verify Claude Code")
     claudeMarker.writeText(version)
     onProgress(RuntimeInstallProgress("Installed Claude Code $version (npm, PRoot)", 0.995f))
 }
@@ -602,13 +602,13 @@ internal suspend fun RuntimeInstaller.ensureAgyInstalled(
     if (isAgentInstalled(AgentKind.ANTIGRAVITY)) return
     installRuntimeOverlay(
         bundle = RuntimeInstaller.AGY_BUNDLE,
-        message = "Installing Antigravity CLI $RuntimeInstaller.AGY_VERSION…",
+        message = "Installing Antigravity CLI ${RuntimeInstaller.AGY_VERSION}…",
         from = fraction,
         to = 0.995f,
         onProgress = onProgress,
         forceEmbedded = isAssetAvailable("runtime/${RuntimeInstaller.AGY_BUNDLE.fileName}"),
     )
-    verifyGuest(chrootExec, "$RuntimeInstaller.AGY_GUEST_PATH --version", "Failed to verify Antigravity CLI")
+    verifyGuest(chrootExec, "${RuntimeInstaller.AGY_GUEST_PATH} --version", "Failed to verify Antigravity CLI")
     agyMarker.writeMarker(RuntimeInstaller.AGY_VERSION)
     require(isAgentInstalled(AgentKind.ANTIGRAVITY)) {
         "Antigravity CLI installation is incomplete"
@@ -663,7 +663,7 @@ internal suspend fun RuntimeInstaller.ensureDshInstalled(
     try {
         installRuntimeOverlay(
             bundle = RuntimeInstaller.DSH_BUNDLE,
-            message = "Installing DeepSeek $RuntimeInstaller.DSH_VERSION…",
+            message = "Installing DeepSeek ${RuntimeInstaller.DSH_VERSION}…",
             from = fraction,
             to = 0.995f,
             onProgress = onProgress,
@@ -940,7 +940,7 @@ internal suspend fun RuntimeInstaller.installComposer(
     val staged = File(downloads, "composer.phar")
     val checksum = RuntimeInstaller.COMPOSER_SHA256
     downloadVerified(
-        "https://getcomposer.org/download/$RuntimeInstaller.COMPOSER_VERSION/composer.phar",
+        "https://getcomposer.org/download/${RuntimeInstaller.COMPOSER_VERSION}/composer.phar",
         staged,
         checksum,
     ) { _, _ -> }
@@ -1165,8 +1165,8 @@ internal fun RuntimeInstaller.writeAndroidGradleConfiguration(runtimeRootfs: Fil
     val existingLines = properties.readTextOrNull()?.lineSequence()?.toList().orEmpty()
     val hwProfile = DeviceHardwareOptimizer.inspect(context)
     val managedLines = listOf(
-        "$RuntimeInstaller.ANDROID_AAPT2_PROPERTY=$RuntimeInstaller.ANDROID_AAPT2_GUEST_PATH",
-        "$RuntimeInstaller.GRADLE_JVMARGS_PROPERTY=${RuntimeInstaller.gradleJvmArgs(
+        "${RuntimeInstaller.ANDROID_AAPT2_PROPERTY}=${RuntimeInstaller.ANDROID_AAPT2_GUEST_PATH}",
+        "${RuntimeInstaller.GRADLE_JVMARGS_PROPERTY}=${RuntimeInstaller.gradleJvmArgs(
             totalMemoryMb = hwProfile.totalRamMb,
             swapTotalMb = hwProfile.swap.swapTotalMb,
             swapFreeMb = hwProfile.swap.swapFreeMb,
@@ -1174,7 +1174,7 @@ internal fun RuntimeInstaller.writeAndroidGradleConfiguration(runtimeRootfs: Fil
             socTier = hwProfile.socTier,
             performanceCores = hwProfile.topology.performanceCores,
         )}",
-        "$RuntimeInstaller.KOTLIN_EXECUTION_PROPERTY=in-process",
+        "${RuntimeInstaller.KOTLIN_EXECUTION_PROPERTY}=in-process",
     ) + RuntimeInstaller.gradleSpeedProperties(
         totalMemoryMb = hwProfile.totalRamMb,
         swapTotalMb = hwProfile.swap.swapTotalMb,
@@ -1266,11 +1266,11 @@ internal suspend fun RuntimeInstaller.installNodeIfNeeded(
     onProgress: suspend (RuntimeInstallProgress) -> Unit,
 ) {
     if (File(rootfs, "usr/local/bin/node").exists()) return
-    val nodeDownloadLabel = "Downloading Node.js $RuntimeInstaller.NODE_VERSION…"
+    val nodeDownloadLabel = "Downloading Node.js ${RuntimeInstaller.NODE_VERSION}…"
     onProgress(RuntimeInstallProgress(nodeDownloadLabel, from))
     downloads.mkdirs()
-    val nodeFileName = "node-$RuntimeInstaller.NODE_VERSION-linux-arm64.tar.gz"
-    val nodeBaseUrl = "https://nodejs.org/dist/$RuntimeInstaller.NODE_VERSION"
+    val nodeFileName = "node-${RuntimeInstaller.NODE_VERSION}-linux-arm64.tar.gz"
+    val nodeBaseUrl = "https://nodejs.org/dist/${RuntimeInstaller.NODE_VERSION}"
     val checksum = RuntimeInstaller.NODE_ARM64_SHA256
     val nodeArchive = File(downloads, nodeFileName)
     downloadVerified("$nodeBaseUrl/$nodeFileName", nodeArchive, checksum) { downloaded, total ->
@@ -1284,7 +1284,7 @@ internal suspend fun RuntimeInstaller.installNodeIfNeeded(
             ),
         )
     }
-    onProgress(RuntimeInstallProgress("Installing Node.js $RuntimeInstaller.NODE_VERSION…", to))
+    onProgress(RuntimeInstallProgress("Installing Node.js ${RuntimeInstaller.NODE_VERSION}…", to))
     val nodeStaging = File(runtimeDir, "node.installing")
     try {
         nodeStaging.deleteRecursively()
