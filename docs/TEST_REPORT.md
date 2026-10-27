@@ -22,6 +22,7 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - **Tab File (UI `.x`, tap nyata, diverifikasi di disk)**: buat file `tes/halo.txt` (folder induk dibuat otomatis), edit + Simpan (isi `halo dunia` tertulis), ganti nama folder (path di editor ikut berubah), hapus file dan folder (dialog konfirmasi + banner). Path `../luar.txt` ditolak, tidak ada berkas di luar proyek.
 - **Tab Alat (UI `.x`)**: daftar Alat tampil; Diagnostik Sistem menampilkan data nyata (Snapdragon SM8450, 8 inti, RAM 10,9 GB, chroot, Ubuntu 24.04.5 arm64, root KernelSU); Manajer toolchain ada di Alat (stack bahasa + agen coding). Tombol Copot sengaja tidak ditekan (merusak).
 - **Setelan (UI `.x`)**: tema Gelap/Kaca/Putih berganti langsung dan terbaca; opsi Solid Glass muncul hanya di tema Kaca; Bahasa English berlaku seketika (semua label ikut berganti); pengaturan dikembalikan ke Gelap + Bawaan sistem.
+- **Latar Pratinjau (`d9c6010`)**: diverifikasi di perangkat. `index.html` polos tampil berlatar putih dengan teks hitam terbaca di tema aplikasi gelap. Catatan: server uji lama (pid yatim dari sebelum pasang ulang) menahan port 3000 dan memberi `ERR_EMPTY_RESPONSE`; setelah dimatikan lewat PID, server baru dilayani normal.
 
 ## Bug yang ditemukan dan perbaikannya (branch lokal, belum di GitHub)
 
