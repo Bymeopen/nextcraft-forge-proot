@@ -1551,4 +1551,8 @@
     <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
     <string name="composer_cmd_mcp">Buka pengelola Konektor MCP &amp; Skill</string>
     <string name="composer_badge_mcp">MCP</string>
+    <string name="shell_check_android_12">OS Android 12+ (API 31+)</string>
+    <string name="shell_requires_android_12">Minimal Android 12 (API 31) ke atas</string>
+    <string name="shell_check_ram_6gb">RAM Perangkat Minimal 6 GB</string>
+    <string name="shell_requires_ram_6gb">Butuh RAM minimal 6 GB ke atas</string>
 </resources>

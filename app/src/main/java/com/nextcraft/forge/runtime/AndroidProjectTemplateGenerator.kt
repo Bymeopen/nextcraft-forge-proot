@@ -6,7 +6,7 @@ import java.io.File
 import java.nio.file.Files
 
 object AndroidProjectTemplateGenerator {
-    const val MIN_SDK = 28
+    const val MIN_SDK = 31
     const val CORE_KTX_VERSION = "1.19.1"
     const val ACTIVITY_COMPOSE_VERSION = "1.13.0"
     const val APPCOMPAT_VERSION = "1.8.0"

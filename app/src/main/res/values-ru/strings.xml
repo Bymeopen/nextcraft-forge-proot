@@ -1604,4 +1604,8 @@
     <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
     <string name="composer_cmd_mcp">Открыть менеджер MCP-коннекторов и навыков</string>
     <string name="composer_badge_mcp">MCP</string>
+    <string name="shell_check_android_12">ОС Android 12+ (API 31+)</string>
+    <string name="shell_requires_android_12">Требуется Android 12 (API 31) или новее</string>
+    <string name="shell_check_ram_6gb">Минимум 6 ГБ ОЗУ устройства</string>
+    <string name="shell_requires_ram_6gb">Требуется 6 ГБ ОЗУ или больше</string>
 </resources>

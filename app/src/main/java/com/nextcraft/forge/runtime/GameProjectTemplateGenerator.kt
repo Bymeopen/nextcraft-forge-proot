@@ -11,7 +11,7 @@ import java.io.File
  */
 internal object GameProjectTemplateGenerator {
     const val GDX_VERSION = "1.13.1"
-    private const val MIN_SDK = 28
+    private const val MIN_SDK = 31
 
     /** ABIs whose libGDX natives are packed into the APK. */
     private val ANDROID_ABIS = listOf("arm64-v8a", "armeabi-v7a", "x86_64")

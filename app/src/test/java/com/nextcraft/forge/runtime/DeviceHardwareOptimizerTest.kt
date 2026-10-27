@@ -85,6 +85,20 @@ class DeviceHardwareOptimizerTest {
     }
 
     @Test
+    fun enforcesMinimum6GbRamAndAndroid12Requirements() {
+        assertFalse(DeviceHardwareOptimizer.meetsMinimumRam(3_800))
+        assertFalse(DeviceHardwareOptimizer.meetsMinimumRam(4_499))
+        assertTrue(DeviceHardwareOptimizer.meetsMinimumRam(4_500))
+        assertTrue(DeviceHardwareOptimizer.meetsMinimumRam(5_600))
+        assertTrue(DeviceHardwareOptimizer.meetsMinimumRam(7_400))
+
+        assertFalse(DeviceHardwareOptimizer.meetsMinimumAndroidVersion(26))
+        assertFalse(DeviceHardwareOptimizer.meetsMinimumAndroidVersion(30))
+        assertTrue(DeviceHardwareOptimizer.meetsMinimumAndroidVersion(31))
+        assertTrue(DeviceHardwareOptimizer.meetsMinimumAndroidVersion(35))
+    }
+
+    @Test
     fun detectsBigLittleCoreTopologyAndSocTiers() {
         val entryTopo = DeviceHardwareOptimizer.detectCoreTopology(
             listOf(1_800_000L, 1_800_000L, 1_800_000L, 1_800_000L, 1_800_000L, 1_800_000L, 2_000_000L, 2_000_000L),

@@ -279,6 +279,13 @@ class RuntimeInstaller(internal val context: Context) {
                 System.getProperty("os.arch"),
             ),
         ) { "NextCraft Forge requires an ARM64 (arm64-v8a / aarch64) Android device." }
+        require(DeviceHardwareOptimizer.meetsMinimumAndroidVersion()) {
+            "NextCraft Forge requires Android 12 (API 31) or newer."
+        }
+        val hwProfile = DeviceHardwareOptimizer.inspect(context)
+        require(DeviceHardwareOptimizer.meetsMinimumRam(hwProfile.totalRamMb)) {
+            "NextCraft Forge requires at least 6 GB of RAM (detected ${hwProfile.ramTier.label})."
+        }
         // The first su call shows the Magisk/KernelSU/APatch grant dialog; the 8 s default kills su before the user can tap Allow.
         // Without root the bundled PRoot engine (ADR-007) takes over; without either there is nothing to run on.
         requireNotNull(RuntimeEngines.detect(context, ROOT_GRANT_TIMEOUT_SECONDS, refresh = true)) {

@@ -1564,4 +1564,8 @@
     <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
     <string name="composer_cmd_mcp">MCP कनेक्टर और स्किल प्रबंधक खोलें</string>
     <string name="composer_badge_mcp">MCP</string>
+    <string name="shell_check_android_12">Android 12+ OS (API 31+)</string>
+    <string name="shell_requires_android_12">Android 12 (API 31) या इसके बाद का संस्करण आवश्यक है</string>
+    <string name="shell_check_ram_6gb">न्यूनतम 6 GB डिवाइस RAM</string>
+    <string name="shell_requires_ram_6gb">6 GB या उससे अधिक RAM आवश्यक है</string>
 </resources>

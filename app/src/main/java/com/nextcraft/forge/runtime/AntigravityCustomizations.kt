@@ -957,7 +957,7 @@ if __name__ == "__main__":
 # Long-Term Project & Architecture Memory (`$guestWorkspacePath`)
 
 ## 1. System & Toolchain Snapshot
-- **Target Platform**: Android (`arm64-v8a`, `minSdk 26`, `compileSdk ${AndroidToolchain.COMPILE_SDK}`).
+- **Target Platform**: Android (`arm64-v8a`, `minSdk 31`, `compileSdk ${AndroidToolchain.COMPILE_SDK}`).
 - **Build System**: AGP `${AndroidToolchain.AGP_VERSION}`, Kotlin `${AndroidToolchain.KOTLIN_VERSION}` (built-in via AGP 9 DSL), JDK `${AndroidToolchain.JDK_MAJOR}`.
 - **Guest Runtime**: Ubuntu 24.04.5 LTS ARM64 Root Chroot & Non-Root PRoot fallback in NextCraft Forge.
 
@@ -1131,7 +1131,7 @@ All new Android projects in NextCraft Forge MUST use the locally bundled toolcha
 - **Android Gradle Plugin (AGP)**: `${AndroidToolchain.AGP_VERSION}`
 - **Kotlin**: `${AndroidToolchain.KOTLIN_VERSION}` (built-in via AGP 9 DSL; do **not** apply `org.jetbrains.kotlin.android` or `kotlinOptions`)
 - **Compose Compiler Plugin**: `org.jetbrains.kotlin.plugin.compose`
-- **compileSdk**: `${AndroidToolchain.COMPILE_SDK}` (`targetSdk 36` or `37`, `minSdk 26+`)
+- **compileSdk**: `${AndroidToolchain.COMPILE_SDK}` (`targetSdk 36` or `37`, `minSdk 31+`)
 - **JDK**: `${AndroidToolchain.JDK_MAJOR}`
 - **AAPT2 Override**: `${AndroidToolchain.AAPT2_GUEST_PATH}`
 - **Init Script**: `${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH}`

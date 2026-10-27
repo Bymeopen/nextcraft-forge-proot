@@ -89,6 +89,22 @@ internal fun RuntimeOnboardingScreen(
                         if (state.arm64Supported) R.string.shell_supported else R.string.shell_requires_arm64,
                     ),
                 )
+                EnvironmentCheckItem(
+                    titleText = stringResource(R.string.shell_check_android_12),
+                    passed = state.androidVersionSupported,
+                    summaryText = stringResource(
+                        if (state.androidVersionSupported) R.string.shell_supported else R.string.shell_requires_android_12,
+                    ),
+                )
+                EnvironmentCheckItem(
+                    titleText = stringResource(R.string.shell_check_ram_6gb),
+                    passed = state.ramSupported,
+                    summaryText = if (state.ramSupported) {
+                        "${stringResource(R.string.shell_supported)} (${state.totalRamLabel})"
+                    } else {
+                        "${stringResource(R.string.shell_requires_ram_6gb)} (${state.totalRamLabel})"
+                    },
+                )
                 val executionEngineReady = state.rootAvailable || state.prootAvailable
                 val engineSummaryRes = when {
                     state.rootAvailable -> R.string.shell_root_granted
@@ -240,7 +256,7 @@ internal fun RuntimeOnboardingScreen(
                     ForgePrimaryButton(
                         text = primaryBtnLabel,
                         onClick = onStartSetup,
-                        enabled = state.arm64Supported,
+                        enabled = state.arm64Supported && state.ramSupported && state.androidVersionSupported,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 20.dp)
@@ -260,7 +276,7 @@ internal fun RuntimeOnboardingScreen(
                     ForgeTextButton(onClick = onRefreshStatus) {
                         Text(stringResource(R.string.onb_recheck))
                     }
-                    ForgeTextButton(onClick = onEnterWorkspaceAnyway) {
+                    ForgeTextButton(onClick = onEnterWorkspaceAnyway, enabled = state.ramSupported && state.androidVersionSupported) {
                         Text(
                             text = stringResource(R.string.onb_continue_anyway),
                             color = palette.onSurfaceVariant,

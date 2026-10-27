@@ -1584,4 +1584,8 @@
     <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
     <string name="composer_cmd_mcp">Abrir gestor de conectores MCP y habilidades</string>
     <string name="composer_badge_mcp">MCP</string>
+    <string name="shell_check_android_12">SO Android 12+ (API 31+)</string>
+    <string name="shell_requires_android_12">Requiere Android 12 (API 31) o superior</string>
+    <string name="shell_check_ram_6gb">Mínimo 6 GB de RAM del dispositivo</string>
+    <string name="shell_requires_ram_6gb">Requiere 6 GB de RAM o superior</string>
 </resources>

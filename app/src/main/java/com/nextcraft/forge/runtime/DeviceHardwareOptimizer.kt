@@ -90,6 +90,21 @@ object DeviceHardwareOptimizer {
     private var lastInspectMs: Long = 0L
 
     /**
+     * Minimum physical RAM in MB reported by Android `MemTotal` / `ActivityManager.MemoryInfo.totalMem`
+     * for a marketed 6 GB RAM device (accounting for modem/GPU/camera/trustzone carveouts where 6 GB reports ~5,100–6,200 MB).
+     */
+    const val MIN_REQUIRED_RAM_MB: Long = 4_500L
+
+    /** Minimum Android SDK level required to install and run NextCraft Forge (Android 12 / API 31). */
+    const val MIN_REQUIRED_SDK_INT: Int = Build.VERSION_CODES.S
+
+    fun meetsMinimumRam(totalMemoryMb: Long): Boolean =
+        classifyRamTier(totalMemoryMb).marketedGb >= RamTier.RAM_6GB.marketedGb
+
+    fun meetsMinimumAndroidVersion(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
+        sdkInt >= MIN_REQUIRED_SDK_INT
+
+    /**
      * Classifies marketed RAM tier from Android-reported `MemTotal` / `ActivityManager.MemoryInfo.totalMem` in MB.
      * Accounts for hardware carveouts (modem, GPU, camera, trustzone) where:
      * - 4 GB phone reports ~3,400–4,200 MB
@@ -204,8 +219,8 @@ object DeviceHardwareOptimizer {
 
     fun parseMemInfo(
         memInfoText: String,
-        fallbackTotalRamMb: Long = 4_096L,
-        fallbackAvailRamMb: Long = 1_536L,
+        fallbackTotalRamMb: Long = 6_144L,
+        fallbackAvailRamMb: Long = 2_048L,
     ): ParsedMemInfo {
         var memTotalKb = 0L
         var memAvailKb = 0L
@@ -435,8 +450,8 @@ object DeviceHardwareOptimizer {
         runCatching {
             context?.getSystemService(ActivityManager::class.java)?.getMemoryInfo(amInfo)
         }
-        val fallbackTotalMb = if (amInfo.totalMem > 0L) amInfo.totalMem / (1024L * 1024L) else 4_096L
-        val fallbackAvailMb = if (amInfo.availMem > 0L) amInfo.availMem / (1024L * 1024L) else 1_536L
+        val fallbackTotalMb = if (amInfo.totalMem > 0L) amInfo.totalMem / (1024L * 1024L) else 6_144L
+        val fallbackAvailMb = if (amInfo.availMem > 0L) amInfo.availMem / (1024L * 1024L) else 2_048L
 
         val memInfoText = runCatching { File("/proc/meminfo").readText() }.getOrDefault("")
         val parsedMem = parseMemInfo(memInfoText, fallbackTotalMb, fallbackAvailMb)
