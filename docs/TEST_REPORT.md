@@ -35,7 +35,7 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - 4 error lint Compose (`NonObservableLocale`, `LocalContextGetResourceValueCall` x3): teks bisa basi sampai restart setelah ganti bahasa.
 
 ## Belum terverifikasi (butuh pengujian ulang)
-- **Bersihkan terminal**: dua percobaan via layar overlay tidak menghasilkan perubahan layar (menu tertutup, isi terminal tetap). Belum bisa dipastikan apakah ini bug nyata (keluhan awal pengguna "ga bisa bersihkan terminal" konsisten) atau karena injeksi sentuh ke jendela popup di layar sekunder tidak sampai. Perlu dicoba dengan tap langsung di layar utama.
+- **Bersihkan terminal**: BUG nyata (TerminalSession.reset() tidak menghapus buffer layar). Diperbaiki di `41d4d0f`; diuji ulang di perangkat dengan tap nyata di layar utama (⋮ → Bersihkan terminal): isi lama terhapus, hanya prompt tersisa. 362 tes unit lulus, 0 gagal.
 - Penyebab kegagalan sesi berulang ("Claude Code reported an error") belum terbukti. Aplikasi sehat (0 crash/ANR); transkrip sesi 51 MB berisi 63 screenshot, dugaan: ukuran data sesi.
 
 ## Belum diuji
