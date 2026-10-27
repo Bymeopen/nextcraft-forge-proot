@@ -47,6 +47,11 @@ data class McpConnector(
                 scope = McpTargetScope.MOBILE,
             ),
             McpPreset(
+                name = "Forge Reference Index",
+                transport = McpTransport.COMMAND,
+                target = "python3 ${ForgeMcpServer.FORGE_MCP_GUEST_PATH}",
+            ),
+            McpPreset(
                 name = "Context7",
                 transport = McpTransport.HTTP,
                 target = "https://mcp.context7.com/mcp",

@@ -172,6 +172,103 @@ TOOLS = [
             "required": ["url"],
         },
     },
+    {
+        "name": "forge_reference_autoindex",
+        "description": "Index or incrementally update a project or reference directory into the local Forge Reference Index (SQLite FTS5 BM25 code passages + symbol definition table).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Workspace directory to index (default /workspace)",
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Force full re-index even for unchanged files (default false)",
+                },
+            },
+        },
+    },
+    {
+        "name": "forge_reference_search",
+        "description": "BM25 ranked code & documentation passage search across the Forge Reference Index. Returns exact file:start-end line passages without reading entire files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query keywords or identifiers",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace path scope",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max passages to return (default 5)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "forge_reference_def",
+        "description": "Instant go-to-definition lookup for classes, interfaces, functions, structs, or constants across the Forge Reference Index (returns file:line + signature).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Symbol name to locate (e.g. AppUpdateController, SilentSelfUpdate)",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace path scope",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max definitions to return (default 10)",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "forge_reference_batch_search",
+        "description": "Execute multiple BM25 code searches and symbol definition lookups in a single MCP call to drastically reduce agent turns and token usage.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of BM25 search queries to run",
+                },
+                "symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of symbol names to look up definitions for",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace path scope",
+                },
+            },
+        },
+    },
+    {
+        "name": "forge_reference_gain",
+        "description": "Report measured token savings, context reduction ratio, and indexed corpus statistics from the Forge Reference Index.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace path scope",
+                },
+            },
+        },
+    },
 ]
 
 
@@ -520,6 +617,23 @@ def handle_web_preview_inspect(args):
     )
 
 
+def _run_forge_reference_cli(cli_args, path_arg=None):
+    target_root = _safe_workspace_path(path_arg) or "/workspace/nextcraft-forge"
+    if not os.path.isdir(target_root):
+        target_root = "/workspace"
+    candidates = [
+        os.path.join(target_root, ".agents/scripts/forge_reference_index.py"),
+        "/workspace/nextcraft-forge/.agents/scripts/forge_reference_index.py",
+        "/opt/nextcraft/bin/forge-reference-index.py",
+    ]
+    script = next((c for c in candidates if os.path.isfile(c)), None)
+    if not script:
+        return "Forge Reference Index script not found in workspace."
+    cmd = ["python3", script] + cli_args + (["-p", target_root] if cli_args[0] != "autoindex" else [target_root])
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return (res.stdout or res.stderr or "No output").strip()
+
+
 def dispatch_tool(name, arguments):
     if name == "design_generate_svg":
         return handle_design_generate_svg(arguments)
@@ -531,6 +645,26 @@ def dispatch_tool(name, arguments):
         return handle_android_ui_inspect(arguments)
     if name == "web_preview_inspect":
         return handle_web_preview_inspect(arguments)
+    if name == "forge_reference_autoindex":
+        args_list = ["autoindex"] + (["--force"] if arguments.get("force") else [])
+        return _run_forge_reference_cli(args_list, arguments.get("path"))
+    if name == "forge_reference_search":
+        q = str(arguments.get("query") or "").strip()
+        limit = str(int(arguments.get("limit") or 5))
+        return _run_forge_reference_cli(["search", q, "-n", limit], arguments.get("path"))
+    if name == "forge_reference_def":
+        sym = str(arguments.get("symbol") or "").strip()
+        limit = str(int(arguments.get("limit") or 10))
+        return _run_forge_reference_cli(["def", sym, "-n", limit], arguments.get("path"))
+    if name == "forge_reference_batch_search":
+        args_list = ["batch"]
+        for q in (arguments.get("queries") or [])[:10]:
+            args_list.extend(["-q", str(q)])
+        for s in (arguments.get("symbols") or [])[:10]:
+            args_list.extend(["-s", str(s)])
+        return _run_forge_reference_cli(args_list, arguments.get("path"))
+    if name == "forge_reference_gain":
+        return _run_forge_reference_cli(["gain"], arguments.get("path"))
     raise ValueError(f"Unknown tool: {name}")
 
 
