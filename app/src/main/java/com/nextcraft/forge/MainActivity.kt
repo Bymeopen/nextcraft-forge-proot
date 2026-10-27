@@ -41,6 +41,10 @@ import com.nextcraft.forge.ui.LocaleHelper
 import com.nextcraft.forge.ui.MainViewModel
 import com.nextcraft.forge.ui.NextCraftForgeApp
 import com.nextcraft.forge.ui.NextCraftForgeTheme
+import com.nextcraft.forge.ui.loadChatImage
+import com.nextcraft.forge.ui.loadChatVideoThumbnail
+import com.nextcraft.forge.ui.openChatVideo
+import com.nextcraft.forge.ui.releaseMemoryCaches
 import com.nextcraft.forge.ui.resolveThemeTokens
 
 class MainActivity : ComponentActivity() {

@@ -26,7 +26,10 @@ class BatteryGuardTest {
 
     @Test
     fun androidBuildLog_isPublishedInBatches() {
-        val vm = source("ui/MainViewModel.kt")
+        val vm = File("src/main/java/com/nextcraft/forge/ui")
+            .listFiles { f -> f.name.startsWith("MainViewModel") && f.extension == "kt" }
+            .orEmpty()
+            .joinToString("\n") { it.readText() }
         assertTrue("build log must be throttled", vm.contains("LOG_PUBLISH_MS") && vm.contains("fun publishLog("))
     }
 }

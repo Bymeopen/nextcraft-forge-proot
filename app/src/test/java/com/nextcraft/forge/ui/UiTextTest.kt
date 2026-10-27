@@ -23,7 +23,10 @@ class UiTextTest {
     /** Status/banner text must never be assigned a bare String literal again. */
     @Test
     fun viewModel_statusFields_useUiText() {
-        val src = File("src/main/java/com/nextcraft/forge/ui/MainViewModel.kt").readText()
+        val src = File("src/main/java/com/nextcraft/forge/ui")
+            .listFiles { f -> f.name.startsWith("MainViewModel") && f.extension == "kt" }
+            .orEmpty()
+            .joinToString("\n") { it.readText() }
         val bare = Regex("""(bannerMessage|githubStatusMessage|apiStatusMessage|activeStatusLine)\s*=\s*"[^"\n]*"""")
             .findAll(src).map { it.value }.toList()
         assertTrue("bare String literals assigned to UiText fields:\n" + bare.joinToString("\n"), bare.isEmpty())
