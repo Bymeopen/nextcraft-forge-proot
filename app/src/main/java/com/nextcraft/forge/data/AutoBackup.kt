@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -64,18 +65,20 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val settings = AutoBackupSettings(applicationContext)
         val target = settings.target ?: return Result.success()
         val password = settings.password
-        val passwordChars = password.toCharArray()
-        return try {
-            runCatching {
-                val out = applicationContext.contentResolver.openOutputStream(target, "wt") ?: error("The backup file is no longer reachable")
+        return runCatching {
+            // Build the archive in a private temp file first so a failure mid-way never truncates the previous backup.
+            val temp = File.createTempFile("auto-backup-", ".tmp", applicationContext.cacheDir)
+            try {
                 BackupManager(applicationContext).create(
-                    out,
-                    BackupManager.Options(apiKeys = settings.includeApiKeys && passwordChars.isNotEmpty()),
-                    passwordChars.takeIf { it.isNotEmpty() },
+                    temp.outputStream(),
+                    BackupManager.Options(apiKeys = settings.includeApiKeys && password.isNotEmpty()),
+                    password.toCharArray().takeIf { it.isNotEmpty() },
                 )
+                val out = applicationContext.contentResolver.openOutputStream(target, "wt") ?: error("The backup file is no longer reachable")
+                out.use { sink -> temp.inputStream().use { it.copyTo(sink) } }
+            } finally {
+                temp.delete()
             }
-        } finally {
-            passwordChars.fill('\u0000')
         }.fold(
             onSuccess = {
                 settings.lastRunAt = System.currentTimeMillis()

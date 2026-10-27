@@ -27,6 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.nextcraft.forge.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,7 +39,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -47,21 +48,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import com.nextcraft.forge.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private sealed interface MdAstNode {
-    data class Heading(val depth: Int, val rawText: String) : MdAstNode
-    data class FencedCode(val langTag: String, val snippet: String) : MdAstNode
-    data class UnorderedItem(val indentLevel: Int, val rawText: String) : MdAstNode
-    data class OrderedItem(val ordinalPrefix: String, val rawText: String) : MdAstNode
-    data class QuoteBlock(val rawText: String) : MdAstNode
-    data class GridTable(val matrix: List<List<String>>) : MdAstNode
-    data object ThematicBreak : MdAstNode
-    data class BodyParagraph(val rawText: String) : MdAstNode
-    data class EmbeddedImage(val altText: String, val uri: String) : MdAstNode
-    data class EmbeddedVideo(val uri: String) : MdAstNode
+private sealed interface MarkdownBlock {
+    data class Header(val level: Int, val text: String) : MarkdownBlock
+    data class CodeBlock(val language: String, val code: String) : MarkdownBlock
+    data class BulletItem(val depth: Int, val text: String) : MarkdownBlock
+    data class NumberedItem(val number: String, val text: String) : MarkdownBlock
+    data class BlockQuote(val text: String) : MarkdownBlock
+    data class Table(val rows: List<List<String>>) : MarkdownBlock
+    object HorizontalRule : MarkdownBlock
+    data class Paragraph(val text: String) : MarkdownBlock
+    data class Image(val alt: String, val src: String) : MarkdownBlock
+    data class Video(val src: String) : MarkdownBlock
 }
 
 @Composable
@@ -70,38 +70,37 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
     onRunCode: ((String) -> Unit)? = null,
+    // SelectionContainer inside a LazyColumn item whose content changes (streaming chat) is a suspected cause of the
+    // Compose Stack.pop crash; chat messages use the Copy button instead.
     selectable: Boolean = true,
 ) {
-    val astNodes = remember(markdown) { tokenizeMarkdownDocument(markdown) }
-    val fgTint = if (color == Color.Unspecified) MaterialTheme.colorScheme.onSurface else color
-    val themeTokens = LocalForgeThemeTokens.current
+    val blocks = remember(markdown) { parseMarkdown(markdown) }
+    val resolvedColor = if (color == Color.Unspecified) MaterialTheme.colorScheme.onSurface else color
+    val tokens = LocalForgeThemeTokens.current
 
-    SelectionWrapper(enabled = selectable) {
-        Column(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            for (node in astNodes) {
-                when (node) {
-                    is MdAstNode.Heading -> RenderHeadingNode(node, fgTint, themeTokens)
-                    is MdAstNode.FencedCode -> RenderFencedCodeNode(node, onRunCode, themeTokens)
-                    is MdAstNode.UnorderedItem -> RenderUnorderedItemNode(node, fgTint, themeTokens)
-                    is MdAstNode.OrderedItem -> RenderOrderedItemNode(node, fgTint, themeTokens)
-                    is MdAstNode.QuoteBlock -> RenderQuoteBlockNode(node, fgTint, themeTokens)
-                    is MdAstNode.GridTable -> RenderGridTableNode(node, fgTint, themeTokens)
-                    is MdAstNode.EmbeddedImage -> ChatImage(alt = node.altText, src = node.uri)
-                    is MdAstNode.EmbeddedVideo -> ChatVideo(src = node.uri)
-                    MdAstNode.ThematicBreak -> Divider(
+    OptionalSelection(selectable) {
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            blocks.forEach { block ->
+                when (block) {
+                    is MarkdownBlock.Header -> HeaderBlock(block, resolvedColor, tokens)
+                    is MarkdownBlock.CodeBlock -> CodeSnippetBlock(block, onRunCode, tokens)
+                    is MarkdownBlock.BulletItem -> BulletBlock(block, resolvedColor, tokens)
+                    is MarkdownBlock.NumberedItem -> NumberedBlock(block, resolvedColor, tokens)
+                    is MarkdownBlock.BlockQuote -> BlockQuoteView(block, resolvedColor, tokens)
+                    is MarkdownBlock.Table -> TableBlockView(block, resolvedColor, tokens)
+                    is MarkdownBlock.Image -> ChatImage(alt = block.alt, src = block.src)
+                    is MarkdownBlock.Video -> ChatVideo(src = block.src)
+                    MarkdownBlock.HorizontalRule -> Divider(
                         modifier = Modifier.padding(vertical = 4.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                     )
-                    is MdAstNode.BodyParagraph -> Text(
-                        text = buildStyledInlineSpans(
-                            raw = node.rawText,
-                            highlightColor = themeTokens.accentText,
-                            codePillBg = themeTokens.inlineCodeBackground,
+                    is MarkdownBlock.Paragraph -> Text(
+                        text = rememberInlineMarkdown(
+                            text = block.text,
+                            accentColor = tokens.accentText,
+                            inlineCodeBg = tokens.inlineCodeBackground,
                         ),
-                        color = fgTint,
+                        color = resolvedColor,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -111,177 +110,169 @@ fun MarkdownText(
 }
 
 @Composable
-private fun SelectionWrapper(
-    enabled: Boolean,
-    content: @Composable () -> Unit,
-) {
+private fun OptionalSelection(enabled: Boolean, content: @Composable () -> Unit) {
     if (enabled) SelectionContainer(content = content) else content()
 }
 
 @Composable
-private fun RenderHeadingNode(
-    node: MdAstNode.Heading,
-    fgTint: Color,
-    themeTokens: ForgeThemeTokens,
+private fun HeaderBlock(
+    block: MarkdownBlock.Header,
+    color: Color,
+    tokens: ForgeThemeTokens,
 ) {
-    val typography = MaterialTheme.typography
-    val textStyle = when (node.depth) {
-        1 -> typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-        2 -> typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-        else -> typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+    val style = when (block.level) {
+        1 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+        2 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+        else -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
     }
     Text(
-        text = buildStyledInlineSpans(
-            raw = node.rawText,
-            highlightColor = themeTokens.accentText,
-            codePillBg = themeTokens.inlineCodeBackground,
+        text = rememberInlineMarkdown(
+            text = block.text,
+            accentColor = tokens.accentText,
+            inlineCodeBg = tokens.inlineCodeBackground,
         ),
-        style = textStyle,
-        color = fgTint,
+        style = style,
+        color = color,
         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
     )
 }
 
 @Composable
-private fun RenderUnorderedItemNode(
-    node: MdAstNode.UnorderedItem,
-    fgTint: Color,
-    themeTokens: ForgeThemeTokens,
+private fun BulletBlock(
+    block: MarkdownBlock.BulletItem,
+    color: Color,
+    tokens: ForgeThemeTokens,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = (node.indentLevel * 12).dp),
+            .padding(start = (block.depth * 12).dp),
         verticalAlignment = Alignment.Top,
     ) {
         Text(
             text = "•",
-            color = themeTokens.accentText,
+            color = tokens.accentText,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(end = 8.dp),
         )
         Text(
-            text = buildStyledInlineSpans(
-                raw = node.rawText,
-                highlightColor = themeTokens.accentText,
-                codePillBg = themeTokens.inlineCodeBackground,
+            text = rememberInlineMarkdown(
+                text = block.text,
+                accentColor = tokens.accentText,
+                inlineCodeBg = tokens.inlineCodeBackground,
             ),
-            color = fgTint,
+            color = color,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
 
 @Composable
-private fun RenderOrderedItemNode(
-    node: MdAstNode.OrderedItem,
-    fgTint: Color,
-    themeTokens: ForgeThemeTokens,
+private fun NumberedBlock(
+    block: MarkdownBlock.NumberedItem,
+    color: Color,
+    tokens: ForgeThemeTokens,
 ) {
-    val ordinalLabel = "${node.ordinalPrefix}."
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
     ) {
         Text(
-            text = ordinalLabel,
-            color = themeTokens.accentText,
+            text = "${block.number}.",
+            color = tokens.accentText,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(end = 8.dp),
         )
         Text(
-            text = buildStyledInlineSpans(
-                raw = node.rawText,
-                highlightColor = themeTokens.accentText,
-                codePillBg = themeTokens.inlineCodeBackground,
+            text = rememberInlineMarkdown(
+                text = block.text,
+                accentColor = tokens.accentText,
+                inlineCodeBg = tokens.inlineCodeBackground,
             ),
-            color = fgTint,
+            color = color,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
 
 @Composable
-private fun RenderQuoteBlockNode(
-    node: MdAstNode.QuoteBlock,
-    fgTint: Color,
-    themeTokens: ForgeThemeTokens,
+private fun BlockQuoteView(
+    block: MarkdownBlock.BlockQuote,
+    color: Color,
+    tokens: ForgeThemeTokens,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(themeTokens.cardElevatedColor.withAlphaScaled(0.65f))
+            .background(tokens.cardElevatedColor.withAlphaScaled(0.65f))
             .padding(8.dp),
     ) {
         Box(
             modifier = Modifier
                 .width(3.dp)
                 .height(20.dp)
-                .background(themeTokens.accentText),
+                .background(tokens.accentText),
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = buildStyledInlineSpans(
-                raw = node.rawText,
-                highlightColor = themeTokens.accentText,
-                codePillBg = themeTokens.inlineCodeBackground,
+            text = rememberInlineMarkdown(
+                text = block.text,
+                accentColor = tokens.accentText,
+                inlineCodeBg = tokens.inlineCodeBackground,
             ),
-            color = fgTint.copy(alpha = 0.92f),
+            color = color.copy(alpha = 0.92f),
             fontStyle = FontStyle.Italic,
             style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
 
-private val SHELL_LANG_IDENTIFIERS = setOf("sh", "bash", "zsh", "shell", "console")
-
 @Composable
-private fun RenderFencedCodeNode(
-    node: MdAstNode.FencedCode,
+private fun CodeSnippetBlock(
+    block: MarkdownBlock.CodeBlock,
     onRunCode: ((String) -> Unit)?,
-    themeTokens: ForgeThemeTokens,
+    tokens: ForgeThemeTokens,
 ) {
     val clipboard = LocalClipboardManager.current
-    val coroutineScope = rememberCoroutineScope()
-    var justCopied by remember { mutableStateOf(false) }
-    val runnableInShell = node.langTag.lowercase() in SHELL_LANG_IDENTIFIERS
-    val boxShape = RoundedCornerShape(10.dp)
-    val palette = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    val isShell = block.language.lowercase() in setOf("sh", "bash", "zsh", "shell", "console")
+    val shape = RoundedCornerShape(10.dp)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(boxShape)
-            .border(1.dp, palette.outline.copy(alpha = 0.45f), boxShape),
-        color = themeTokens.terminalBackground,
+            .clip(shape)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), shape),
+        color = tokens.terminalBackground,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(themeTokens.terminalHeaderBackground)
+                    .background(tokens.terminalHeaderBackground)
                     .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = node.langTag.ifBlank { "code" }.uppercase(),
-                    color = palette.onSurfaceVariant,
+                    text = block.language.ifBlank { "code" }.uppercase(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = ForgeType.caption,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (runnableInShell && onRunCode != null && node.snippet.isNotBlank()) {
+                    if (isShell && onRunCode != null && block.code.isNotBlank()) {
                         IconButton(
-                            onClick = { onRunCode(node.snippet) },
+                            onClick = { onRunCode(block.code) },
                             modifier = Modifier.size(ForgeSpace.minTouch),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PlayArrow,
                                 contentDescription = stringResource(R.string.md_run_in_terminal),
-                                tint = themeTokens.successText,
+                                tint = tokens.successText,
                                 modifier = Modifier.size(16.dp),
                             )
                         }
@@ -289,19 +280,19 @@ private fun RenderFencedCodeNode(
                     }
                     IconButton(
                         onClick = {
-                            clipboard.setText(AnnotatedString(node.snippet))
-                            justCopied = true
-                            coroutineScope.launch {
-                                delay(1500L)
-                                justCopied = false
+                            clipboard.setText(AnnotatedString(block.code))
+                            copied = true
+                            scope.launch {
+                                delay(1500)
+                                copied = false
                             }
                         },
                         modifier = Modifier.size(ForgeSpace.minTouch),
                     ) {
                         Icon(
-                            imageVector = if (justCopied) Icons.Default.Check else Icons.Default.Share,
+                            imageVector = if (copied) Icons.Default.Check else Icons.Default.Share,
                             contentDescription = stringResource(R.string.md_copy_code),
-                            tint = if (justCopied) themeTokens.successText else palette.onSurfaceVariant,
+                            tint = if (copied) tokens.successText else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(15.dp),
                         )
                     }
@@ -314,8 +305,8 @@ private fun RenderFencedCodeNode(
                     .padding(10.dp),
             ) {
                 Text(
-                    text = node.snippet,
-                    color = themeTokens.terminalText,
+                    text = block.code,
+                    color = tokens.terminalText,
                     style = ForgeCodeTextStyle,
                 )
             }
@@ -324,48 +315,50 @@ private fun RenderFencedCodeNode(
 }
 
 @Composable
-private fun RenderGridTableNode(
-    node: MdAstNode.GridTable,
-    fgTint: Color,
-    themeTokens: ForgeThemeTokens,
+private fun TableBlockView(
+    block: MarkdownBlock.Table,
+    color: Color,
+    tokens: ForgeThemeTokens,
 ) {
-    if (node.matrix.isEmpty()) return
-    val boxShape = RoundedCornerShape(10.dp)
-    val palette = MaterialTheme.colorScheme
+    if (block.rows.isEmpty()) return
+    val shape = RoundedCornerShape(10.dp)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(boxShape)
-            .border(1.dp, palette.outline.copy(alpha = 0.45f), boxShape),
-        color = themeTokens.cardContainerColor,
+            .clip(shape)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), shape),
+        color = tokens.cardContainerColor,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
         ) {
-            node.matrix.forEachIndexed { rIdx, rowCells ->
-                val isHeaderRow = rIdx == 0 && node.matrix.size > 1
-                val rowBg = when {
-                    isHeaderRow -> themeTokens.cardElevatedColor.withAlphaScaled(0.78f)
-                    rIdx % 2 == 1 -> Color.Transparent
-                    else -> themeTokens.cardElevatedColor.withAlphaScaled(0.25f)
-                }
+            block.rows.forEachIndexed { rowIdx, cells ->
+                val isHeader = rowIdx == 0 && block.rows.size > 1
                 Row(
                     modifier = Modifier
-                        .background(rowBg)
+                        .background(
+                            if (isHeader) {
+                                tokens.cardElevatedColor.withAlphaScaled(0.78f)
+                            } else if (rowIdx % 2 == 1) {
+                                Color.Transparent
+                            } else {
+                                tokens.cardElevatedColor.withAlphaScaled(0.25f)
+                            },
+                        )
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    for (cellRaw in rowCells) {
+                    cells.forEach { cellText ->
                         Text(
-                            text = buildStyledInlineSpans(
-                                raw = cellRaw,
-                                highlightColor = themeTokens.accentText,
-                                codePillBg = themeTokens.inlineCodeBackground,
+                            text = rememberInlineMarkdown(
+                                text = cellText,
+                                accentColor = tokens.accentText,
+                                inlineCodeBg = tokens.inlineCodeBackground,
                             ),
-                            color = fgTint,
-                            style = if (isHeaderRow) {
+                            color = color,
+                            style = if (isHeader) {
                                 MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                             } else {
                                 MaterialTheme.typography.bodySmall
@@ -376,234 +369,241 @@ private fun RenderGridTableNode(
                         )
                     }
                 }
-                if (rIdx < node.matrix.lastIndex) {
-                    Divider(color = palette.outline.copy(alpha = 0.25f))
+                if (rowIdx < block.rows.lastIndex) {
+                    Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                 }
             }
         }
     }
 }
 
-private val ORDERED_LIST_LINE_PATTERN = Regex("""^(\d+)\.\s+(.*)$""")
-private val TABLE_SEPARATOR_ROW_PATTERN = Regex("""^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?$""")
+private val NUMBERED_ITEM_REGEX = Regex("""^(\d+)\.\s+(.*)$""")
+private val TABLE_DIVIDER_REGEX = Regex("""^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?$""")
 
-private fun tokenizeMarkdownDocument(document: String): List<MdAstNode> {
-    if (document.isBlank()) return emptyList()
-    val rawLines = document.replace("\r\n", "\n").lines()
-    val outNodes = ArrayList<MdAstNode>()
-    var insideFence = false
-    var activeFenceLang = ""
-    val fenceBuffer = StringBuilder()
-    val paragraphAccumulator = StringBuilder()
-    val pendingTableRows = ArrayList<List<String>>()
+private fun parseMarkdown(raw: String): List<MarkdownBlock> {
+    if (raw.isBlank()) return emptyList()
+    val lines = raw.replace("\r\n", "\n").lines()
+    val blocks = ArrayList<MarkdownBlock>()
+    var inCodeBlock = false
+    var codeLang = ""
+    val codeBuf = StringBuilder()
+    val paraBuf = StringBuilder()
+    val tableRows = ArrayList<List<String>>()
 
-    fun commitPendingParagraph() {
-        if (paragraphAccumulator.isNotEmpty()) {
-            outNodes += MdAstNode.BodyParagraph(paragraphAccumulator.toString().trimEnd())
-            paragraphAccumulator.setLength(0)
+    fun flushParagraph() {
+        if (paraBuf.isNotEmpty()) {
+            blocks += MarkdownBlock.Paragraph(paraBuf.toString().trimEnd())
+            paraBuf.setLength(0)
         }
     }
 
-    fun commitPendingTable() {
-        if (pendingTableRows.isNotEmpty()) {
-            outNodes += MdAstNode.GridTable(pendingTableRows.toList())
-            pendingTableRows.clear()
+    fun flushTable() {
+        if (tableRows.isNotEmpty()) {
+            blocks += MarkdownBlock.Table(tableRows.toList())
+            tableRows.clear()
         }
     }
 
-    for (rawLine in rawLines) {
-        val leadingStripped = rawLine.trimStart()
-        val fenceMarker = when {
-            leadingStripped.startsWith("```") -> "```"
-            leadingStripped.startsWith("~~~") -> "~~~"
+    for (line in lines) {
+        val trimmed = line.trimStart()
+        val fencePrefix = when {
+            trimmed.startsWith("```") -> "```"
+            trimmed.startsWith("~~~") -> "~~~"
             else -> null
         }
-        if (fenceMarker != null) {
-            if (insideFence) {
-                outNodes += MdAstNode.FencedCode(activeFenceLang, fenceBuffer.toString().trimEnd('\n'))
-                fenceBuffer.setLength(0)
-                activeFenceLang = ""
-                insideFence = false
+        if (fencePrefix != null) {
+            if (inCodeBlock) {
+                blocks += MarkdownBlock.CodeBlock(codeLang, codeBuf.toString().trimEnd('\n'))
+                codeBuf.setLength(0)
+                codeLang = ""
+                inCodeBlock = false
             } else {
-                commitPendingParagraph()
-                commitPendingTable()
-                insideFence = true
-                activeFenceLang = leadingStripped.removePrefix(fenceMarker).trim()
+                flushParagraph()
+                flushTable()
+                inCodeBlock = true
+                codeLang = trimmed.removePrefix(fencePrefix).trim()
             }
             continue
         }
-        if (insideFence) {
-            fenceBuffer.append(rawLine).append('\n')
+        if (inCodeBlock) {
+            codeBuf.append(line).append('\n')
             continue
         }
-
-        val fullTrimmed = leadingStripped.trimEnd()
-        val looksLikeTableRow = fullTrimmed.startsWith("|") && fullTrimmed.endsWith("|") && fullTrimmed.count { it == '|' } >= 2
-        if (looksLikeTableRow) {
-            commitPendingParagraph()
-            if (!TABLE_SEPARATOR_ROW_PATTERN.matches(fullTrimmed)) {
-                val parsedCells = fullTrimmed
+        val trimmedBoth = trimmed.trimEnd()
+        val isTableRow = trimmedBoth.startsWith("|") && trimmedBoth.endsWith("|") && trimmedBoth.count { it == '|' } >= 2
+        if (isTableRow) {
+            flushParagraph()
+            if (!TABLE_DIVIDER_REGEX.matches(trimmedBoth)) {
+                val cells = trimmedBoth
                     .removePrefix("|")
                     .removeSuffix("|")
                     .split("|")
-                    .map(String::trim)
-                if (parsedCells.isNotEmpty()) pendingTableRows += parsedCells
+                    .map { it.trim() }
+                if (cells.isNotEmpty()) {
+                    tableRows += cells
+                }
             }
             continue
         } else {
-            commitPendingTable()
+            flushTable()
         }
 
-        val mediaImg = imageRefOfLine(rawLine)
-        val mediaVid = if (mediaImg == null) videoPathOfLine(rawLine) else null
+        val image = imageRefOfLine(line)
+        val video = if (image == null) videoPathOfLine(line) else null
         when {
-            rawLine.isBlank() -> commitPendingParagraph()
-            mediaVid != null -> {
-                commitPendingParagraph()
-                outNodes += MdAstNode.EmbeddedVideo(mediaVid)
+            line.isBlank() -> flushParagraph()
+            video != null -> {
+                flushParagraph()
+                blocks += MarkdownBlock.Video(video)
             }
-            mediaImg != null -> {
-                commitPendingParagraph()
-                outNodes += MdAstNode.EmbeddedImage(mediaImg.alt, mediaImg.src)
+            image != null -> {
+                flushParagraph()
+                blocks += MarkdownBlock.Image(image.alt, image.src)
             }
-            leadingStripped == "---" || leadingStripped == "***" -> {
-                commitPendingParagraph()
-                outNodes += MdAstNode.ThematicBreak
+            trimmed == "---" || trimmed == "***" -> {
+                flushParagraph()
+                blocks += MarkdownBlock.HorizontalRule
             }
-            leadingStripped.startsWith("#") -> {
-                val hashCount = leadingStripped.takeWhile { it == '#' }.length
-                if (hashCount in 1..6 && leadingStripped.getOrNull(hashCount) == ' ') {
-                    commitPendingParagraph()
-                    outNodes += MdAstNode.Heading(hashCount, leadingStripped.substring(hashCount + 1).trim())
+            trimmed.startsWith("#") -> {
+                val hashes = trimmed.takeWhile { it == '#' }.length
+                if (hashes in 1..6 && trimmed.getOrNull(hashes) == ' ') {
+                    flushParagraph()
+                    blocks += MarkdownBlock.Header(hashes, trimmed.substring(hashes + 1).trim())
                 } else {
-                    if (paragraphAccumulator.isNotEmpty()) paragraphAccumulator.append('\n')
-                    paragraphAccumulator.append(rawLine)
+                    if (paraBuf.isNotEmpty()) paraBuf.append('\n')
+                    paraBuf.append(line)
                 }
             }
-            leadingStripped.startsWith("- ") || leadingStripped.startsWith("* ") -> {
-                commitPendingParagraph()
-                val indentSpaces = rawLine.length - leadingStripped.length
-                outNodes += MdAstNode.UnorderedItem(indentSpaces / 2, leadingStripped.substring(2).trim())
+            trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+                flushParagraph()
+                val leadingSpaces = line.length - trimmed.length
+                blocks += MarkdownBlock.BulletItem(leadingSpaces / 2, trimmed.substring(2).trim())
             }
-            leadingStripped.startsWith("> ") || leadingStripped == ">" -> {
-                commitPendingParagraph()
-                outNodes += MdAstNode.QuoteBlock(leadingStripped.removePrefix(">").trim())
+            trimmed.startsWith("> ") || trimmed == ">" -> {
+                flushParagraph()
+                blocks += MarkdownBlock.BlockQuote(trimmed.removePrefix(">").trim())
             }
             else -> {
-                val orderedMatch = ORDERED_LIST_LINE_PATTERN.matchEntire(leadingStripped)
-                if (orderedMatch != null) {
-                    commitPendingParagraph()
-                    outNodes += MdAstNode.OrderedItem(orderedMatch.groupValues[1], orderedMatch.groupValues[2])
+                val numMatch = NUMBERED_ITEM_REGEX.matchEntire(trimmed)
+                if (numMatch != null) {
+                    flushParagraph()
+                    blocks += MarkdownBlock.NumberedItem(numMatch.groupValues[1], numMatch.groupValues[2])
                 } else {
-                    if (paragraphAccumulator.isNotEmpty()) paragraphAccumulator.append('\n')
-                    paragraphAccumulator.append(rawLine)
+                    if (paraBuf.isNotEmpty()) paraBuf.append('\n')
+                    paraBuf.append(line)
                 }
             }
         }
     }
-    if (insideFence) {
-        outNodes += MdAstNode.FencedCode(activeFenceLang, fenceBuffer.toString().trimEnd('\n'))
+    if (inCodeBlock) {
+        blocks += MarkdownBlock.CodeBlock(codeLang, codeBuf.toString().trimEnd('\n'))
     }
-    commitPendingTable()
-    commitPendingParagraph()
-    return outNodes
+    flushTable()
+    flushParagraph()
+    return blocks
 }
 
-private fun buildStyledInlineSpans(
-    raw: String,
-    highlightColor: Color,
-    codePillBg: Color,
+/** Memoised per block so a streaming message only re-parses the block whose text changed. */
+@Composable
+private fun rememberInlineMarkdown(text: String, accentColor: Color, inlineCodeBg: Color): AnnotatedString =
+    remember(text, accentColor, inlineCodeBg) { parseInlineMarkdown(text, accentColor, inlineCodeBg) }
+
+private fun parseInlineMarkdown(
+    text: String,
+    accentColor: Color,
+    inlineCodeBg: Color,
 ): AnnotatedString = buildAnnotatedString {
-    var cursor = 0
-    val len = raw.length
-    while (cursor < len) {
+    var i = 0
+    val n = text.length
+    while (i < n) {
         when {
-            raw.startsWith("**", cursor) -> {
-                val closeIdx = raw.indexOf("**", cursor + 2)
-                if (closeIdx > cursor + 2) {
+            text.startsWith("**", i) -> {
+                val end = text.indexOf("**", i + 2)
+                if (end > i + 2) {
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(raw.substring(cursor + 2, closeIdx))
+                        append(text.substring(i + 2, end))
                     }
-                    cursor = closeIdx + 2
+                    i = end + 2
                 } else {
-                    append(raw[cursor])
-                    cursor++
+                    append(text[i])
+                    i++
                 }
             }
-            raw.startsWith("~~", cursor) -> {
-                val closeIdx = raw.indexOf("~~", cursor + 2)
-                if (closeIdx > cursor + 2) {
+            text.startsWith("~~", i) -> {
+                val end = text.indexOf("~~", i + 2)
+                if (end > i + 2) {
                     withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
-                        append(raw.substring(cursor + 2, closeIdx))
+                        append(text.substring(i + 2, end))
                     }
-                    cursor = closeIdx + 2
+                    i = end + 2
                 } else {
-                    append(raw[cursor])
-                    cursor++
+                    append(text[i])
+                    i++
                 }
             }
-            raw[cursor] == '`' -> {
-                val closeIdx = raw.indexOf('`', cursor + 1)
-                if (closeIdx > cursor + 1) {
+            text[i] == '`' -> {
+                val end = text.indexOf('`', i + 1)
+                if (end > i + 1) {
                     withStyle(
                         SpanStyle(
                             fontFamily = FontFamily.Monospace,
-                            background = codePillBg,
-                            color = highlightColor,
+                            background = inlineCodeBg,
+                            color = accentColor,
                             fontWeight = FontWeight.Medium,
                         ),
                     ) {
-                        append(raw.substring(cursor + 1, closeIdx))
+                        append(text.substring(i + 1, end))
                     }
-                    cursor = closeIdx + 1
+                    i = end + 1
                 } else {
-                    append(raw[cursor])
-                    cursor++
+                    append(text[i])
+                    i++
                 }
             }
-            raw[cursor] == '*' && (cursor + 1 < len && raw[cursor + 1] != ' ') -> {
-                val closeIdx = raw.indexOf('*', cursor + 1)
-                if (closeIdx > cursor + 1) {
+            text[i] == '*' && (i + 1 < n && text[i + 1] != ' ') -> {
+                val end = text.indexOf('*', i + 1)
+                if (end > i + 1) {
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append(raw.substring(cursor + 1, closeIdx))
+                        append(text.substring(i + 1, end))
                     }
-                    cursor = closeIdx + 1
+                    i = end + 1
                 } else {
-                    append(raw[cursor])
-                    cursor++
+                    append(text[i])
+                    i++
                 }
             }
-            raw[cursor] == '[' -> {
-                val rightBracket = raw.indexOf(']', cursor + 1)
-                val leftParen = if (rightBracket != -1 && rightBracket + 1 < len && raw[rightBracket + 1] == '(') {
-                    rightBracket + 1
+            text[i] == '[' -> {
+                val closeBracket = text.indexOf(']', i + 1)
+                val openParen = if (closeBracket != -1 && closeBracket + 1 < n && text[closeBracket + 1] == '(') {
+                    closeBracket + 1
                 } else {
                     -1
                 }
-                val rightParen = if (leftParen != -1) raw.indexOf(')', leftParen + 1) else -1
-                if (rightBracket != -1 && leftParen != -1 && rightParen != -1) {
-                    val anchorLabel = raw.substring(cursor + 1, rightBracket)
+                val closeParen = if (openParen != -1) text.indexOf(')', openParen + 1) else -1
+                if (closeBracket != -1 && openParen != -1 && closeParen != -1) {
+                    val label = text.substring(i + 1, closeBracket)
                     withStyle(
                         SpanStyle(
-                            color = highlightColor,
+                            color = accentColor,
                             textDecoration = TextDecoration.Underline,
                             fontWeight = FontWeight.Medium,
                         ),
                     ) {
-                        append(anchorLabel)
+                        append(label)
                     }
-                    cursor = rightParen + 1
+                    i = closeParen + 1
                 } else {
-                    append(raw[cursor])
-                    cursor++
+                    append(text[i])
+                    i++
                 }
             }
             else -> {
-                append(raw[cursor])
-                cursor++
+                append(text[i])
+                i++
             }
         }
     }
 }
 
+/** Scales the colour's own alpha; `copy(alpha = x)` would replace it and turn translucent Glass tokens bright. */
 internal fun Color.withAlphaScaled(factor: Float): Color = copy(alpha = alpha * factor)

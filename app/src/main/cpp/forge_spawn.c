@@ -14,326 +14,292 @@
 #include <termios.h>
 #include <unistd.h>
 
-static void close_fd_pair(int descriptors[2]) {
-    if (descriptors[0] >= 0) {
-        close(descriptors[0]);
-    }
-    if (descriptors[1] >= 0) {
-        close(descriptors[1]);
-    }
+static void close_pair(int pair[2]) {
+    if (pair[0] >= 0) close(pair[0]);
+    if (pair[1] >= 0) close(pair[1]);
 }
 
-static void scrub_inherited_descriptors(void) {
-    DIR *fd_dir = opendir("/proc/self/fd");
-    if (fd_dir != NULL) {
-        int self_dir_fd = dirfd(fd_dir);
-        struct dirent *item;
-        while ((item = readdir(fd_dir)) != NULL) {
-            int candidate_fd = atoi(item->d_name);
-            if (candidate_fd >= 3 && candidate_fd != self_dir_fd) {
-                close(candidate_fd);
+/**
+ * Closes all inherited file descriptors >= 3 in the forked child before execve/execlp
+ * so JVM sockets (LocalFormatGateway, OpenRouterRoutingGateway), Keystore/DataStore FDs,
+ * and sibling PTY master FDs never leak into child processes.
+ */
+static void close_extra_fds(void) {
+    // opendir/readdir are not async-signal-safe, but this runs in the single-threaded forked child of a
+    // multi-threaded JVM with no signal handlers of its own; the loop below covers an opendir failure.
+    // close_range(2) would be the clean alternative, but it needs API 34 / kernel 5.9 on every target.
+    DIR *dir = opendir("/proc/self/fd");
+    if (dir != NULL) {
+        int dir_fd = dirfd(dir);
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            int fd = atoi(entry->d_name);
+            if (fd >= 3 && fd != dir_fd) {
+                close(fd);
             }
         }
-        closedir(fd_dir);
+        closedir(dir);
         return;
     }
-    long upper_bound = sysconf(_SC_OPEN_MAX);
-    if (upper_bound < 0 || upper_bound > 65536) {
-        upper_bound = 1024;
-    }
-    for (int fd_idx = 3; fd_idx < (int)upper_bound; fd_idx++) {
-        close(fd_idx);
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if (max_fd < 0 || max_fd > 65536) max_fd = 1024;
+    for (int fd = 3; fd < (int)max_fd; fd++) {
+        close(fd);
     }
 }
 
-static void terminate_and_collect_child(pid_t child_pid) {
-    if (child_pid <= 0) {
-        return;
-    }
-    kill(child_pid, SIGKILL);
-    int wait_state = 0;
-    while (waitpid(child_pid, &wait_state, 0) < 0) {
-        if (errno != EINTR) {
-            break;
-        }
+/**
+ * Kills and reaps a newly-forked child on early error paths so it never becomes a zombie (<defunct>).
+ */
+static void kill_and_reap_child(pid_t pid) {
+    if (pid <= 0) return;
+    kill(pid, SIGKILL);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) break;
     }
 }
 
-static void release_native_buffers(
-    char **arg_vec,
-    jsize arg_len,
-    char **env_vec,
-    jsize env_len,
-    char *work_dir,
-    char *log_file
-) {
-    if (arg_vec != NULL) {
-        for (jsize idx = 0; idx < arg_len; idx++) {
-            free(arg_vec[idx]);
-        }
-        free(arg_vec);
+static void free_spawn_allocations(char **argv, jsize argc, char **envp, jsize envc,
+                                   char *cwd, char *output_path) {
+    if (argv) {
+        for (jsize i = 0; i < argc; i++) free(argv[i]);
+        free(argv);
     }
-    if (env_vec != NULL) {
-        for (jsize idx = 0; idx < env_len; idx++) {
-            free(env_vec[idx]);
-        }
-        free(env_vec);
+    if (envp) {
+        for (jsize i = 0; i < envc; i++) free(envp[i]);
+        free(envp);
     }
-    free(work_dir);
-    free(log_file);
+    free(cwd);
+    free(output_path);
 }
 
-static char **copy_java_string_array(JNIEnv *env, jobjectArray j_array, jsize count) {
-    char **native_vec = calloc((size_t)count + 1, sizeof(char *));
-    if (native_vec == NULL) {
-        return NULL;
-    }
-    for (jsize idx = 0; idx < count; idx++) {
-        jstring elem = (jstring)(*env)->GetObjectArrayElement(env, j_array, idx);
-        const char *raw_utf = elem ? (*env)->GetStringUTFChars(env, elem, NULL) : NULL;
-        native_vec[idx] = strdup(raw_utf ? raw_utf : "");
-        if (raw_utf != NULL) {
-            (*env)->ReleaseStringUTFChars(env, elem, raw_utf);
-        }
-        if (elem != NULL) {
-            (*env)->DeleteLocalRef(env, elem);
-        }
-        if (native_vec[idx] == NULL) {
-            for (jsize k = 0; k < idx; k++) {
-                free(native_vec[k]);
-            }
-            free(native_vec);
-            return NULL;
-        }
-    }
-    return native_vec;
-}
+/**
+ * Mengirim sinyal ke grup proses (-pid) yang telah ter-elevasi ke UID 0 (root) via `su`.
+ * Dipanggil ketika kill(-pid, signal) dari UID aplikasi (u0_aXXX) ditolak kernel dengan EPERM.
+ */
+static int kill_root_process_group_via_su(int pid, int sig) {
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd),
+             "kill -%d -%d 2>/dev/null || kill -%d %d 2>/dev/null",
+             sig, pid, sig, pid);
 
-static char *dup_jstring_or_default(JNIEnv *env, jstring j_str, const char *fallback) {
-    const char *raw = (*env)->GetStringUTFChars(env, j_str, NULL);
-    char *copied = strdup(raw ? raw : fallback);
-    if (raw != NULL) {
-        (*env)->ReleaseStringUTFChars(env, j_str, raw);
+    pid_t helper = fork();
+    if (helper < 0) return -1;
+    if (helper == 0) {
+        prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
+        int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+        if (null_fd >= 0) {
+            dup2(null_fd, STDIN_FILENO);
+            dup2(null_fd, STDOUT_FILENO);
+            dup2(null_fd, STDERR_FILENO);
+            if (null_fd > STDERR_FILENO) close(null_fd);
+        }
+        close_extra_fds();
+        execlp("su", "su", "-c", cmd, (char *)NULL);
+        _exit(127);
     }
-    return copied;
+    int status = 0;
+    while (waitpid(helper, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
 JNIEXPORT jintArray JNICALL
-Java_com_nextcraft_forge_runtime_NativeSpawn_spawn(
-    JNIEnv *env,
-    jobject thiz,
-    jobjectArray java_argv,
-    jobjectArray java_env,
-    jstring java_cwd,
-    jstring java_output,
-    jboolean use_pty,
-    jint pty_rows,
-    jint pty_columns
-) {
-    (void)thiz;
-    if (java_argv == NULL || java_env == NULL || java_cwd == NULL || java_output == NULL) {
+Java_com_nextcraft_forge_runtime_NativeSpawn_spawn(JNIEnv *env, jobject self, jobjectArray java_argv,
+                                                   jobjectArray java_env, jstring java_cwd,
+                                                   jstring java_output, jboolean use_pty,
+                                                   jint pty_rows, jint pty_columns) {
+    (void)self;
+    if (!java_argv || !java_env || !java_cwd || !java_output) return NULL;
+    jsize argc = (*env)->GetArrayLength(env, java_argv);
+    jsize envc = (*env)->GetArrayLength(env, java_env);
+    if (argc <= 0) return NULL;
+    char **argv = calloc((size_t)argc + 1, sizeof(char *));
+    char **envp = calloc((size_t)envc + 1, sizeof(char *));
+    if (!argv || !envp) {
+        free(argv);
+        free(envp);
         return NULL;
     }
-    jsize arg_count = (*env)->GetArrayLength(env, java_argv);
-    jsize env_count = (*env)->GetArrayLength(env, java_env);
-    if (arg_count <= 0) {
-        return NULL;
-    }
-
-    char **arg_vec = copy_java_string_array(env, java_argv, arg_count);
-    char **env_vec = copy_java_string_array(env, java_env, env_count);
-    char *work_dir = dup_jstring_or_default(env, java_cwd, "/");
-    char *log_file = dup_jstring_or_default(env, java_output, "/dev/null");
-
-    if (arg_vec == NULL || env_vec == NULL || work_dir == NULL || log_file == NULL) {
-        release_native_buffers(arg_vec, arg_count, env_vec, env_count, work_dir, log_file);
-        return NULL;
-    }
-
-    int stdin_pipe[2] = {-1, -1};
-    int pty_master = -1;
-    char pty_slave_path[128];
-    pty_slave_path[0] = '\0';
-
-    if (use_pty) {
-        pty_master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
-        int pty_ok = (pty_master >= 0)
-            && (grantpt(pty_master) == 0)
-            && (unlockpt(pty_master) == 0)
-            && (ptsname_r(pty_master, pty_slave_path, sizeof(pty_slave_path)) == 0);
-        if (!pty_ok) {
-            if (pty_master >= 0) {
-                close(pty_master);
-            }
-            release_native_buffers(arg_vec, arg_count, env_vec, env_count, work_dir, log_file);
+    for (jsize i = 0; i < argc; i++) {
+        jstring value = (jstring)(*env)->GetObjectArrayElement(env, java_argv, i);
+        const char *utf = value ? (*env)->GetStringUTFChars(env, value, NULL) : NULL;
+        argv[i] = strdup(utf ? utf : "");
+        if (utf) (*env)->ReleaseStringUTFChars(env, value, utf);
+        if (value) (*env)->DeleteLocalRef(env, value);
+        if (!argv[i]) {
+            free_spawn_allocations(argv, argc, envp, envc, NULL, NULL);
             return NULL;
         }
-    } else if (pipe2(stdin_pipe, O_CLOEXEC) != 0) {
-        release_native_buffers(arg_vec, arg_count, env_vec, env_count, work_dir, log_file);
+    }
+    for (jsize i = 0; i < envc; i++) {
+        jstring value = (jstring)(*env)->GetObjectArrayElement(env, java_env, i);
+        const char *utf = value ? (*env)->GetStringUTFChars(env, value, NULL) : NULL;
+        envp[i] = strdup(utf ? utf : "");
+        if (utf) (*env)->ReleaseStringUTFChars(env, value, utf);
+        if (value) (*env)->DeleteLocalRef(env, value);
+        if (!envp[i]) {
+            free_spawn_allocations(argv, argc, envp, envc, NULL, NULL);
+            return NULL;
+        }
+    }
+    const char *cwd_utf = (*env)->GetStringUTFChars(env, java_cwd, NULL);
+    char *cwd = strdup(cwd_utf ? cwd_utf : "/");
+    if (cwd_utf) (*env)->ReleaseStringUTFChars(env, java_cwd, cwd_utf);
+
+    const char *output_utf = (*env)->GetStringUTFChars(env, java_output, NULL);
+    char *output_path = strdup(output_utf ? output_utf : "/dev/null");
+    if (output_utf) (*env)->ReleaseStringUTFChars(env, java_output, output_utf);
+
+    if (!cwd || !output_path) {
+        free_spawn_allocations(argv, argc, envp, envc, cwd, output_path);
         return NULL;
     }
 
-    pid_t host_jvm_pid = getpid();
-    pid_t child_pid = fork();
+    int in_pipe[2] = {-1, -1};
+    int master_fd = -1;
+    char slave_name[128];
+    slave_name[0] = '\0';
+    if (use_pty) {
+        master_fd = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+        if (master_fd < 0 || grantpt(master_fd) != 0 || unlockpt(master_fd) != 0 ||
+            ptsname_r(master_fd, slave_name, sizeof(slave_name)) != 0) {
+            if (master_fd >= 0) close(master_fd);
+            free_spawn_allocations(argv, argc, envp, envc, cwd, output_path);
+            return NULL;
+        }
+    } else if (pipe2(in_pipe, O_CLOEXEC) != 0) {
+        free_spawn_allocations(argv, argc, envp, envc, cwd, output_path);
+        return NULL;
+    }
 
-    if (child_pid == 0) {
+    pid_t parent_pid_before_fork = getpid();
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Ensure child receives SIGTERM if parent JVM process dies unexpectedly
         prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
-        if (getppid() != host_jvm_pid) {
+        if (getppid() != parent_pid_before_fork) {
             _exit(126);
         }
         if (use_pty) {
-            if (setsid() < 0) {
-                _exit(126);
-            }
-            int pty_slave = open(pty_slave_path, O_RDWR | O_CLOEXEC);
-            if (pty_slave < 0 || ioctl(pty_slave, TIOCSCTTY, 0) != 0) {
-                _exit(126);
-            }
-            struct winsize win_dims = {
+            if (setsid() < 0) _exit(126);
+            int slave_fd = open(slave_name, O_RDWR | O_CLOEXEC);
+            if (slave_fd < 0 || ioctl(slave_fd, TIOCSCTTY, 0) != 0) _exit(126);
+            struct winsize size = {
                 .ws_row = (unsigned short)(pty_rows > 0 ? pty_rows : 40),
                 .ws_col = (unsigned short)(pty_columns > 0 ? pty_columns : 120),
             };
-            ioctl(pty_slave, TIOCSWINSZ, &win_dims);
-            struct termios term_attrs;
-            if (tcgetattr(pty_slave, &term_attrs) == 0) {
-                term_attrs.c_lflag &= (tcflag_t)~(ECHO | ECHONL);
-                tcsetattr(pty_slave, TCSANOW, &term_attrs);
+            ioctl(slave_fd, TIOCSWINSZ, &size);
+            struct termios terminal;
+            if (tcgetattr(slave_fd, &terminal) == 0) {
+                terminal.c_lflag &= (tcflag_t)~(ECHO | ECHONL);
+                tcsetattr(slave_fd, TCSANOW, &terminal);
             }
-            dup2(pty_slave, STDIN_FILENO);
-            dup2(pty_slave, STDOUT_FILENO);
-            dup2(pty_slave, STDERR_FILENO);
-            if (pty_slave > STDERR_FILENO) {
-                close(pty_slave);
-            }
-            close(pty_master);
+            dup2(slave_fd, STDIN_FILENO);
+            dup2(slave_fd, STDOUT_FILENO);
+            dup2(slave_fd, STDERR_FILENO);
+            if (slave_fd > STDERR_FILENO) close(slave_fd);
+            close(master_fd);
         } else {
+            // Setiap peluncuran Chroot mendapat process group sendiri (PGID == pid)
+            // agar pembatalan menghentikan seluruh pohon proses di bawahnya.
             setpgid(0, 0);
-            close(stdin_pipe[1]);
-            int out_fd = open(log_file, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0600);
-            if (out_fd < 0) {
-                _exit(126);
-            }
-            dup2(stdin_pipe[0], STDIN_FILENO);
-            dup2(out_fd, STDOUT_FILENO);
-            dup2(out_fd, STDERR_FILENO);
-            close(stdin_pipe[0]);
-            close(out_fd);
+            close(in_pipe[1]);
+            int output_fd = open(output_path, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0600);
+            if (output_fd < 0) _exit(126);
+            dup2(in_pipe[0], STDIN_FILENO);
+            dup2(output_fd, STDOUT_FILENO);
+            dup2(output_fd, STDERR_FILENO);
+            close(in_pipe[0]);
+            close(output_fd);
         }
-        scrub_inherited_descriptors();
-        if (chdir(work_dir) != 0 && chdir("/") != 0) {
+        close_extra_fds();
+        if (chdir(cwd) != 0 && chdir("/") != 0) {
             _exit(126);
         }
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
-        execvpe(arg_vec[0], arg_vec, env_vec);
+        // execvpe, not execve: callers pass bare names such as "su", which execve never resolves via PATH
+        // (it would always fail with ENOENT). The lookup uses this process's PATH; the child gets envp.
+        execvpe(argv[0], argv, envp);
         dprintf(STDERR_FILENO, "NextCraft native exec failed: %s\n", strerror(errno));
         _exit(127);
     }
 
-    if (child_pid > 0 && !use_pty) {
-        setpgid(child_pid, child_pid);
+    if (pid > 0 && !use_pty && setpgid(pid, pid) != 0 && errno != EACCES) {
+        // EACCES means the child already exec'd (the race with its own setpgid is benign); anything else is logged.
+        perror("NextCraft setpgid");
     }
-    release_native_buffers(arg_vec, arg_count, env_vec, env_count, work_dir, log_file);
+    free_spawn_allocations(argv, argc, envp, envc, cwd, output_path);
 
-    if (child_pid < 0) {
-        if (use_pty) {
-            close(pty_master);
-        } else {
-            close_fd_pair(stdin_pipe);
-        }
+    if (pid < 0) {
+        if (use_pty) close(master_fd); else close_pair(in_pipe);
         return NULL;
     }
-    if (!use_pty) {
-        close(stdin_pipe[0]);
-    }
-    int writer_fd = use_pty ? fcntl(pty_master, F_DUPFD_CLOEXEC, 0) : stdin_pipe[1];
-    if (writer_fd < 0) {
-        if (use_pty) {
-            close(pty_master);
-        }
-        terminate_and_collect_child(child_pid);
+    if (!use_pty) close(in_pipe[0]);
+    int input_fd = use_pty ? fcntl(master_fd, F_DUPFD_CLOEXEC, 0) : in_pipe[1];
+    if (input_fd < 0) {
+        if (use_pty) close(master_fd);
+        kill_and_reap_child(pid);
         return NULL;
     }
-
-    jint spawn_tuple[3] = {child_pid, writer_fd, use_pty ? pty_master : -1};
-    jintArray tuple_array = (*env)->NewIntArray(env, 3);
-    if (tuple_array == NULL) {
-        close(writer_fd);
-        if (use_pty) {
-            close(pty_master);
-        }
-        terminate_and_collect_child(child_pid);
+    jint values[3] = {pid, input_fd, use_pty ? master_fd : -1};
+    jintArray result = (*env)->NewIntArray(env, 3);
+    if (!result) {
+        close(input_fd);
+        if (use_pty) close(master_fd);
+        kill_and_reap_child(pid);
         return NULL;
     }
-    (*env)->SetIntArrayRegion(env, tuple_array, 0, 3, spawn_tuple);
-    return tuple_array;
+    (*env)->SetIntArrayRegion(env, result, 0, 3, values);
+    return result;
 }
 
 JNIEXPORT jint JNICALL
-Java_com_nextcraft_forge_runtime_NativeSpawn_waitFor(
-    JNIEnv *env,
-    jobject thiz,
-    jint target_pid,
-    jboolean non_blocking
-) {
+Java_com_nextcraft_forge_runtime_NativeSpawn_waitFor(JNIEnv *env, jobject self, jint pid, jboolean no_hang) {
     (void)env;
-    (void)thiz;
-    int raw_status = 0;
-    pid_t waited_pid;
-    int wait_flags = non_blocking ? WNOHANG : 0;
+    (void)self;
+    int status = 0;
+    pid_t value;
     do {
-        waited_pid = waitpid((pid_t)target_pid, &raw_status, wait_flags);
-    } while (waited_pid < 0 && errno == EINTR && !non_blocking);
+        value = waitpid((pid_t)pid, &status, no_hang ? WNOHANG : 0);
+    } while (value < 0 && errno == EINTR && !no_hang);
 
-    if (waited_pid == 0) {
-        return -2;
-    }
-    if (waited_pid < 0) {
-        return -128 - errno;
-    }
-    if (WIFEXITED(raw_status)) {
-        return WEXITSTATUS(raw_status);
-    }
-    if (WIFSIGNALED(raw_status)) {
-        return 128 + WTERMSIG(raw_status);
-    }
+    if (value == 0) return -2;
+    if (value < 0) return -128 - errno;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return -1;
 }
 
 JNIEXPORT jint JNICALL
-Java_com_nextcraft_forge_runtime_NativeSpawn_kill(
-    JNIEnv *env,
-    jobject thiz,
-    jint target_pid,
-    jint sig_num
-) {
+Java_com_nextcraft_forge_runtime_NativeSpawn_kill(JNIEnv *env, jobject self, jint pid, jint signal) {
     (void)env;
-    (void)thiz;
-    if (target_pid <= 0) {
-        return -1;
+    (void)self;
+    if (pid <= 0) return -1;
+    // Target seluruh process group (-pid) terlebih dahulu.
+    int result = kill((pid_t)(-pid), signal);
+    if (result != 0 && errno == ESRCH) {
+        result = kill((pid_t)pid, signal);
     }
-    int rc = kill((pid_t)(-target_pid), sig_num);
-    if (rc != 0 && errno == ESRCH) {
-        rc = kill((pid_t)target_pid, sig_num);
+    // Jika proses berjalan sebagai UID 0 (root) di dalam Chroot, kill() dari UID app (u0_aXXX)
+    // akan gagal dengan errno == EPERM. Eskalasi otomatis sinyal tersebut via su -c!
+    if (result != 0 && errno == EPERM) {
+        result = kill_root_process_group_via_su((int)pid, (int)signal);
     }
-    return rc == 0 ? 0 : -errno;
+    return result;
 }
 
 JNIEXPORT jint JNICALL
-Java_com_nextcraft_forge_runtime_NativeSpawn_resizePty(
-    JNIEnv *env,
-    jobject thiz,
-    jint pty_master,
-    jint rows,
-    jint columns
-) {
+Java_com_nextcraft_forge_runtime_NativeSpawn_resizePty(JNIEnv *env, jobject self,
+                                                       jint master_fd, jint rows, jint columns) {
     (void)env;
-    (void)thiz;
-    if (pty_master < 0) {
-        return -EBADF;
-    }
-    struct winsize win_dims = {
+    (void)self;
+    if (master_fd < 0) return -EBADF;
+    struct winsize size = {
         .ws_row = (unsigned short)(rows > 0 ? rows : 40),
         .ws_col = (unsigned short)(columns > 0 ? columns : 120),
     };
-    return ioctl(pty_master, TIOCSWINSZ, &win_dims) == 0 ? 0 : -errno;
+    return ioctl(master_fd, TIOCSWINSZ, &size) == 0 ? 0 : -errno;
 }

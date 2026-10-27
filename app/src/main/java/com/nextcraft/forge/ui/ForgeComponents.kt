@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
@@ -357,7 +358,7 @@ fun ForgePillIcon(
     }
 }
 
-/** Text tabs; the selected one sits in a soft animated pill with tactile press scale. */
+/** Text tabs; the selected one sits in a soft pill. */
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun ForgePillTabs(
@@ -372,7 +373,6 @@ fun ForgePillTabs(
 ) {
     val scheme = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
-    val reduceMotion = rememberReduceMotion()
     // Equal segments only while they can hold their labels; more than three options scroll instead of being cut to "R…".
     val equalWidth = equalWidth && items.size <= 3
     Row(
@@ -385,27 +385,13 @@ fun ForgePillTabs(
     ) {
         items.forEachIndexed { index, label ->
             val selected = index == selectedIndex
-            val interaction = remember { MutableInteractionSource() }
-            val pillBg = androidx.compose.animation.animateColorAsState(
-                targetValue = if (selected) scheme.onSurface.copy(alpha = 0.09f) else Color.Transparent,
-                animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
-                label = "pillTabBg",
-            ).value
-            val textColor = androidx.compose.animation.animateColorAsState(
-                targetValue = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
-                animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
-                label = "pillTabText",
-            ).value
             Box(
                 modifier = Modifier
                     .then(if (equalWidth) Modifier.weight(1f) else Modifier.widthIn(max = 168.dp))
-                    .forgePressScale(interaction, pressedScale = 0.95f, haptic = true)
                     .heightIn(min = 40.dp)
                     .clip(RoundedCornerShape(100))
-                    .background(pillBg)
+                    .background(if (selected) scheme.onSurface.copy(alpha = 0.09f) else Color.Transparent)
                     .combinedClickable(
-                        interactionSource = interaction,
-                        indication = androidx.compose.material3.ripple(),
                         role = Role.Tab,
                         onClickLabel = label,
                         onLongClickLabel = longPressLabel,
@@ -420,8 +406,7 @@ fun ForgePillTabs(
                     text = label,
                     // Equal segments are narrower (a third of the row at 360dp): one size down keeps "Antigravity" whole.
                     fontSize = if (equalWidth) ForgeType.control else ForgeType.body,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = textColor,
+                    color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.MiddleEllipsis,
                 )
@@ -521,8 +506,9 @@ fun LiveResourceMiniBar(
     val stats = remember { mutableStateOf("") }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
+            // /proc reads, ActivityManager IPC and the sticky battery broadcast all block; keep them off the main thread.
             stats.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context, forceRefresh = true)
+                val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context)
                 val mem = android.app.ActivityManager.MemoryInfo()
                 context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mem)
                 val freeGb = String.format(java.util.Locale.US, "%.1f", mem.availMem / (1024.0 * 1024.0 * 1024.0))
@@ -530,7 +516,7 @@ fun LiveResourceMiniBar(
                 val swapStr = if (hw.swap.hasActiveSwap) {
                     val swapUsedGb = String.format(java.util.Locale.US, "%.1f", hw.swap.swapUsedMb / 1024.0)
                     val swapTotalGb = String.format(java.util.Locale.US, "%.1f GB", hw.swap.swapTotalMb / 1024.0)
-                    " · Swap $swapUsedGb/$swapTotalGb"
+                    " · ${context.getString(R.string.resource_swap_label)} $swapUsedGb/$swapTotalGb"
                 } else {
                     ""
                 }
@@ -538,7 +524,7 @@ fun LiveResourceMiniBar(
                 val level = bat?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
                 val scale = bat?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
                 val batStr = if (level >= 0 && scale > 0) " · ${level * 100 / scale}%" else ""
-                "${hw.socVendor.shortBadge} · RAM $freeGb/$totalGb$swapStr$batStr"
+                "${hw.socVendor.shortBadge} · ${context.getString(R.string.resource_ram_label)} $freeGb/$totalGb$swapStr$batStr"
             }
             kotlinx.coroutines.delay(5_000)
         }
@@ -567,9 +553,12 @@ fun LiveResourceMiniBar(
             fontWeight = FontWeight.SemiBold,
             color = tokens.accentText,
             modifier = Modifier
+                // 48dp hit area around a visually small pill.
+                .heightIn(min = ForgeSpace.minTouch)
+                .clickable(role = Role.Button, onClick = onCleanIdleDaemons)
+                .wrapContentHeight()
                 .clip(RoundedCornerShape(50))
                 .background(scheme.primary.copy(alpha = 0.12f))
-                .clickable(role = Role.Button, onClick = onCleanIdleDaemons)
                 .padding(horizontal = 10.dp, vertical = 3.dp),
         )
     }
