@@ -1183,7 +1183,7 @@ internal fun RuntimeInstaller.writeAndroidGradleConfiguration(runtimeRootfs: Fil
         socTier = hwProfile.socTier,
         performanceCores = hwProfile.topology.performanceCores,
     ).map { (key, value) -> "$key=$value" }
-    val updatedLines = existingLines.filterNot(this::isManagedAndroidGradleProperty) + managedLines
+    val updatedLines = mergeManagedGradleLines(existingLines, managedLines)
     if (existingLines == updatedLines) return
 
     val temporary = File(gradleDir, "gradle.properties.nextcraft.tmp")
@@ -1197,9 +1197,16 @@ internal fun RuntimeInstaller.writeAndroidGradleConfiguration(runtimeRootfs: Fil
 }
 
 internal fun RuntimeInstaller.isManagedAndroidGradleProperty(line: String): Boolean =
+    isManagedGradleLine(line)
+
+internal fun isManagedGradleLine(line: String): Boolean =
     RuntimeInstaller.MANAGED_ANDROID_GRADLE_PROPERTIES.any { key ->
         Regex("^\\s*${Regex.escape(key)}\\s*[:=].*$").matches(line)
     }
+
+/** Drops previously managed lines and appends the fresh ones, so repeated writes never accumulate duplicates. */
+internal fun mergeManagedGradleLines(existingLines: List<String>, managedLines: List<String>): List<String> =
+    existingLines.filterNot(::isManagedGradleLine) + managedLines
 
 fun RuntimeInstaller.migrateLegacyToolMarkers() {
     if (!File(rootfs, "usr/bin/bash").isFile) return
