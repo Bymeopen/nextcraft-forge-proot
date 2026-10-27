@@ -3711,6 +3711,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val target = resolveWorkspaceFile(project, relativePath)
                     if (!target.isFile) {
                         "" to true
+                    } else if (isImageFilePath(relativePath) || isVideoFilePath(relativePath)) {
+                        "" to false
                     } else {
                         val head = ByteArray(8192)
                         val headCount = target.inputStream().use { it.read(head) }

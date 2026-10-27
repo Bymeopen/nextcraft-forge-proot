@@ -289,6 +289,28 @@ private fun ReadOnlyFileInspector(
             Text(text = stringResource(R.string.fb_copy_path))
         }
     }
+    if (isImageFilePath(targetFile.name)) {
+        val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(initialValue = null, key1 = targetFile.path) {
+            value = withContext(Dispatchers.IO) {
+                FileBrowser.readBytes(targetFile, ChatImageDecoder.MAX_BYTES)?.let(ChatImageDecoder::decode)
+            }
+        }
+        var zoomed by remember(targetFile.path) { mutableStateOf(false) }
+        val loaded = bitmap
+        if (loaded != null) {
+            androidx.compose.foundation.Image(
+                bitmap = loaded,
+                contentDescription = targetFile.name,
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 640.dp)
+                    .clickable(role = Role.Button) { zoomed = true },
+            )
+            if (zoomed) ZoomableImageDialog(loaded, targetFile.name) { zoomed = false }
+            return
+        }
+    }
     val readOutcome by produceState<BrowserRead?>(initialValue = null, key1 = targetFile.path) {
         value = null
         value = withContext(Dispatchers.IO) { FileBrowser.read(targetFile) }

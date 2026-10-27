@@ -134,14 +134,32 @@ fun CodeViewerScreen(
                 }
             }
             if (state.selectedFilePath == currentFile) {
-                val renderedLines = remember(state.selectedFileContent) {
-                    fileAsViewerLines(state.selectedFileContent)
+                when {
+                    isImageFilePath(currentFile) -> {
+                        ChatImage(
+                            alt = currentFile.substringAfterLast('/'),
+                            src = currentFile,
+                            maxHeight = 640.dp,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    isVideoFilePath(currentFile) -> {
+                        ChatVideo(
+                            src = currentFile,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    else -> {
+                        val renderedLines = remember(state.selectedFileContent) {
+                            fileAsViewerLines(state.selectedFileContent)
+                        }
+                        DiffCodeView(
+                            lines = renderedLines,
+                            path = currentFile,
+                            previewLines = 400,
+                        )
+                    }
                 }
-                DiffCodeView(
-                    lines = renderedLines,
-                    path = currentFile,
-                    previewLines = 400,
-                )
             }
             return@ToolScaffold
         }
@@ -204,19 +222,36 @@ fun CodeViewerScreen(
                             color = themeTokens.dangerText,
                         )
                     }
-                    if (diffItem.binary || diffItem.diffLines.isEmpty()) {
-                        val fallbackRes = if (diffItem.binary) R.string.chat_diff_binary else R.string.chat_diff_none
-                        Text(
-                            text = stringResource(fallbackRes),
-                            color = palette.onSurfaceVariant,
-                            fontSize = ForgeType.secondary,
-                        )
-                    } else {
-                        DiffCodeView(
-                            lines = diffItem.diffLines,
-                            path = diffItem.path,
-                            previewLines = 60,
-                        )
+                    when {
+                        isImageFilePath(diffItem.path) -> {
+                            ChatImage(
+                                alt = diffItem.path.substringAfterLast('/'),
+                                src = diffItem.path,
+                                maxHeight = 320.dp,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        isVideoFilePath(diffItem.path) -> {
+                            ChatVideo(
+                                src = diffItem.path,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        diffItem.binary || diffItem.diffLines.isEmpty() -> {
+                            val fallbackRes = if (diffItem.binary) R.string.chat_diff_binary else R.string.chat_diff_none
+                            Text(
+                                text = stringResource(fallbackRes),
+                                color = palette.onSurfaceVariant,
+                                fontSize = ForgeType.secondary,
+                            )
+                        }
+                        else -> {
+                            DiffCodeView(
+                                lines = diffItem.diffLines,
+                                path = diffItem.path,
+                                previewLines = 60,
+                            )
+                        }
                     }
                 }
             }

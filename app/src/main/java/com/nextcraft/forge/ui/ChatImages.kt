@@ -54,7 +54,13 @@ internal val LocalChatImageLoader = staticCompositionLocalOf<suspend (String) ->
 internal data class MarkdownImageRef(val alt: String, val src: String)
 
 private val IMAGE_LINE = Regex("""^!\[([^\]]*)]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)$""")
-private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
+private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "heic", "heif", "avif")
+
+/** True when [path] has a supported raster image file extension. */
+internal fun isImageFilePath(path: String): Boolean {
+    val ext = path.substringBefore('?').substringBefore('#').substringAfterLast('.', "").lowercase()
+    return ext in IMAGE_EXTENSIONS
+}
 
 /** The image a single markdown line stands for, or null when the line is ordinary text. */
 internal fun imageRefOfLine(line: String): MarkdownImageRef? {
@@ -62,18 +68,23 @@ internal fun imageRefOfLine(line: String): MarkdownImageRef? {
     IMAGE_LINE.matchEntire(trimmed)?.let { return MarkdownImageRef(it.groupValues[1], it.groupValues[2]) }
     val bare = trimmed.removeSurrounding("`")
     if (bare.isEmpty() || bare.any { it.isWhitespace() || it == '(' || it == ')' || it == '[' || it == ']' }) return null
-    val extension = bare.substringBefore('?').substringBefore('#').substringAfterLast('.', "").lowercase()
-    return if (extension in IMAGE_EXTENSIONS) MarkdownImageRef("", bare) else null
+    return if (isImageFilePath(bare)) MarkdownImageRef("", bare) else null
 }
 
 private val VIDEO_EXTENSIONS = setOf("mp4", "webm", "mkv", "mov")
+
+/** True when [path] has a supported video file extension. */
+internal fun isVideoFilePath(path: String): Boolean {
+    val ext = path.substringBefore('?').substringBefore('#').substringAfterLast('.', "").lowercase()
+    return ext in VIDEO_EXTENSIONS
+}
 
 /** The workspace path of a video when the line is only that path (optionally in backticks), else null. */
 internal fun videoPathOfLine(line: String): String? {
     val bare = line.trim().removeSurrounding("`")
     if (bare.isEmpty() || bare.any { it.isWhitespace() || it == '(' || it == ')' || it == '[' || it == ']' }) return null
     if (bare.startsWith("http", ignoreCase = true)) return null
-    return bare.takeIf { it.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS }
+    return bare.takeIf { isVideoFilePath(it) }
 }
 
 /** Shows a still frame of a chat video and opens it in the system player. */
@@ -249,7 +260,7 @@ internal fun ChatImage(alt: String, src: String, modifier: Modifier = Modifier, 
 
 /** Full-screen view: pinch to zoom, drag to move, tap anywhere outside the gesture to close. */
 @Composable
-private fun ZoomableImageDialog(bitmap: ImageBitmap, description: String, onClose: () -> Unit) {
+internal fun ZoomableImageDialog(bitmap: ImageBitmap, description: String, onClose: () -> Unit) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }

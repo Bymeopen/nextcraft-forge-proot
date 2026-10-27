@@ -343,20 +343,41 @@ private fun ChangedFileRow(
             exit = ForgeMotion.shrinkExit(reduceMotion),
         ) {
             Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-                if (change.binary || change.diffLines.isEmpty()) {
-                    Text(
-                        stringResource(if (change.binary) R.string.chat_diff_binary else R.string.chat_diff_none),
-                        fontSize = ForgeType.secondary,
-                        color = scheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
-                    )
-                } else {
-                    DiffCodeView(
-                        lines = change.diffLines,
-                        path = change.path,
-                        previewLines = DIFF_PREVIEW_LINES,
-                        onRevertHunk = if (enabled && onRevertHunk != null) ({ idx -> onRevertHunk(change.path, idx) }) else null,
-                    )
+                when {
+                    isImageFilePath(change.path) -> {
+                        ChatImage(
+                            alt = change.path.substringAfterLast('/'),
+                            src = change.path,
+                            maxHeight = 320.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 8.dp),
+                        )
+                    }
+                    isVideoFilePath(change.path) -> {
+                        ChatVideo(
+                            src = change.path,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 8.dp),
+                        )
+                    }
+                    change.binary || change.diffLines.isEmpty() -> {
+                        Text(
+                            stringResource(if (change.binary) R.string.chat_diff_binary else R.string.chat_diff_none),
+                            fontSize = ForgeType.secondary,
+                            color = scheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                        )
+                    }
+                    else -> {
+                        DiffCodeView(
+                            lines = change.diffLines,
+                            path = change.path,
+                            previewLines = DIFF_PREVIEW_LINES,
+                            onRevertHunk = if (enabled && onRevertHunk != null) ({ idx -> onRevertHunk(change.path, idx) }) else null,
+                        )
+                    }
                 }
                 // Two fixed rows instead of one wrapping row, so no button is ever orphaned: ways to look at the file on top,
                 // the decision (revert / keep) below with the primary action on the right.

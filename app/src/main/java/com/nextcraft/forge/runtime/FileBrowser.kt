@@ -40,6 +40,23 @@ internal object FileBrowser {
         return BrowserListing.Entries(sorted(parseLsLong(output)), viaRoot = true)
     }
 
+    fun readBytes(file: File, maxBytes: Int = 10 * 1024 * 1024): ByteArray? {
+        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return null
+        if (!RootPathGuard.isInsideAppData(canonical.path)) return null
+        if (canonical.isDirectory) return null
+        val direct = canonical.takeIf { it.isFile && it.canRead() }
+        if (direct != null) {
+            if (direct.length() > maxBytes) return null
+            return runCatching { direct.readBytes() }.getOrNull()
+        }
+        val resolved = runRoot("readlink -f -- ${shellSingleQuote(canonical.path)}")?.toString(Charsets.UTF_8)?.trim()
+            ?: return null
+        if (resolved.isEmpty() || !RootPathGuard.isInsideAppData(resolved)) return null
+        val total = runRoot("wc -c < ${shellSingleQuote(canonical.path)}")?.toString(Charsets.UTF_8)?.trim()?.toLongOrNull()
+        if (total != null && total > maxBytes) return null
+        return runRoot("head -c $maxBytes -- ${shellSingleQuote(canonical.path)}")
+    }
+
     fun read(file: File, maxBytes: Int = 256 * 1024): BrowserRead {
         val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return BrowserRead.Denied(BrowserDenial.MISSING)
         if (!RootPathGuard.isInsideAppData(canonical.path)) return BrowserRead.Denied(BrowserDenial.OUTSIDE_APP_DATA)

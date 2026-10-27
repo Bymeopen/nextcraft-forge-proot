@@ -875,25 +875,46 @@ private fun WorkspaceFileEditor(
                 .padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(tokens.terminalBackground),
+            contentAlignment = Alignment.Center,
         ) {
-            TextField(
-                value = content,
-                onValueChange = { if (editable) onContentChange(it) },
-                readOnly = !editable,
-                keyboardOptions = ForgeFieldKind.IDENTIFIER.keyboardOptions(ImeAction.Default),
-                textStyle = ForgeCodeTextStyle.copy(color = tokens.terminalText),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    errorContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                    cursorColor = scheme.primary,
-                ),
-                modifier = Modifier.fillMaxSize(),
-            )
+            when {
+                isImageFilePath(selectedPath) -> {
+                    ChatImage(
+                        alt = selectedPath.substringAfterLast('/'),
+                        src = selectedPath,
+                        maxHeight = 960.dp,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(12.dp),
+                    )
+                }
+                isVideoFilePath(selectedPath) -> {
+                    ChatVideo(
+                        src = selectedPath,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+                else -> {
+                    TextField(
+                        value = content,
+                        onValueChange = { if (editable) onContentChange(it) },
+                        readOnly = !editable,
+                        keyboardOptions = ForgeFieldKind.IDENTIFIER.keyboardOptions(ImeAction.Default),
+                        textStyle = ForgeCodeTextStyle.copy(color = tokens.terminalText),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            errorContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                            cursorColor = scheme.primary,
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
         }
     }
 }
@@ -1015,12 +1036,30 @@ private fun WorkspaceDiffReviewList(
                             }
                         }
 
-                        DiffCodeView(
-                            lines = item.diffLines,
-                            path = item.path,
-                            previewLines = 200,
-                            onRevertHunk = if (!sessionRunning) ({ idx -> onRevertHunk(item.path, idx) }) else null,
-                        )
+                        when {
+                            isImageFilePath(item.path) -> {
+                                ChatImage(
+                                    alt = item.path.substringAfterLast('/'),
+                                    src = item.path,
+                                    maxHeight = 320.dp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            isVideoFilePath(item.path) -> {
+                                ChatVideo(
+                                    src = item.path,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            else -> {
+                                DiffCodeView(
+                                    lines = item.diffLines,
+                                    path = item.path,
+                                    previewLines = 200,
+                                    onRevertHunk = if (!sessionRunning) ({ idx -> onRevertHunk(item.path, idx) }) else null,
+                                )
+                            }
+                        }
                     }
                 }
             }
