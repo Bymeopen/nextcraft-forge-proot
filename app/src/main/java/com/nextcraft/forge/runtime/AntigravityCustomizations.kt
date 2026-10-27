@@ -1141,13 +1141,13 @@ Never run plain `gradle build` or start a persistent Gradle daemon. Always check
 
 - **First Build (No existing debug APK)**:
   ```bash
-  timeout 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace
+  timeout --foreground -k 10s 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace < /dev/null
   ```
 - **Subsequent Builds (Cached Fast Path)**:
   ```bash
-  timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace
+  timeout --foreground -k 10s 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace < /dev/null
   ```
-- **Fallback**: Only if `--offline` fails with a clear missing-cached-dependency error, retry once online with `timeout 15m` (removing `--offline`).
+- **Fallback**: Only if `--offline` fails with a clear missing-cached-dependency error, retry once online with `timeout --foreground -k 10s 15m` (removing `--offline`).
 
 ## 3. Managed Task Progress Polling
 When `run_command` moves a Gradle build into a background managed task:

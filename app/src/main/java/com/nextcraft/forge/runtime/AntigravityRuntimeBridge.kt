@@ -82,16 +82,33 @@ internal object AntigravityEventParser {
                 if (stepKind.equals("agent_response", ignoreCase = true) && stepState == "DONE") {
                     return AntigravityParsedEvent.ResponseDone
                 }
-                if (stepKind.contains("tool", ignoreCase = true) || stepKind.contains("command", ignoreCase = true)) {
-                    val toolId = payload.stringOrEmpty("tool_name").ifBlank {
-                        payload.optJSONObject("tool_info")?.stringOrEmpty("name").orEmpty()
-                    }.ifBlank { stepKind.ifBlank { "Tool" } }
+                val toolId = payload.stringOrEmpty("tool_name").ifBlank {
+                    payload.optJSONObject("tool_info")?.stringOrEmpty("name").orEmpty()
+                }.ifBlank {
+                    if (stepKind.contains("tool", ignoreCase = true) || stepKind.contains("command", ignoreCase = true)) {
+                        stepKind.ifBlank { "Tool" }
+                    } else {
+                        ""
+                    }
+                }
+                if (toolId.isNotBlank()) {
                     if (toolId.equals("schedule", ignoreCase = true)) {
-                        val argNode = payload.optJSONObject("tool_info")?.optJSONObject("parameters")
-                        val wakePrompt = argNode?.stringOrEmpty("Prompt")?.trim()?.removeSurrounding("\"")?.trim().orEmpty()
-                        val waitSec = argNode?.opt("DurationSeconds")?.toString()?.trim()?.toLongOrNull() ?: 0L
-                        if (wakePrompt.isNotBlank() && waitSec >= 60L) {
-                            val clampedMins = ((waitSec + 59L) / 60L).coerceIn(5L, 7L * 24L * 60L).toInt()
+                        val infoObj = payload.optJSONObject("tool_info")
+                        val argNode = infoObj?.optJSONObject("parameters")
+                            ?: infoObj?.optJSONObject("arguments")
+                            ?: payload.optJSONObject("parameters")
+                        val wakePrompt = (
+                            argNode?.stringOrEmpty("Prompt")?.ifBlank { argNode.stringOrEmpty("prompt") }.orEmpty()
+                        ).trim().removeSurrounding("\"").trim()
+                        val waitSec = (
+                            argNode?.opt("DurationSeconds") ?: argNode?.opt("duration_seconds")
+                        )?.toString()?.trim()?.toLongOrNull() ?: 0L
+                        if (wakePrompt.isNotBlank()) {
+                            val clampedMins = if (waitSec > 0L) {
+                                ((waitSec + 59L) / 60L).coerceIn(5L, 7L * 24L * 60L).toInt()
+                            } else {
+                                15
+                            }
                             return AntigravityParsedEvent.ScheduledWakeup(clampedMins, wakePrompt)
                         }
                     }
@@ -282,7 +299,10 @@ class AntigravityRuntimeBridge(
             runCatching {
                 val cmd = "for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do " +
                     "ppid=\$(awk '/^PPid:/{print \$2}' /proc/\$p/status 2>/dev/null); " +
-                    "[ \"\$ppid\" = \"1\" ] && kill -9 \$p 2>/dev/null; done; true"
+                    "[ \"\$ppid\" = \"1\" ] && kill -9 \$p 2>/dev/null; done; " +
+                    "for p in \$(pgrep -f 'org[.]gradle[.]launcher[.]GradleMain' 2>/dev/null); do " +
+                    "state=\$(awk '/^State:/{print \$2}' /proc/\$p/status 2>/dev/null); " +
+                    "[ \"\$state\" = \"T\" ] && kill -9 \$p 2>/dev/null; done; true"
                 val shellArgs = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", cmd) else listOf("/system/bin/sh", "-c", cmd)
                 val reaper = ProcessBuilder(shellArgs)
                     .redirectErrorStream(true)
@@ -592,12 +612,15 @@ class AntigravityRuntimeBridge(
                         if (pendingScheduleWakeup != null) sawTerminalResult = true
                     }
                     is AntigravityParsedEvent.ScheduledWakeup -> {
+                        val isFirstEmit = pendingScheduleWakeup == null
                         pendingScheduleWakeup = ev
                         scheduleTriggeredAtMs = System.currentTimeMillis()
-                        val infoText = "Scheduled in ${ev.intervalMinutes}m: ${ev.prompt}"
-                        sharedEvents.emit(RuntimeEvent.ToolStarted(sessionId, "Schedule", infoText))
-                        sharedEvents.emit(RuntimeEvent.ToolCompleted(sessionId, "Schedule", infoText))
-                        sharedEvents.emit(RuntimeEvent.AssistantDelta(sessionId, "\n\n[[schedule: ${ev.intervalMinutes}m | ${ev.prompt}]]"))
+                        if (isFirstEmit) {
+                            val infoText = "Scheduled in ${ev.intervalMinutes}m: ${ev.prompt}"
+                            sharedEvents.emit(RuntimeEvent.ToolStarted(sessionId, "Schedule", infoText))
+                            sharedEvents.emit(RuntimeEvent.ToolCompleted(sessionId, "Schedule", infoText))
+                            sharedEvents.emit(RuntimeEvent.AssistantDelta(sessionId, "\n\n[[schedule: ${ev.intervalMinutes}m | ${ev.prompt}]]"))
+                        }
                     }
                     is AntigravityParsedEvent.ToolStarted -> {
                         finalResponseMarkedDone = false
@@ -980,12 +1003,12 @@ internal fun antigravityWorkspacePrompt(projectSlug: String, prompt: String): St
         appendLine()
         appendLine("For Android projects, never use plain `gradle build` or start a Gradle daemon. Build only the debug APK. First check whether `app/build/outputs/apk/debug/` already contains an APK.")
         appendLine("- For a first build with no existing debug APK, allow dependency resolution and use:")
-        appendLine("  `timeout 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace`")
+        appendLine("  `timeout --foreground -k 10s 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace < /dev/null`")
         appendLine("- For a later build with an existing debug APK, prefer the cached fast path:")
-        appendLine("  `timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`")
-        appendLine("NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.")
+        appendLine("  `timeout --foreground -k 10s 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace < /dev/null`")
+        appendLine("NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout --foreground -k 10s 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.")
         appendLine("Start the optimized Android build with `run_command` normally inside the Root Chroot workspace. If Antigravity moves the command into a managed task, immediately use `manage_task` to check its status and obtain its log path. Poll that managed task and tail its log with short commands about every 10 seconds so the user receives progress, then read the final output and exit status. Never wait silently on a long foreground command.")
-        appendLine("When scheduling a delayed or periodic follow-up (such as a 15-minute GitHub CI/PR check), prefer ending your reply with `[[schedule: 15m | <prompt>]]` (or `[[unschedule]]` once complete) instead of keeping an in-process timer running, so the current agent turn stops cleanly and NextCraft Forge's app-level scheduler wakes up the chat after the delay.")
+        appendLine("When scheduling a delayed or periodic follow-up (such as a 15-minute GitHub CI/PR check), NEVER call the built-in `schedule` tool; instead, end your reply directly with `[[schedule: 15m | <prompt>]]` (or `[[unschedule]]` once complete) so the foreground turn finishes immediately and NextCraft Forge's background scheduler wakes up the chat after the delay.")
         appendLine("Operate with the precision, speed, and surgical execution style of Claude Code: target under 10 seconds per turn, combine related operations into a single tool step whenever possible, and deliver concise, high-signal responses.")
         ANTI_HALLUCINATION_RULES.forEach { appendLine(it) }
         appendLine("</nextcraft_workspace>")
