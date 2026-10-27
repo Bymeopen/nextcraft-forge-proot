@@ -112,6 +112,14 @@ class ForgeTerminalViewClient(
     /** Called whenever the size changes (pinch or buttons) so it can be remembered. */
     var onTextSizeChanged: (Int) -> Unit = {}
 
+    /** Applies a stored size (loaded after construction) to the field and, if already created, the view. */
+    fun applyTextSize(px: Int) {
+        val next = px.coerceIn(minTextPx, maxTextPx)
+        if (next == textSizePx) return
+        textSizePx = next
+        view?.setTextSize(next)
+    }
+
     /** Grows (+1) or shrinks (-1) the text by one step, within the allowed range. */
     fun changeTextSize(direction: Int) {
         val next = (textSizePx + direction * stepPx).coerceIn(minTextPx, maxTextPx)

@@ -600,7 +600,6 @@ class RuntimeInstaller(private val context: Context) {
             )
             runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
         }
-        syncMcpConfigs()
     }
 
     /** Removes stored Git and GitHub CLI credentials from the guest rootfs. */
@@ -612,18 +611,6 @@ class RuntimeInstaller(private val context: Context) {
             RootfsRepair.reclaimOwnership(file, AndroidProcess.myUid())
             if (!file.delete() && file.exists()) Log.w("RuntimeInstaller", "Could not remove ${file.name}")
         }
-        syncMcpConfigs()
-    }
-
-    /** Synchronizes enabled MCP connectors into Antigravity (`mcp_config.json`), DeepSeek Harness (`cordis.patch.yml`), and Claude Code (`~/.claude.json`). */
-    fun syncMcpConfigs() {
-        runCatching {
-            val managedMcp = ConnectorStore(context).mcpServersJson()
-            AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
-            val dshPatch = File(rootfs, "root/.dsh/cordis.patch.yml")
-            writeRootfsFileAtomically(dshPatch, ForgeMcpServer.toDshCordisPatchYaml(managedMcp), mode = 0b110000000)
-            ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
-        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
     }
 
     /**
@@ -632,10 +619,6 @@ class RuntimeInstaller(private val context: Context) {
      */
     fun hasClaudeLoginCredential(): Boolean {
         val file = File(rootfs, "root/.claude/.credentials.json")
-        if (file.isFile && file.canRead()) {
-            return runCatching { "\"refreshToken\"" in file.readText() }.getOrDefault(false)
-        }
-        if (!RuntimeEngines.isRootEngine()) return false
         val quoted = shellSingleQuote(file.absolutePath)
         return runCatching {
             val process = ProcessBuilder("su", "-c", "grep -q '\"refreshToken\"' $quoted").start()
@@ -2172,9 +2155,9 @@ class RuntimeInstaller(private val context: Context) {
             runCatching { Os.chmod(absolutePath, 0b111000000) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0700
         }
         // A launch that never reached `rm -f` (su denied, process killed) leaves API keys on
-        // disk. Purge anything old enough that it cannot belong to a launch in progress.
+        // disk. Purge anything old enough that it cannot belong to a launch in progress (su prompt + exec < 2 min).
         runtimeEnvDir.listFiles { f -> f.name.startsWith(".env-") }
-            ?.filter { System.currentTimeMillis() - it.lastModified() > 10 * 60 * 1_000L }
+            ?.filter { System.currentTimeMillis() - it.lastModified() > 2 * 60 * 1_000L }
             ?.forEach { it.delete() }
         // Pid files of launches whose owner never cleaned up (terminal sessions, crashes): a day is far past any run.
         File(runtimeDir, "pids").listFiles()
@@ -2390,6 +2373,17 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
     }
 
+    /** Synchronizes enabled MCP connectors into Antigravity (`mcp_config.json`), DeepSeek Harness (`cordis.patch.yml`), and Claude Code (`~/.claude.json`). */
+    fun syncMcpConfigs() {
+        runCatching {
+            val managedMcp = ConnectorStore(context).mcpServersJson()
+            AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+            val dshPatch = File(rootfs, "root/.dsh/cordis.patch.yml")
+            writeRootfsFileAtomically(dshPatch, ForgeMcpServer.toDshCordisPatchYaml(managedMcp), mode = 0b110000000)
+            ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+    }
+
     private fun ensureWorkspaceTrust(
         workspacePath: String,
         environment: Map<String, String> = emptyMap(),
@@ -2460,7 +2454,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         // Every launch used to rewrite (and fsync) the file even when nothing changed; that is slow flash I/O and
         // can overwrite what a running Claude session wrote in the meantime.
         if (!changed && stateFile.exists()) return@synchronized
-        writeRootfsFileAtomically(stateFile, state.toString(), mode = 0b110000000)
+        writeRootfsFileAtomically(stateFile, state.toString())
     }
 
     /** Parses ~/.claude.json, retrying briefly in case Claude is in the middle of rewriting it. */
@@ -2570,7 +2564,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         if (java.nio.file.Files.isSymbolicLink(resolvFile.toPath())) {
             resolvFile.delete()
         }
-        val resolver = servers.joinToString("\n") { "nameserver $it" } + "\noptions use-vc timeout:2 attempts:2 rotate\n"
+        val resolver = servers.joinToString("\n") { "nameserver $it" } + "\noptions timeout:2 attempts:2 rotate\n"
         try {
             // A link that survived the delete above (not ours to unlink) would send the write into /run, which is root's.
             if (java.nio.file.Files.isSymbolicLink(resolvFile.toPath())) throw java.io.IOException("resolv.conf is still a symlink")
@@ -2620,8 +2614,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             runCatching { rawStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
             val process = runCatching {
                 ProcessBuilder("zstd", "-d", "-c", archive.absolutePath).start()
-            }.getOrElse { zstdErr ->
-                if (!RuntimeEngines.isRootEngine()) throw zstdErr
+            }.getOrElse {
                 val escapedPath = archive.absolutePath.replace("'", "'\"'\"'")
                 val pathExport = "export PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin:${'$'}PATH; "
                 ProcessBuilder("su", "-c", "${pathExport}zstd -d -c '$escapedPath'").start()
@@ -2852,64 +2845,6 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         }
     }
 
-    private fun resolveSafeSymlinkTarget(
-        rootPath: java.nio.file.Path,
-        parentDir: java.nio.file.Path,
-        linkName: String,
-        errorMessage: String = "Archive symlink escapes runtime",
-    ): java.nio.file.Path {
-        require(linkName.isNotBlank() && !linkName.contains('\u0000')) { errorMessage }
-        val normalizedLink = linkName.replace('\\', '/')
-        val resolved = if (normalizedLink.startsWith('/')) {
-            val relFromRoot = normalizedLink.trimStart('/')
-            if (relFromRoot.isEmpty()) rootPath else rootPath.resolve(relFromRoot).normalize()
-        } else {
-            parentDir.resolve(normalizedLink).normalize()
-        }
-        require(resolved.startsWith(rootPath)) { errorMessage }
-        return resolved
-    }
-
-    private fun safeChild(root: File, relative: String): File {
-        val normalized = relative.replace('\\', '/').trimEnd('/')
-        val segments = normalized.split('/')
-        require(
-            normalized.isNotBlank() &&
-                !normalized.contains('\u0000') &&
-                !normalized.startsWith('/') &&
-                segments.isNotEmpty() &&
-                segments.none { it.isEmpty() || it == "." || it == ".." },
-        ) {
-            "Unsafe archive path"
-        }
-        val rootCanonical = root.canonicalFile
-        val rootPath = rootCanonical.toPath()
-        var currentDir = rootPath
-        for (index in 0 until segments.lastIndex) {
-            val segment = segments[index]
-            var candidate = currentDir.resolve(segment).normalize()
-            require(candidate.startsWith(rootPath) && candidate != rootPath) { "Archive path escapes runtime" }
-            var hops = 0
-            while (java.nio.file.Files.isSymbolicLink(candidate)) {
-                check(++hops <= 16) { "Archive symlink loop detected" }
-                val linkTarget = java.nio.file.Files.readSymbolicLink(candidate).toString()
-                val parent = candidate.parent ?: rootPath
-                candidate = resolveSafeSymlinkTarget(
-                    rootPath = rootPath,
-                    parentDir = parent,
-                    linkName = linkTarget,
-                    errorMessage = "Archive path escapes runtime via symlink",
-                )
-            }
-            currentDir = candidate
-        }
-        val finalPath = currentDir.resolve(segments.last()).normalize()
-        require(finalPath.startsWith(rootPath) && finalPath != rootPath) {
-            "Archive path escapes runtime"
-        }
-        return finalPath.toFile()
-    }
-
     private suspend fun downloadVerified(
         url: String,
         destination: File,
@@ -2999,6 +2934,65 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
     private fun File.readTextOrNull(): String? = runCatching { readText().trim() }.getOrNull()
 
     companion object {
+        // Pure path helpers (no instance state) so that unit tests can exercise them.
+        internal fun resolveSafeSymlinkTarget(
+            rootPath: java.nio.file.Path,
+            parentDir: java.nio.file.Path,
+            linkName: String,
+            errorMessage: String = "Archive symlink escapes runtime",
+        ): java.nio.file.Path {
+            require(linkName.isNotBlank() && !linkName.contains('\u0000')) { errorMessage }
+            val normalizedLink = linkName.replace('\\', '/')
+            val resolved = if (normalizedLink.startsWith('/')) {
+                val relFromRoot = normalizedLink.trimStart('/')
+                if (relFromRoot.isEmpty()) rootPath else rootPath.resolve(relFromRoot).normalize()
+            } else {
+                parentDir.resolve(normalizedLink).normalize()
+            }
+            require(resolved.startsWith(rootPath)) { errorMessage }
+            return resolved
+        }
+
+        internal fun safeChild(root: File, relative: String): File {
+            val normalized = relative.replace('\\', '/').trimEnd('/')
+            val segments = normalized.split('/')
+            require(
+                normalized.isNotBlank() &&
+                    !normalized.contains('\u0000') &&
+                    !normalized.startsWith('/') &&
+                    segments.isNotEmpty() &&
+                    segments.none { it.isEmpty() || it == "." || it == ".." },
+            ) {
+                "Unsafe archive path"
+            }
+            val rootCanonical = root.canonicalFile
+            val rootPath = rootCanonical.toPath()
+            var currentDir = rootPath
+            for (index in 0 until segments.lastIndex) {
+                val segment = segments[index]
+                var candidate = currentDir.resolve(segment).normalize()
+                require(candidate.startsWith(rootPath) && candidate != rootPath) { "Archive path escapes runtime" }
+                var hops = 0
+                while (java.nio.file.Files.isSymbolicLink(candidate)) {
+                    check(++hops <= 16) { "Archive symlink loop detected" }
+                    val linkTarget = java.nio.file.Files.readSymbolicLink(candidate).toString()
+                    val parent = candidate.parent ?: rootPath
+                    candidate = resolveSafeSymlinkTarget(
+                        rootPath = rootPath,
+                        parentDir = parent,
+                        linkName = linkTarget,
+                        errorMessage = "Archive path escapes runtime via symlink",
+                    )
+                }
+                currentDir = candidate
+            }
+            val finalPath = currentDir.resolve(segments.last()).normalize()
+            require(finalPath.startsWith(rootPath) && finalPath != rootPath) {
+                "Archive path escapes runtime"
+            }
+            return finalPath.toFile()
+        }
+
         /**
          * Gradle speed settings, sized like [gradleJvmArgs]. Measured on a 10.9 GB phone, an up-to-date JetNews build
          * still took 4 min with a fresh JVM per build and 2 workers: almost all of it start-up and configuration.
@@ -3315,6 +3309,14 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                     ;;
             esac
 
+            # The rootfs is bind-mounted, remounted suid/exec and populated with mounts; never do that to "/" or a relative path.
+            case "${'$'}{ROOTFS%/}" in
+                ''|[!/]*|*/..|*/../*)
+                    echo "Invalid rootfs path (must be absolute and not /): ${'$'}ROOTFS" >&2
+                    exit 2
+                    ;;
+            esac
+
             # Opt-in (create the file ${'$'}ROOTFS/.nextcraft-private-mounts): run this session in its own mount namespace, so its
             # bind mounts disappear with its last process instead of piling up in the shared namespace. Skipped when unshare is
             # missing or already applied.
@@ -3533,9 +3535,13 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 mount -o remount,bind,ro "${'$'}ROOTFS/${'$'}resp_dir" 2>/dev/null || true
             done
 
+            # Resolvers for a guest without /etc/resolv.conf; override with NEXTCRAFT_DNS="ip ip ..." (space-separated).
             if [ ! -s "${'$'}ROOTFS/etc/resolv.conf" ]; then
                 mkdir -p "${'$'}ROOTFS/etc"
-                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions use-vc timeout:2 attempts:2 rotate\n" > "${'$'}ROOTFS/etc/resolv.conf"
+                : > "${'$'}ROOTFS/etc/resolv.conf"
+                for ns in ${'$'}{NEXTCRAFT_DNS:-8.8.8.8 1.1.1.1}; do
+                    printf "nameserver %s\n" "${'$'}ns" >> "${'$'}ROOTFS/etc/resolv.conf"
+                done
             fi
 
             fix_workspace_ownership() {
@@ -3768,9 +3774,13 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
                 "${'$'}ROOTFS/nextcraft-bridge-responses" "${'$'}ROOTFS/pocketdev-bridge-responses" \
                 "${'$'}ROOTFS/tmp" "${'$'}ROOTFS/dev" "${'$'}ROOTFS/proc" "${'$'}ROOTFS/sys"
 
+            # Resolvers for a guest without /etc/resolv.conf; override with NEXTCRAFT_DNS="ip ip ..." (space-separated).
             if [ ! -s "${'$'}ROOTFS/etc/resolv.conf" ]; then
                 mkdir -p "${'$'}ROOTFS/etc"
-                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions use-vc timeout:2 attempts:2 rotate\n" > "${'$'}ROOTFS/etc/resolv.conf"
+                : > "${'$'}ROOTFS/etc/resolv.conf"
+                for ns in ${'$'}{NEXTCRAFT_DNS:-8.8.8.8 1.1.1.1}; do
+                    printf "nameserver %s\n" "${'$'}ns" >> "${'$'}ROOTFS/etc/resolv.conf"
+                done
             fi
 
             unset ANDROID_ROOT ANDROID_DATA ANDROID_ART_ROOT ANDROID_I18N_ROOT ANDROID_TZDATA_ROOT
@@ -3785,6 +3795,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             export LANG="${'$'}{LANG:-C.UTF-8}"
             export TMPDIR="/tmp"
             export GLIBC_TUNABLES="glibc.pthread.rseq=0"
+            # Same bridge variables as chroot-exec.sh; the pocket* names are kept for scripts from older builds.
             export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
             export POCKETDEV_BRIDGE_DIR="/nextcraft-bridge"
             export NEXTCRAFT_RESPONSE_DIR="/nextcraft-bridge-responses"
@@ -3808,8 +3819,16 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             for bionic_dir in /system /apex /vendor /product; do
                 [ -d "${'$'}bionic_dir" ] && BIONIC_BINDS="${'$'}BIONIC_BINDS -b ${'$'}bionic_dir"
             done
+            # ${'$'}WORKSPACE_BIND is expanded unquoted below (an optional "-b src:dst" pair), so a host path with whitespace or a
+            # colon would be split into separate arguments; refuse it instead of binding the wrong directory.
             WORKSPACE_BIND=""
             if [ "${'$'}HOST_WORKSPACE" != "${'$'}ROOTFS${'$'}GUEST_WORKSPACE" ]; then
+                case "${'$'}HOST_WORKSPACE" in
+                    *[[:space:]:]*)
+                        echo "Host workspace path must not contain whitespace or ':': ${'$'}HOST_WORKSPACE" >&2
+                        exit 65
+                        ;;
+                esac
                 WORKSPACE_BIND="-b ${'$'}HOST_WORKSPACE:${'$'}GUEST_WORKSPACE"
             fi
 
@@ -3835,6 +3854,15 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
             fi
             ROOTFS_REAL=${'$'}(realpath "${'$'}ROOTFS" 2>/dev/null || printf '%s' "${'$'}ROOTFS")
             ROOTFS_CLEAN="${'$'}{ROOTFS_REAL%/}"
+            # Refuse "/", relative paths and top-level directories: with such a value the loop below would lazily unmount
+            # every mount of the device.
+            case "${'$'}ROOTFS_CLEAN" in
+                /*/*) ;;
+                *)
+                    echo "Refusing to unmount under '${'$'}ROOTFS': rootfs must be an absolute path with at least two components" >&2
+                    exit 2
+                    ;;
+            esac
             mounts_at_or_under() {
                 while read -r _ mp _; do
                     case "${'$'}mp" in "${'$'}1"|"${'$'}1"/*) printf '%s\n' "${'$'}mp" ;; esac

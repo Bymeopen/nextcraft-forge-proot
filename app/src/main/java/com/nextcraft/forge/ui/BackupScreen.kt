@@ -14,7 +14,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** What the auto-backup section shows; read from [com.nextcraft.forge.data.AutoBackupSettings]. */
 data class AutoBackupUiState(
@@ -206,7 +206,7 @@ class BackupController(private val app: Application, private val scope: Coroutin
 @Composable
 fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val backup by viewModel.backup.state.collectAsState()
+    val backup by viewModel.backup.state.collectAsStateWithLifecycle()
     var projects by rememberSaveable { mutableStateOf(true) }
     var chats by rememberSaveable { mutableStateOf(true) }
     var settings by rememberSaveable { mutableStateOf(true) }
@@ -240,7 +240,7 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
         }
     }
 
-    val auto by viewModel.backup.autoState.collectAsState()
+    val auto by viewModel.backup.autoState.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.backup.refreshAuto() }
     var autoPassword by remember { mutableStateOf("") }
     var autoKeys by remember(auto.includeApiKeys) { mutableStateOf(auto.includeApiKeys) }

@@ -84,7 +84,6 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -129,6 +128,9 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
+private val WHITESPACE_RUN = Regex("\\s+")
 
 @Composable
 fun AgentScreen(
@@ -139,7 +141,7 @@ fun AgentScreen(
     // Coming back to a chat (leaving the app, another tab) recreates the list; open it at the newest message,
     // not at the first one.
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = state.messages.lastIndex.coerceAtLeast(0))
-    val agyAuthState by viewModel.antigravityAuth.state.collectAsState()
+    val agyAuthState by viewModel.antigravityAuth.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val tokens = LocalForgeThemeTokens.current
     // hasOfficialCredential() may spawn `su` and block for seconds; never call it during composition.
@@ -313,8 +315,8 @@ fun AgentScreen(
                 }
             }
         } else {
-            val pendingChanges = state.changedItems.filter { it.accepted == null }
-            val lastAssistantId = state.messages.lastOrNull { !it.fromUser }?.id
+            val pendingChanges = remember(state.changedItems) { state.changedItems.filter { it.accepted == null } }
+            val lastAssistantId = remember(state.messages) { state.messages.lastOrNull { !it.fromUser }?.id }
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 LazyColumn(
                     state = listState,
@@ -841,7 +843,7 @@ internal fun ChatMessageCard(
                 else -> R.string.agent_status_working
             }
             // While a tool runs, say which one ("Working… · Bash"), so a long step doesn't look like a hang.
-            val running = message.workItems.lastOrNull { !it.isComplete }?.title?.replace(Regex("\\s+"), " ")?.trim()?.take(32)
+            val running = message.workItems.lastOrNull { !it.isComplete }?.title?.replace(WHITESPACE_RUN, " ")?.trim()?.take(32)
             val phaseLabel = stringResource(phase)
             WorkingIndicator(
                 startedAt = message.createdAt,

@@ -21,8 +21,11 @@ internal class NativeSpawnProcess private constructor(
     private val waitLock = Any()
     @Volatile private var result: Int? = null
 
+    /** One stream per process: callers that read in several steps must see one read position, not a new file each time. */
+    private val stdout: InputStream by lazy { FileInputStream(outputFile) }
+
     override fun getOutputStream(): OutputStream = stdin
-    override fun getInputStream(): InputStream = FileInputStream(outputFile)
+    override fun getInputStream(): InputStream = stdout
     override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
 
     /**
@@ -46,8 +49,10 @@ internal class NativeSpawnProcess private constructor(
             delegateProcess.waitFor().also { result = it }
         } else {
             var polled = pollExit()
+            var interval = EXIT_POLL_INTERVAL_MS
             while (polled == null) {
-                Thread.sleep(EXIT_POLL_INTERVAL_MS)
+                Thread.sleep(interval)
+                interval = minOf(interval * 2, EXIT_POLL_MAX_INTERVAL_MS)
                 polled = pollExit()
             }
             polled
@@ -151,7 +156,8 @@ internal class NativeSpawnProcess private constructor(
         delegateProcess?.isAlive ?: runCatching { exitValue(); false }.getOrDefault(true)
 
     companion object {
-        private const val EXIT_POLL_INTERVAL_MS = 20L
+        private const val EXIT_POLL_INTERVAL_MS = 50L
+        private const val EXIT_POLL_MAX_INTERVAL_MS = 200L
 
         private fun extractProcessPid(process: Process): Int = runCatching {
             val field = process.javaClass.getDeclaredField("pid")

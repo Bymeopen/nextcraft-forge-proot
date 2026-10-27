@@ -370,3 +370,45 @@ def test_cramfs_is_found_and_extracted(tmp_path):
     result = firmware.extract(str(path), str(tmp_path / "o"), hits)[0]
     assert result["status"] == "ok", result
     assert open(os.path.join(result["output"], "hello.txt")).read() == "dari cramfs\n"
+
+
+def test_tool_extraction_purges_entries_escaping_the_folder(tmp_path):
+    # Simulates what an external extractor (cpio/unsquashfs/jefferson) may leave behind: symlinks pointing outside.
+    folder = tmp_path / "out"
+    (folder / "etc").mkdir(parents=True)
+    (folder / "etc" / "motd").write_text("ok\n")
+    os.symlink("/etc/passwd", folder / "etc" / "passwd")
+    os.symlink("../../..", folder / "up")
+    os.symlink("motd", folder / "etc" / "motd-link")
+    removed = firmware._purge_escapes(str(folder))
+    assert sorted(removed) == ["etc/passwd", "up"]
+    assert (folder / "etc" / "motd").read_text() == "ok\n" and (folder / "etc" / "motd-link").exists()
+    assert not os.path.lexists(folder / "up") and not os.path.lexists(folder / "etc" / "passwd")
+
+
+@pytest.mark.skipif(not shutil.which("cpio"), reason="cpio tidak ada")
+def test_cpio_symlink_escape_is_removed_after_extraction(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    os.symlink("/etc/passwd", src / "shadow-link")
+    (src / "ok.txt").write_text("x")
+    data = subprocess.run("find . -mindepth 1 | cpio -o -H newc --quiet", shell=True, cwd=src, capture_output=True).stdout
+    assert data.startswith(b"070701")
+    carved = tmp_path / "initrd.cpio"
+    carved.write_bytes(data)
+    result = firmware._extract_tree("cpio", str(carved), str(tmp_path / "dest"))
+    assert result["status"] == "ok" and result["removed"] == ["shadow-link"]
+    assert (tmp_path / "dest" / "ok.txt").exists() and not os.path.lexists(tmp_path / "dest" / "shadow-link")
+
+
+def test_zip_entry_larger_than_header_is_refused(tmp_path):
+    evil = tmp_path / "lie.zip"
+    with zipfile.ZipFile(evil, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("big.bin", b"\x00" * (2 * 1024 * 1024))
+    original = firmware.MAX_DECOMPRESS
+    firmware.MAX_DECOMPRESS = 1024 * 1024
+    try:
+        result = firmware._extract_zip(str(evil), str(tmp_path / "dest"))
+    finally:
+        firmware.MAX_DECOMPRESS = original
+    assert result["status"] == "failed" and "batas" in result["detail"]

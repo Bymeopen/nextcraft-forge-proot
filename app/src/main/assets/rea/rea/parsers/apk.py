@@ -11,6 +11,8 @@ from ..result import E_BAD_FORMAT, ReaError
 from .axml import find_all, parse_axml
 from .dex import MAX_DEX_BYTES, parse_dex
 
+MAX_CERT_BYTES = 1024 * 1024  # sertifikat v1 (PKCS#7) normalnya beberapa KB
+
 DANGEROUS = {
     "READ_SMS", "SEND_SMS", "RECEIVE_SMS", "READ_CONTACTS", "WRITE_CONTACTS", "READ_CALL_LOG", "WRITE_CALL_LOG", "CALL_PHONE",
     "RECORD_AUDIO", "CAMERA", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION",
@@ -66,6 +68,22 @@ def _signature_blocks(path: str) -> list[str]:
             break
         position += 8 + length
     return found
+
+
+def read_entry(archive: zipfile.ZipFile, name: str, cap: int) -> bytes:
+    """Membaca satu entri zip lewat aliran dengan batas nyata: header ``file_size`` bisa bohong (zip bomb / APK rusak)."""
+    chunks: list[bytes] = []
+    total = 0
+    with archive.open(name) as handle:
+        while True:
+            block = handle.read(min(1 << 20, cap + 1 - total))
+            if not block:
+                break
+            total += len(block)
+            if total > cap:
+                raise ReaError(E_BAD_FORMAT, f"Entri {name} lebih besar dari batas {cap} byte.", "Ukuran nyata melebihi header zip.")
+            chunks.append(block)
+    return b"".join(chunks)
 
 
 def read_manifest(archive: zipfile.ZipFile) -> dict[str, Any]:
@@ -162,7 +180,7 @@ def summarize_apk(path: str) -> dict[str, Any]:
             if info.file_size > MAX_DEX_BYTES:
                 dex_summary.append({"name": name, "size": info.file_size, "skipped": True})
                 continue
-            parsed = parse_dex(archive.read(name), limit=0)
+            parsed = parse_dex(read_entry(archive, name, MAX_DEX_BYTES), limit=0)
             dex_summary.append(
                 {"name": name, "size": info.file_size, "classes": parsed["class_count"], "methods": parsed["methods"], "fields": parsed["fields"], "checksum_ok": parsed["checksum_ok"]}
             )
@@ -171,7 +189,7 @@ def summarize_apk(path: str) -> dict[str, Any]:
             if name.startswith("lib/") and name.endswith(".so") and name.count("/") >= 2:
                 libs.setdefault(name.split("/")[1], []).append(name.rsplit("/", 1)[-1])
         v1_files = [n for n in names if n.startswith("META-INF/") and n.upper().endswith((".RSA", ".DSA", ".EC"))]
-        cert_hash = hashlib.sha256(archive.read(v1_files[0])).hexdigest() if v1_files else None
+        cert_hash = hashlib.sha256(read_entry(archive, v1_files[0], MAX_CERT_BYTES)).hexdigest() if v1_files else None
         signature = {
             "v1": bool([n for n in names if n.startswith("META-INF/") and n.upper().endswith(".SF")]),
             "blocks": _signature_blocks(path),
@@ -197,7 +215,7 @@ def list_dex_classes(path: str, name_filter: str = "", limit: int = 2000) -> dic
             for name in sorted(n for n in archive.namelist() if n.startswith("classes") and n.endswith(".dex")):
                 if archive.getinfo(name).file_size > MAX_DEX_BYTES:
                     continue
-                part = parse_dex(archive.read(name), name_filter=name_filter, limit=max(0, limit - (len(result["classes"]) if result else 0)))
+                part = parse_dex(read_entry(archive, name, MAX_DEX_BYTES), name_filter=name_filter, limit=max(0, limit - (len(result["classes"]) if result else 0)))
                 for item in part["classes"]:
                     item["dex"] = name
                 if result is None:

@@ -229,8 +229,9 @@ internal fun ChatDrawerContent(
             },
             modifier = Modifier.fillMaxWidth(),
         )
+        val sortedChats = remember(state.chats) { state.chats.sortedByDescending { it.updatedAtMillis } }
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(state.chats.sortedByDescending { it.updatedAtMillis }, key = { it.id }) { chat ->
+            items(sortedChats, key = { it.id }) { chat ->
                 ChatDrawerRow(
                     chat = chat,
                     current = chat.id == state.activeChatId,

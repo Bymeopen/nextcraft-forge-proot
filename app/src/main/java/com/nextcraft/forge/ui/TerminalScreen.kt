@@ -46,6 +46,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -108,12 +110,13 @@ fun TerminalScreen(
     val modifiers = remember { TerminalModifierKeys() }
     val holder = remember { TerminalViewHolder() }
     val prefs = remember { context.getSharedPreferences("forge_terminal", android.content.Context.MODE_PRIVATE) }
-    var hintSeen by remember { mutableStateOf(prefs.getBoolean(HINT_SEEN_KEY, false)) }
+    // Starts hidden; the stored flag is read off the main thread below (SharedPreferences blocks on first access).
+    var hintSeen by remember { mutableStateOf(true) }
     val dismissHint = { if (!hintSeen) { hintSeen = true; prefs.edit().putBoolean(HINT_SEEN_KEY, true).apply() } }
     val viewClient = remember {
         ForgeTerminalViewClient(
             modifiers = modifiers,
-            initialTextPx = prefs.getInt(TEXT_SIZE_KEY, with(density) { 14.sp.roundToPx() }),
+            initialTextPx = with(density) { 14.sp.roundToPx() },
             minTextPx = with(density) { 8.sp.roundToPx() },
             maxTextPx = with(density) { 28.sp.roundToPx() },
             stepPx = with(density) { 1.sp.roundToPx() }.coerceAtLeast(1),
@@ -125,6 +128,12 @@ fun TerminalScreen(
             },
             onEmulatorReady = { viewModel.flushTerminalInput(chatId) },
         ).also { client -> client.onTextSizeChanged = { px -> prefs.edit().putInt(TEXT_SIZE_KEY, px).apply() } }
+    }
+    LaunchedEffect(prefs) {
+        val defaultPx = viewClient.textSizePx
+        val (seen, px) = withContext(Dispatchers.IO) { prefs.getBoolean(HINT_SEEN_KEY, false) to prefs.getInt(TEXT_SIZE_KEY, defaultPx) }
+        hintSeen = seen
+        viewClient.applyTextSize(px)
     }
     val terminalBackground = tokens.terminalBackground.compositeOver(scheme.background)
     val ready = session != null && !finished

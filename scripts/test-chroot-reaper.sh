@@ -11,14 +11,17 @@ grep -q reap_group "${TMPDIR:-/tmp}/reap_group.sh"
 marker="reaper-test-$$"
 SETSID=setsid
 . "${TMPDIR:-/tmp}/reap_group.sh"
-setsid sh -c "exec -a $marker sleep 300 2>/dev/null || sleep 300 & sleep 300 & exec sleep 1" </dev/null &
+# A per-run sleep duration (300.<pid> seconds) makes every sleep of this test unique on the process list, so the
+# pgrep/pkill below never match another sleep 300 running on the machine.
+duration="300.$$"
+setsid sh -c "exec -a $marker sleep $duration 2>/dev/null || sleep $duration & sleep $duration & exec sleep 1" </dev/null &
 child=$!
 wait "$child"
 reap_group
 sleep 0.5
-if pgrep -f "^sleep 300" >/dev/null 2>&1; then
+if pgrep -f "^($marker|sleep) $duration\$" >/dev/null 2>&1; then
     echo "reap_group left processes behind" >&2
-    pkill -f "^sleep 300" || true
+    pkill -f "^($marker|sleep) $duration\$" || true
     exit 1
 fi
 echo "reaper ok"

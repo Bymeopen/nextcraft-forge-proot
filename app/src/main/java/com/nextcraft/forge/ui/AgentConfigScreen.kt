@@ -38,7 +38,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +56,7 @@ import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.ProviderKind
 import com.nextcraft.forge.model.providersForAgent
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * The Agent tab: which coding agent is active and how it reaches its model. Agent pill tabs, an
@@ -68,7 +68,7 @@ fun AgentConfigScreen(
     state: ForgeUiState,
     viewModel: MainViewModel,
 ) {
-    val agyAuth by viewModel.antigravityAuth.state.collectAsState()
+    val agyAuth by viewModel.antigravityAuth.state.collectAsStateWithLifecycle()
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
 

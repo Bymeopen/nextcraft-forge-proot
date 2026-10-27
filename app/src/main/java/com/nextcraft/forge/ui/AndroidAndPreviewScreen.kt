@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -517,7 +518,7 @@ private fun BuildIssuesList(
         contentPadding = PaddingValues(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(issues) { issue ->
+        itemsIndexed(issues, key = { index, issue -> "$index:${issue.filePath}:${issue.line}" }) { _, issue ->
             ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
@@ -710,15 +711,13 @@ fun WebPreviewScreen(
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             // Detach before destroy(): destroying a WebView that is still attached throws on some WebView builds.
-            webViewRef?.let { view ->
-                (view.parent as? android.view.ViewGroup)?.removeView(view)
-                runCatching { view.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
-            }
+            webViewRef?.let { destroyWebViewOnce(it) }
             webViewRef = null
         }
     }
 
-    LaunchedEffect(state.previewUrl) {
+    // Keyed on the view too: the first load happens here once the factory has created it, not in the factory itself.
+    LaunchedEffect(state.previewUrl, webViewRef) {
         val target = state.previewUrl.trim()
         if (target.isNotEmpty() && webViewRef?.url != target) {
             webViewRef?.loadUrl(target)
@@ -916,12 +915,10 @@ fun WebPreviewScreen(
                             detail: android.webkit.RenderProcessGoneDetail,
                         ): Boolean {
                             if (webViewRef === view) webViewRef = null
-                            (view.parent as? android.view.ViewGroup)?.removeView(view)
-                            runCatching { view.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
+                            destroyWebViewOnce(view)
                             return true
                         }
                     }
-                    runCatching { loadUrl(state.previewUrl) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
                     webViewRef = this
                 } ?: android.view.View(context)
             },
@@ -934,8 +931,7 @@ fun WebPreviewScreen(
             // The view leaves composition when the server stops; destroy it there, not only when the screen closes.
             onRelease = { view ->
                 if (webViewRef === view) webViewRef = null
-                (view.parent as? android.view.ViewGroup)?.removeView(view)
-                (view as? WebView)?.let { runCatching { it.stopLoading(); it.destroy() } }
+                (view as? WebView)?.let { destroyWebViewOnce(it) }
             },
         )
         }
@@ -943,6 +939,17 @@ fun WebPreviewScreen(
         }
         }
     }
+}
+
+private const val WEBVIEW_DESTROYED_TAG = "forge-webview-destroyed"
+
+/** Detaches and destroys once; onRenderProcessGone, onRelease and onDispose may all reach the same view. */
+private fun destroyWebViewOnce(view: WebView) {
+    if (view.tag == WEBVIEW_DESTROYED_TAG) return
+    view.tag = WEBVIEW_DESTROYED_TAG
+    (view.parent as? android.view.ViewGroup)?.removeView(view)
+    runCatching { view.stopLoading(); view.destroy() }
+        .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAndPreviewScreen", it) }
 }
 
 @Composable
@@ -1039,7 +1046,7 @@ private fun UiInspectorPanel(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(state.uiInspectorNodes) { node ->
+                itemsIndexed(state.uiInspectorNodes, key = { index, node -> "$index:${node.id}" }) { _, node ->
                     val isSelected = selectedNode == node
                     ForgeThemedCard(
                         modifier = Modifier

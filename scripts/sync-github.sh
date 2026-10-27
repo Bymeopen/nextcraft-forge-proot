@@ -49,8 +49,14 @@ for bf in blok_files_all:
         bp.write_text(new_text, encoding="utf-8")
 PY
 
-# 2. Stage and commit any local modifications
-git add -A
+# 2. Stage and commit any local modifications. Key material and env files are never staged, and a lightweight
+#    secret scan over the staged diff aborts the sync before anything is committed.
+git add -A -- . ':!*.env' ':!.env.*' ':!*.pem' ':!*.jks' ':!*.p12' ':!*.keystore' ':!*.key'
+if git diff --cached -U0 | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Eq 'ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}'; then
+    echo "sync-github: a GitHub/OpenAI/AWS-style secret is present in the staged changes; aborting. Remove it and run again." >&2
+    git reset -q
+    exit 1
+fi
 if ! git diff --cached --quiet; then
     git commit -m "$COMMIT_MSG"
 fi

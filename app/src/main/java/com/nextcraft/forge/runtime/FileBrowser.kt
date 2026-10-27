@@ -51,6 +51,11 @@ internal object FileBrowser {
             size = direct.length()
             bytes = direct.readHeadBytes(maxBytes)
         } else {
+            // The app's own canonicalFile cannot see through root-only directories, so the agent could plant a symlink
+            // there that points outside the app data. Resolve again as root and re-check before reading.
+            val resolved = runRoot("readlink -f -- ${shellSingleQuote(canonical.path)}")?.toString(Charsets.UTF_8)?.trim()
+                ?: return BrowserRead.Denied(BrowserDenial.NO_ACCESS)
+            if (resolved.isEmpty() || !RootPathGuard.isInsideAppData(resolved)) return BrowserRead.Denied(BrowserDenial.OUTSIDE_APP_DATA)
             val head = runRoot("head -c $maxBytes -- ${shellSingleQuote(canonical.path)}") ?: return BrowserRead.Denied(BrowserDenial.NO_ACCESS)
             val total = runRoot("wc -c < ${shellSingleQuote(canonical.path)}")?.toString(Charsets.UTF_8)?.trim()?.toLongOrNull()
             bytes = head

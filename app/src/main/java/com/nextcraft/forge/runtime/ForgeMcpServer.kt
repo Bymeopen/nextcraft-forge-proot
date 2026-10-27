@@ -69,33 +69,22 @@ exec python3 -m "${'$'}(printf '%s' "${'$'}entry" | tr '-' '_')" "${'$'}@"
     val PLAYWRIGHT_WRAPPER_SH: String = """#!/bin/sh
 # ARM64 Android Chroot/PRoot wrapper for @playwright/mcp:
 # Enforces --headless and --no-sandbox (required inside Android chroot/proot namespaces)
-# and binds system Chromium if available on ARM64 (auto-installing chromium if missing).
-find_chromium() {
-    for bin in /usr/bin/chromium /usr/bin/chromium-browser /usr/bin/google-chrome; do
-        if [ -x "${'$'}bin" ]; then
-            printf '%s' "${'$'}bin"
-            return 0
-        fi
-    done
-    return 1
-}
-chrome_bin="${'$'}(find_chromium || true)"
-if [ -z "${'$'}chrome_bin" ] && [ "${'$'}(id -u 2>/dev/null)" = "0" ]; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq chromium >/dev/null 2>&1 || apt-get install -y -qq chromium-browser >/dev/null 2>&1 || true
-    chrome_bin="${'$'}(find_chromium || true)"
-fi
-if [ -n "${'$'}chrome_bin" ]; then
-    export PLAYWRIGHT_MCP_EXECUTABLE_PATH="${'$'}chrome_bin"
-fi
+# and binds system Chromium if available on ARM64.
+for bin in /usr/bin/chromium /usr/bin/chromium-browser /usr/bin/google-chrome; do
+    if [ -x "${'$'}bin" ]; then
+        export PLAYWRIGHT_MCP_EXECUTABLE_PATH="${'$'}bin"
+        break
+    fi
+done
 exec npx -y @playwright/mcp@latest --headless --no-sandbox "${'$'}@"
 """
 
     val FORGE_MCP_SERVER_PY: String = """#!/usr/bin/env python3
 import html.parser
+import ipaddress
 import json
 import os
+import socket
 import re
 import shutil
 import subprocess
@@ -224,103 +213,6 @@ TOOLS = [
             "required": ["url"],
         },
     },
-    {
-        "name": "forge_reference_autoindex",
-        "description": "Index or incrementally update a project or reference directory into the local Forge Reference Index (SQLite FTS5 BM25 code passages + symbol definition table).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Workspace directory to index (default /workspace)",
-                },
-                "force": {
-                    "type": "boolean",
-                    "description": "Force full re-index even for unchanged files (default false)",
-                },
-            },
-        },
-    },
-    {
-        "name": "forge_reference_search",
-        "description": "BM25 ranked code & documentation passage search across the Forge Reference Index. Returns exact file:start-end line passages without reading entire files.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query keywords or identifiers",
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Optional workspace path scope",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max passages to return (default 5)",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "forge_reference_def",
-        "description": "Instant go-to-definition lookup for classes, interfaces, functions, structs, or constants across the Forge Reference Index (returns file:line + signature).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "symbol": {
-                    "type": "string",
-                    "description": "Symbol name to locate (e.g. AppUpdateController, SilentSelfUpdate)",
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Optional workspace path scope",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max definitions to return (default 10)",
-                },
-            },
-            "required": ["symbol"],
-        },
-    },
-    {
-        "name": "forge_reference_batch_search",
-        "description": "Execute multiple BM25 code searches and symbol definition lookups in a single MCP call to drastically reduce agent turns and token usage.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "queries": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of BM25 search queries to run",
-                },
-                "symbols": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of symbol names to look up definitions for",
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Optional workspace path scope",
-                },
-            },
-        },
-    },
-    {
-        "name": "forge_reference_gain",
-        "description": "Report measured token savings, context reduction ratio, and indexed corpus statistics from the Forge Reference Index.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Optional workspace path scope",
-                },
-            },
-        },
-    },
 ]
 
 
@@ -336,9 +228,9 @@ def _clean_hex(value, fallback):
 def _safe_workspace_path(path_str):
     if not path_str or not isinstance(path_str, str):
         return None
-    real_path = os.path.realpath(os.path.abspath(path_str))
-    if real_path.startswith("/workspace/") or real_path.startswith("/tmp/"):
-        return real_path
+    abs_path = os.path.abspath(path_str)
+    if abs_path.startswith("/workspace/") or abs_path.startswith("/tmp/"):
+        return abs_path
     return None
 
 
@@ -357,11 +249,7 @@ def handle_design_generate_svg(args):
     title = _xml_escape(args.get("title") or "NextCraft")
     primary = _clean_hex(args.get("primaryColor"), "#10B981")
     secondary = _clean_hex(args.get("secondaryColor"), "#0EA5E9")
-    try:
-        raw_size = int(args.get("size") or 512)
-    except (ValueError, TypeError):
-        raw_size = 512
-    size = max(64, min(2048, raw_size))
+    size = max(64, min(2048, int(args.get("size") or 512)))
     half = size // 2
     radius = max(16, size // 5)
 
@@ -512,32 +400,6 @@ def handle_design_mermaid_blueprint(args):
                 lines.append(f"    {left} --> {right}")
             else:
                 lines.append(f"    [*] --> {s}")
-    elif dtype == "er":
-        lines.append("erDiagram")
-        for item in items:
-            s = str(item).strip()
-            if "->" in s:
-                left, right = [p.strip() for p in s.split("->", 1)]
-                e1 = re.sub(r"[^A-Za-z0-9_]", "_", left).strip("_") or "EntityA"
-                e2 = re.sub(r"[^A-Za-z0-9_]", "_", right).strip("_") or "EntityB"
-                lines.append(f'    {e1} ||--o{{ {e2} : "relates"')
-            else:
-                e1 = re.sub(r"[^A-Za-z0-9_]", "_", s).strip("_") or "Entity"
-                lines.append(f"    {e1} {{")
-                lines.append("        string id PK")
-                lines.append("    }")
-    elif dtype == "class":
-        lines.append("classDiagram")
-        for item in items:
-            s = str(item).strip()
-            if "->" in s:
-                left, right = [p.strip() for p in s.split("->", 1)]
-                c1 = re.sub(r"[^A-Za-z0-9_]", "_", left).strip("_") or "ClassA"
-                c2 = re.sub(r"[^A-Za-z0-9_]", "_", right).strip("_") or "ClassB"
-                lines.append(f"    {c1} --> {c2}")
-            else:
-                c1 = re.sub(r"[^A-Za-z0-9_]", "_", s).strip("_") or "Component"
-                lines.append(f"    class {c1}")
     else:
         lines.append("flowchart TD")
         for idx, item in enumerate(items):
@@ -582,7 +444,7 @@ def handle_android_ui_inspect(args):
             parts.append(f"Screenshot failed: {(res.stderr or res.stdout).strip()}")
 
     if args.get("includeUiHierarchy", True):
-        cmd = "uiautomator dump /data/local/tmp/forge_ui_dump.xml >/dev/null 2>&1 && cat /data/local/tmp/forge_ui_dump.xml && rm -f /data/local/tmp/forge_ui_dump.xml"
+        cmd = "uiautomator dump /sdcard/forge_ui_dump.xml >/dev/null 2>&1 && cat /sdcard/forge_ui_dump.xml && rm -f /sdcard/forge_ui_dump.xml"
         res = subprocess.run([shell_bin, cmd], capture_output=True, text=True, timeout=20)
         xml_text = res.stdout.strip()
         if "<hierarchy" in xml_text:
@@ -649,29 +511,45 @@ class _PreviewHTMLParser(html.parser.HTMLParser):
             self._curr_heading.append(data)
 
 
-class _SafePreviewRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        parsed = urllib.parse.urlparse(newurl)
-        host = (parsed.hostname or "").lower()
-        if parsed.scheme not in ("http", "https"):
-            raise urllib.error.URLError("Blocked redirect to unsupported URL scheme")
-        if parsed.scheme == "http" and host not in ("127.0.0.1", "localhost", "::1"):
-            raise urllib.error.URLError("Blocked cleartext HTTP redirect to non-loopback host")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+def _preview_url_allowed(url):
+    # http/https only; loopback is allowed (the preview is local by design) but no other private, link-local,
+    # multicast or reserved range, so the tool cannot be pointed at the LAN or cloud metadata endpoints.
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    host = parts.hostname
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
+    except (socket.gaierror, OSError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if ip.is_loopback:
+            continue
+        if ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return False
+    return True
 
 
 def handle_web_preview_inspect(args):
     url = str(args.get("url") or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
         return "Invalid URL: must start with http:// or https://"
-    parsed = urllib.parse.urlparse(url)
-    host = (parsed.hostname or "").lower()
-    if parsed.scheme == "http" and host not in ("127.0.0.1", "localhost", "::1"):
-        return "Invalid URL: cleartext http:// is only allowed for loopback hosts (127.0.0.1, localhost, ::1); use https:// for remote URLs"
+    if not _preview_url_allowed(url):
+        return "Invalid URL: only http(s) to localhost or public hosts is allowed"
     req = urllib.request.Request(url, headers={"User-Agent": "NextCraft-Forge-Inspector/1.0"})
-    opener = urllib.request.build_opener(_SafePreviewRedirectHandler())
     try:
-        with opener.open(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             status = resp.status
             ctype = resp.headers.get("Content-Type", "")
             raw = resp.read(256 * 1024).decode("utf-8", errors="replace")
@@ -695,23 +573,6 @@ def handle_web_preview_inspect(args):
     )
 
 
-def _run_forge_reference_cli(cli_args, path_arg=None):
-    target_root = _safe_workspace_path(path_arg) or "/workspace/nextcraft-forge"
-    if not os.path.isdir(target_root):
-        target_root = "/workspace"
-    candidates = [
-        os.path.join(target_root, ".agents/scripts/forge_reference_index.py"),
-        "/workspace/nextcraft-forge/.agents/scripts/forge_reference_index.py",
-        "/opt/nextcraft/bin/forge-reference-index.py",
-    ]
-    script = next((c for c in candidates if os.path.isfile(c)), None)
-    if not script:
-        return "Forge Reference Index script not found in workspace."
-    cmd = ["python3", script] + cli_args + (["-p", target_root] if cli_args[0] != "autoindex" else [target_root])
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    return (res.stdout or res.stderr or "No output").strip()
-
-
 def dispatch_tool(name, arguments):
     if name == "design_generate_svg":
         return handle_design_generate_svg(arguments)
@@ -723,26 +584,6 @@ def dispatch_tool(name, arguments):
         return handle_android_ui_inspect(arguments)
     if name == "web_preview_inspect":
         return handle_web_preview_inspect(arguments)
-    if name == "forge_reference_autoindex":
-        args_list = ["autoindex"] + (["--force"] if arguments.get("force") else [])
-        return _run_forge_reference_cli(args_list, arguments.get("path"))
-    if name == "forge_reference_search":
-        q = str(arguments.get("query") or "").strip()
-        limit = str(int(arguments.get("limit") or 5))
-        return _run_forge_reference_cli(["search", q, "-n", limit], arguments.get("path"))
-    if name == "forge_reference_def":
-        sym = str(arguments.get("symbol") or "").strip()
-        limit = str(int(arguments.get("limit") or 10))
-        return _run_forge_reference_cli(["def", sym, "-n", limit], arguments.get("path"))
-    if name == "forge_reference_batch_search":
-        args_list = ["batch"]
-        for q in (arguments.get("queries") or [])[:10]:
-            args_list.extend(["-q", str(q)])
-        for s in (arguments.get("symbols") or [])[:10]:
-            args_list.extend(["-s", str(s)])
-        return _run_forge_reference_cli(args_list, arguments.get("path"))
-    if name == "forge_reference_gain":
-        return _run_forge_reference_cli(["gain"], arguments.get("path"))
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -823,12 +664,7 @@ def main():
         use_content_length = False
         if stripped.lower().startswith(b"content-length:"):
             use_content_length = True
-            try:
-                length = int(stripped.split(b":", 1)[1].strip())
-            except ValueError:
-                continue
-            if length <= 0 or length > 16 * 1024 * 1024:
-                continue
+            length = int(stripped.split(b":", 1)[1].strip())
             while True:
                 hdr = stdin.readline()
                 if not hdr or hdr in (b"\r\n", b"\n"):
@@ -854,7 +690,7 @@ if __name__ == "__main__":
     main()
 """
 
-    /** Provisions the built-in MCP server, Playwright ARM64 wrapper, and uvx wrapper inside [rootfs]. */
+    /** Provisions the built-in MCP server and Playwright ARM64 wrapper inside [rootfs]. */
     fun apply(rootfs: File, writeExecutable: (File, String) -> Unit) {
         if (!rootfs.isDirectory) return
         val binDir = File(rootfs, GUEST_BIN_DIR)
@@ -871,17 +707,9 @@ if __name__ == "__main__":
         if (mcpServers == null || mcpServers.length() == 0) return "[]\n"
         val keys = mcpServers.keys().asSequence().toList().sorted()
         val entries = ArrayList<String>()
-        val usedServerNames = HashSet<String>()
         for (rawKey in keys) {
             val server = mcpServers.optJSONObject(rawKey) ?: continue
-            val baseName = normalizeDshServerName(rawKey)
-            var serverName = baseName
-            var suffix = 2
-            while (!usedServerNames.add(serverName)) {
-                val suffixStr = "_$suffix"
-                serverName = baseName.take((32 - suffixStr.length).coerceAtLeast(1)) + suffixStr
-                suffix++
-            }
+            val serverName = normalizeDshServerName(rawKey)
             val type = server.optString("type")
             val block = StringBuilder()
             block.appendLine("    - id: ${yamlSingleQuote(serverName)}")

@@ -407,7 +407,9 @@ class ReaController(
          */
         /** The `rea analyze` command line for the options of the screen; [symbol] null = no disassembly, blank = entry. */
         internal fun analyzeCommand(path: String, strings: Boolean, interesting: Boolean, symbol: String?): String = buildList {
-            add("rea analyze ${ChrootRunner.quote(path)} --json")
+            // A relative path that starts with `-` would be parsed by rea as an option.
+            val target = if (path.startsWith("-")) "./$path" else path
+            add("rea analyze ${ChrootRunner.quote(target)} --json")
             if (strings) {
                 add("--strings --max-strings 300")
                 if (interesting) add("--interesting")

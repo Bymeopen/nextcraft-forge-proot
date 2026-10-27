@@ -1,12 +1,8 @@
 package com.nextcraft.forge.runtime
 
 import android.content.Context
-import android.os.SystemClock
-import android.system.Os
 import android.util.Log
-import androidx.annotation.StringRes
-import com.nextcraft.forge.R
-import com.nextcraft.forge.data.ApiKeyVault
+import com.nextcraft.forge.model.stringOrEmpty
 import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.ChangeItem
 import com.nextcraft.forge.model.ChatMessage
@@ -16,43 +12,44 @@ import com.nextcraft.forge.model.ProviderKind
 import com.nextcraft.forge.model.ProviderProfile
 import com.nextcraft.forge.model.RuntimeEvent
 import com.nextcraft.forge.model.ToolRequest
-import com.nextcraft.forge.model.stringOrEmpty
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * [RuntimeBridge] driving the official DeepSeek (`dsh`) inside the
+ * NextCraft Forge Ubuntu 24.04 Root Chroot (`--profile sdk` JSON-RPC 2.0).
+ */
 class DshRuntimeBridge(
     private val context: Context,
     private val secretFor: (ProviderProfile) -> String?,
-    private val rotateSecretFor: (ProviderProfile) -> String? = { prof ->
-        ApiKeyVault(context).rotateNext(prof.kind.name)
+    private val rotateSecretFor: (ProviderProfile) -> String? = { profile ->
+        com.nextcraft.forge.data.ApiKeyVault(context).rotateNext(profile.kind.name)
     },
 ) : RuntimeBridge {
-    private val rtInstaller = RuntimeInstaller(context)
-    private val diffStore = WorkspaceCheckpoints(context.filesDir, context)
-    private val streamBus = MutableSharedFlow<RuntimeEvent>(
+    private val installer = RuntimeInstaller(context)
+    private val checkpoints = WorkspaceCheckpoints(context.filesDir, context)
+    private val eventBus = MutableSharedFlow<RuntimeEvent>(
         extraBufferCapacity = 1024,
-        onBufferOverflow = BufferOverflow.SUSPEND,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.SUSPEND,
     )
-    override val events: Flow<RuntimeEvent> = streamBus
+    override val events: Flow<RuntimeEvent> = eventBus
+    private val finishedSessions = ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var activeProcess: Process? = null
+    @Volatile private var activeSessionId: String? = null
+    @Volatile private var userStopRequested: Boolean = false
+    private val foreground = ForegroundSession(context, "DshBridge")
 
-    private val completedSessionIds = ConcurrentHashMap.newKeySet<String>()
-    @Volatile private var runningProc: Process? = null
-    @Volatile private var currentSid: String? = null
-    @Volatile private var cancelledByUser: Boolean = false
-    @Volatile private var currentSlug: String? = null
-    @Volatile private var prevReasoningEmitMs: Long = 0L
-
-    private val fgNotifier = ForegroundSession(context, LOG_TAG)
+    @Volatile private var activeProjectSlug: String? = null
+    @Volatile private var lastThinkingUpdateAt: Long = 0L
 
     override suspend fun startSession(
         projectId: String,
@@ -62,517 +59,537 @@ class DshRuntimeBridge(
         conversationHistory: List<ChatMessage>,
         provider: ProviderProfile,
     ): String = withContext(Dispatchers.IO + NonCancellable) {
-        val sid = UUID.randomUUID().toString()
-        completedSessionIds.remove(sid)
-        currentSid = sid
-        cancelledByUser = false
-        currentSlug = projectSlug
-        prevReasoningEmitMs = 0L
-
-        fgNotifier.begin()
-        streamBus.emit(RuntimeEvent.SessionStarted(sid))
-        notifyProgress("Starting DeepSeek…")
-
-        val resolvedSecret = secretFor(provider).orEmpty().ifBlank { localServerPlaceholderKey(provider) }
-        if (resolvedSecret.isBlank()) {
-            streamBus.emit(RuntimeEvent.SessionFailed(sid, "No API key is saved for ${provider.kind.title}."))
-            currentSid = null
-            fgNotifier.clearStart()
-            return@withContext sid
+        val sessionId = UUID.randomUUID().toString()
+        finishedSessions.remove(sessionId)
+        activeSessionId = sessionId
+        userStopRequested = false
+        activeProjectSlug = projectSlug
+        foreground.begin()
+        lastThinkingUpdateAt = 0L
+        eventBus.emit(RuntimeEvent.SessionStarted(sessionId))
+        pushForegroundProgress("Starting DeepSeek…")
+        val secret = secretFor(provider).orEmpty().ifBlank { localServerPlaceholderKey(provider) }
+        if (secret.isBlank()) {
+            eventBus.emit(RuntimeEvent.SessionFailed(sessionId, "No API key is saved for ${provider.kind.title}."))
+            activeSessionId = null
+            foreground.clearStart()
+            return@withContext sessionId
         }
         if (provider.kind == ProviderKind.CLAUDE) {
-            val msg = "Claude subscription login is not supported by DeepSeek. Pick a key-based provider in Settings."
-            streamBus.emit(RuntimeEvent.SessionFailed(sid, msg))
-            currentSid = null
-            fgNotifier.clearStart()
-            return@withContext sid
+            eventBus.emit(
+                RuntimeEvent.SessionFailed(
+                    sessionId,
+                    "Claude subscription login is not supported by DeepSeek. Pick a key-based provider in Settings.",
+                ),
+            )
+            activeSessionId = null
+            foreground.clearStart()
+            return@withContext sessionId
         }
 
-        var routerProxy: OpenRouterRoutingGateway? = null
-        var logCaptureFile: File? = null
-        var isolatedHomeDir: File? = null
-        var abortCallback: (() -> Unit)? = null
-
+        var openRouterGateway: OpenRouterRoutingGateway? = null
+        var spawnedOutputFile: File? = null
+        var sessionHomeHostDir: File? = null
+        var stopHandler: (() -> Unit)? = null
         runCatching {
-            abortCallback = {
-                cancelledByUser = true
-                val proc = runningProc
-                if (proc != null) {
+            stopHandler = {
+                userStopRequested = true
+                val running = activeProcess
+                if (running != null) {
                     Thread({
                         runCatching {
-                            proc.destroy()
-                            Thread.sleep(500L)
-                            if (proc.isAlive) proc.destroyForcibly()
-                        }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
-                    }, "forge-dsh-abort").apply { isDaemon = true }.start()
+                            running.destroy()
+                            Thread.sleep(500)
+                            if (running.isAlive) running.destroyForcibly()
+                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+                    }, "forge-dsh-stop").apply { isDaemon = true }.start()
                 }
             }
-            RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sid", abortCallback!!)
-            fgNotifier.start(projectSlug)
-
-            val runtimeEnv = rtInstaller.installedRuntime()
-            check(rtInstaller.isAgentInstalled(AgentKind.DEEPSEEK_HARNESS)) {
+            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
+            startForegroundRuntime(projectSlug)
+            val installed = installer.installedRuntime()
+            check(installer.isAgentInstalled(AgentKind.DEEPSEEK_HARNESS)) {
                 "DeepSeek is not installed. Open Settings → Coding agent to install it."
             }
-            rtInstaller.ensureSettingsAndHooks()
-            rtInstaller.ensureDshAndroidCompatibility()
-
-            val projectDir = diffStore.ensureWorkspace(projectId)
-            diffStore.createCheckpoint(projectId, projectDir)
-            val preTurnSnapshot = diffStore.snapshot(projectDir)
-
-            val initialRoute = DshRouteMapper.forProfile(provider)
-            if (provider.kind == ProviderKind.LLM_ROUTER && provider.openRouterProviders.isNotEmpty()) {
-                routerProxy = OpenRouterRoutingGateway(provider, resolvedSecret) { rotateSecretFor(provider) }.start()
-            }
-            val effectiveRoute = if (routerProxy != null && initialRoute.custom != null) {
-                initialRoute.copy(custom = initialRoute.custom.copy(baseUrl = routerProxy!!.url))
+            installer.ensureSettingsAndHooks()
+            installer.ensureDshAndroidCompatibility()
+            val workspace = checkpoints.ensureWorkspace(projectId)
+            checkpoints.createCheckpoint(projectId, workspace)
+            val before = checkpoints.snapshot(workspace)
+            val baseRoute = DshRouteMapper.forProfile(provider)
+            openRouterGateway = if (
+                provider.kind == ProviderKind.LLM_ROUTER && provider.openRouterProviders.isNotEmpty()
+            ) OpenRouterRoutingGateway(provider, secret) { rotateSecretFor(provider) }.start() else null
+            val route = if (openRouterGateway != null && baseRoute.custom != null) {
+                baseRoute.copy(custom = baseRoute.custom.copy(baseUrl = openRouterGateway!!.url))
             } else {
-                initialRoute
+                baseRoute
             }
-
-            val guestSessionHome = "$DSH_HOME_GUEST_PATH/sessions/$sid"
-            isolatedHomeDir = provisionDshConfigFiles(runtimeEnv.rootfs, effectiveRoute, provider, guestSessionHome)
-            val tokenForGuest = routerProxy?.sessionToken ?: resolvedSecret
-
-            val envMap = linkedMapOf(
-                "DSH_HOME" to guestSessionHome,
+            val sessionGuestHome = "$DSH_HOME_GUEST_PATH/sessions/$sessionId"
+            sessionHomeHostDir = writeDshSettings(installed.rootfs, route, provider, sessionGuestHome)
+            val guestAuthToken = openRouterGateway?.sessionToken ?: secret
+            val environment = linkedMapOf(
+                "DSH_HOME" to sessionGuestHome,
                 "DSH_PERMISSION_MODE" to "danger-full-access",
-                effectiveRoute.keyEnv to tokenForGuest,
+                route.keyEnv to guestAuthToken,
             )
-            if (effectiveRoute.keyEnv != FALLBACK_KEY_ENV) {
-                envMap.remove(FALLBACK_KEY_ENV)
-            }
+            if (route.keyEnv != FALLBACK_KEY_ENV) environment.remove(FALLBACK_KEY_ENV)
 
-            val guestWorkdir = "/workspace/$projectSlug"
-            val fullPrompt = assemblePromptWithContext(prompt, conversationHistory.unseenBy(null), guestWorkdir, projectKind)
-            val cliArgs = listOf("/usr/local/bin/dsh", "--profile", "sdk")
-
-            val childProc = rtInstaller.process(
-                runtimeEnv.chrootExec,
-                runtimeEnv.rootfs,
-                projectDir,
-                envMap,
-                cliArgs,
-                guestWorkspacePath = guestWorkdir,
+            val guestWorkspacePath = "/workspace/$projectSlug"
+            val contextPrompt = buildContextPrompt(prompt, conversationHistory.unseenBy(null), guestWorkspacePath, projectKind)
+            val command = listOf("/usr/local/bin/dsh", "--profile", "sdk")
+            Log.d("DshBridge", "Route: ${route.name}, Model: ${provider.model}")
+            val process = installer.process(
+                installed.chrootExec,
+                installed.rootfs,
+                workspace,
+                environment,
+                command,
+                guestWorkspacePath = guestWorkspacePath,
                 emulateHardLinks = false,
             )
-            runningProc = childProc
-            logCaptureFile = (childProc as? NativeSpawnProcess)?.outputFile
-            if (cancelledByUser) childProc.destroy()
-
-            val activeModel = provider.model.ifBlank { effectiveRoute.defaultModel }
-            val outcome = driveJsonRpcSession(
-                proc = childProc,
-                sid = sid,
-                route = effectiveRoute,
-                modelName = activeModel,
-                guestCwd = guestWorkdir,
-                promptText = fullPrompt,
+            activeProcess = process
+            spawnedOutputFile = (process as? NativeSpawnProcess)?.outputFile
+            if (userStopRequested) process.destroy()
+            val sdkResult = runSdkSession(
+                process = process,
+                sessionId = sessionId,
+                route = route,
+                model = provider.model.ifBlank { route.defaultModel },
+                guestWorkspacePath = guestWorkspacePath,
+                prompt = contextPrompt,
             )
-            val exitStatus = childProc.waitFor()
-
-            val modifiedPaths = diffStore.changedFiles(projectDir, preTurnSnapshot)
-            if (modifiedPaths.isNotEmpty()) {
-                diffStore.saveChangedPaths(projectId, modifiedPaths)
-                val visiblePaths = diffStore.readChangedPaths(projectId).filterNot(diffStore::isInternalRuntimePath)
-                val diffItems = diffStore.buildChangeDetails(projectId, projectDir, visiblePaths)
-                streamBus.emit(RuntimeEvent.FilesChanged(sid, diffItems))
-            } else if (diffStore.readChangedPaths(projectId).isEmpty()) {
+            val exit = process.waitFor()
+            Log.d("DshBridge", "SDK process exited with code $exit")
+            val changed = checkpoints.changedFiles(workspace, before)
+            if (changed.isNotEmpty()) {
+                Log.d("DshBridge", "Changed files (${changed.size})")
+                checkpoints.saveChangedPaths(projectId, changed)
+                val details = checkpoints.buildChangeDetails(projectId, workspace, checkpoints.readChangedPaths(projectId).filterNot(checkpoints::isInternalRuntimePath))
+                eventBus.emit(RuntimeEvent.FilesChanged(sessionId, details))
+            } else if (checkpoints.readChangedPaths(projectId).isEmpty()) {
                 acceptLastChanges(projectId)
             }
-
-            if (outcome.completed && outcome.failure.isBlank() && !cancelledByUser) {
-                publishCompletionOnce(sid)
-                fgNotifier.finishRes(true, projectSlug, R.string.notif_agent_finished_in, "DeepSeek", projectSlug)
+            if (sdkResult.completed && sdkResult.failure.isBlank() && !userStopRequested) {
+                emitCompletedOnce(sessionId)
+                finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "DeepSeek", projectSlug)
             } else {
-                if (cancelledByUser) throw DshBridgeAbortedException("Stopped by user")
-                error(outcome.failure.ifBlank { "DeepSeek stopped with exit code $exitStatus" })
+                if (userStopRequested) throw DshSessionException("Stopped by user")
+                error(sdkResult.failure.ifBlank { "DeepSeek stopped with exit code $exit" })
             }
-        }.onFailure { err ->
-            Log.e(LOG_TAG, "Session failed: ${err::class.simpleName}")
-            runningProc?.let { proc -> runCatching { if (proc.isAlive) proc.destroyForcibly() } }
-            val readableMsg = mapReadableDshFailure(err)
-            publishFailureOnce(sid, readableMsg)
-            if (cancelledByUser) {
-                fgNotifier.cancel()
+        }.onFailure { error ->
+            Log.e("DshBridge", "Session failed: ${error::class.simpleName}")
+            // A failure after launch (parser/IO/provider error) must not leave the agent running unattended in the chroot.
+            activeProcess?.let { running -> runCatching { if (running.isAlive) running.destroyForcibly() } }
+            val message = friendlyError(error)
+            emitFailureOnce(sessionId, message)
+            if (userStopRequested) {
+                cancelForegroundRuntime()
             } else {
-                fgNotifier.finish(completed = false, projectName = projectSlug, detail = readableMsg)
+                finishForegroundRuntime(
+                    completed = false,
+                    projectName = projectSlug,
+                    detail = message,
+                )
             }
         }
-
-        runCatching { routerProxy?.close() }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
-        runCatching { logCaptureFile?.delete() }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
-        runCatching { isolatedHomeDir?.deleteRecursively() }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
-        runningProc = null
-        currentSid = null
-        RuntimeTaskController.release(abortCallback)
-        sid
+        runCatching { openRouterGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        runCatching { sessionHomeHostDir?.deleteRecursively() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
+        activeProcess = null
+        activeSessionId = null
+        RuntimeTaskController.release(stopHandler)
+        sessionId
     }
 
-    private suspend fun driveJsonRpcSession(
-        proc: Process,
-        sid: String,
+    private suspend fun runSdkSession(
+        process: Process,
+        sessionId: String,
         route: DshRoute,
-        modelName: String,
-        guestCwd: String,
-        promptText: String,
-    ): DshTurnOutcome {
-        val spawned = proc as? NativeSpawnProcess ?: error("Unsupported Android runtime process")
-        val stdinWriter = proc.outputStream.bufferedWriter()
-        val protocolParser = DshSdkProtocolParser(sid)
+        model: String,
+        guestWorkspacePath: String,
+        prompt: String,
+    ): DshSdkRunResult {
+        val nativeProcess = process as? NativeSpawnProcess
+            ?: error("Unsupported Android runtime process")
+        val writer = process.outputStream.bufferedWriter()
+        val parser = DshSdkProtocolParser(sessionId)
+        var promptSent = false
+        var sawRunning = false
+        var completed = false
+        var sawActivity = false
+        var shutdownSent = false
+        var shutdownSentAt = 0L
+        var forcedShutdown = false
+        var inputClosed = false
+        var failure = ""
 
-        var sentPrompt = false
-        var observedRunning = false
-        var turnSucceeded = false
-        var observedOutput = false
-        var sentShutdown = false
-        var shutdownTimestamp = 0L
-        var forceKilled = false
-        var stdinClosed = false
-        var errorReason = ""
-
-        fun writeRpcFrame(methodName: String, rpcId: Int, payload: JSONObject? = null) {
-            val rpcObj = JSONObject()
+        fun send(method: String, id: Int, params: JSONObject? = null) {
+            val frame = JSONObject()
                 .put("jsonrpc", "2.0")
-                .put("id", rpcId)
-                .put("method", methodName)
-            if (payload != null) rpcObj.put("params", payload)
-            stdinWriter.write(rpcObj.toString())
-            stdinWriter.newLine()
-            stdinWriter.flush()
+                .put("id", id)
+                .put("method", method)
+            if (params != null) frame.put("params", params)
+            writer.write(frame.toString())
+            writer.newLine()
+            writer.flush()
         }
 
-        fun closeStdinSafely() {
-            if (stdinClosed) return
-            stdinClosed = true
-            runCatching { stdinWriter.close() }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
+        fun closeInput() {
+            if (inputClosed) return
+            inputClosed = true
+            runCatching { writer.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
         }
 
-        fun initiateShutdown() {
-            if (sentShutdown) return
-            turnSucceeded = observedOutput && errorReason.isBlank()
-            if (!turnSucceeded && errorReason.isBlank()) {
-                errorReason = "DeepSeek stopped before processing the prompt"
+        fun finishTurnAndShutdown() {
+            if (shutdownSent) return
+            completed = sawActivity && failure.isBlank()
+            if (!completed && failure.isBlank()) {
+                failure = "DeepSeek stopped before processing the prompt"
             }
-            sentShutdown = true
-            shutdownTimestamp = SystemClock.elapsedRealtime()
-            writeRpcFrame("shutdown", RPC_ID_SHUTDOWN)
+            shutdownSent = true
+            shutdownSentAt = android.os.SystemClock.elapsedRealtime()
+            send("shutdown", SDK_SHUTDOWN_ID)
         }
 
-        writeRpcFrame(
-            methodName = "initialize",
-            rpcId = RPC_ID_INIT,
-            payload = JSONObject()
-                .put("cwd", guestCwd)
+        send(
+            method = "initialize",
+            id = SDK_INITIALIZE_ID,
+            params = JSONObject()
+                .put("cwd", guestWorkspacePath)
                 .put("provider", route.name)
-                .put("model", modelName),
+                .put("model", model),
         )
 
-        suspend fun dispatchEvent(ev: DshSdkProtocolEvent) {
-            when (ev) {
-                DshSdkProtocolEvent.Initialized -> if (!sentPrompt) {
-                    val blocks = JSONArray().put(JSONObject().put("type", "text").put("text", promptText))
-                    val params = JSONObject().put("sessionId", sid).put("contentBlocks", blocks)
-                    writeRpcFrame("session/prompt", RPC_ID_PROMPT, params)
-                    sentPrompt = true
+        suspend fun handle(protocolEvent: DshSdkProtocolEvent) {
+            when (protocolEvent) {
+                DshSdkProtocolEvent.Initialized -> if (!promptSent) {
+                    send(
+                        method = "session/prompt",
+                        id = SDK_PROMPT_ID,
+                        params = JSONObject()
+                            .put("sessionId", sessionId)
+                            .put(
+                                "contentBlocks",
+                                JSONArray().put(JSONObject().put("type", "text").put("text", prompt)),
+                            ),
+                    )
+                    promptSent = true
                 }
                 DshSdkProtocolEvent.PromptAccepted -> Unit
                 is DshSdkProtocolEvent.Status -> {
-                    if (ev.running) {
-                        observedRunning = true
-                        notifyProgress("DeepSeek is working…")
-                    } else if (observedRunning && !sentShutdown) {
-                        initiateShutdown()
+                    if (protocolEvent.running) {
+                        sawRunning = true
+                        pushForegroundProgress("DeepSeek is working…")
+                    } else if (sawRunning && !shutdownSent) {
+                        finishTurnAndShutdown()
                     }
                 }
                 is DshSdkProtocolEvent.Reasoning -> {
-                    observedOutput = true
-                    publishReasoning(
-                        sid = sid,
-                        content = ev.text,
-                        blockId = ev.blockId,
-                        isNew = ev.startsNewBlock,
-                        done = ev.isFinal,
-                        immediate = ev.startsNewBlock || ev.isFinal,
+                    sawActivity = true
+                    emitReasoningSummary(
+                        sessionId = sessionId,
+                        text = protocolEvent.text,
+                        blockId = protocolEvent.blockId,
+                        startsNewBlock = protocolEvent.startsNewBlock,
+                        isFinal = protocolEvent.isFinal,
+                        force = protocolEvent.startsNewBlock || protocolEvent.isFinal,
                     )
                 }
                 is DshSdkProtocolEvent.ToolStarted -> {
-                    observedOutput = true
-                    streamBus.emit(RuntimeEvent.ToolStarted(sid, ev.name, ev.detail))
+                    sawActivity = true
+                    eventBus.emit(
+                        RuntimeEvent.ToolStarted(sessionId, protocolEvent.name, protocolEvent.detail),
+                    )
                 }
                 is DshSdkProtocolEvent.ToolCompleted -> {
-                    observedOutput = true
-                    streamBus.emit(RuntimeEvent.ToolCompleted(sid, ev.name, ev.summary))
+                    sawActivity = true
+                    eventBus.emit(
+                        RuntimeEvent.ToolCompleted(sessionId, protocolEvent.name, protocolEvent.summary),
+                    )
                 }
-                is DshSdkProtocolEvent.AssistantText -> if (ev.text.isNotEmpty()) {
-                    observedOutput = true
-                    streamBus.emit(RuntimeEvent.AssistantDelta(sid, ev.text))
+                is DshSdkProtocolEvent.AssistantText -> if (protocolEvent.text.isNotEmpty()) {
+                    sawActivity = true
+                    eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, protocolEvent.text))
                 }
                 is DshSdkProtocolEvent.Failed -> {
-                    errorReason = ev.message
-                    initiateShutdown()
+                    failure = protocolEvent.message
+                    // An error answer to initialize or the prompt ends no turn on its own; without this the loop waits
+                    // for an exit that never comes and the foreground notification and wake lock stay held.
+                    finishTurnAndShutdown()
                 }
                 DshSdkProtocolEvent.TurnCompleted -> {
-                    observedOutput = true
-                    initiateShutdown()
+                    sawActivity = true
+                    finishTurnAndShutdown()
                 }
-                DshSdkProtocolEvent.ShutdownAcknowledged -> closeStdinSafely()
+                DshSdkProtocolEvent.ShutdownAcknowledged -> closeInput()
                 DshSdkProtocolEvent.Ignored -> Unit
             }
         }
 
-        suspend fun ingestLine(raw: String) {
-            val trimmed = raw.trimEnd('\r')
-            if (trimmed.isBlank()) return
-            if (trimmed.endsWith("... [truncated]") || trimmed.length > MAX_DSH_LINE_BYTES) {
-                val wasDup = protocolParser.consumeDuplicateAssistantMessage(trimmed)
-                val prefix = trimmed.take(400)
-                when {
-                    prefix.contains("\"turn/end\"") -> dispatchEvent(DshSdkProtocolEvent.TurnCompleted)
-                    prefix.contains("\"tool/result\"") -> Log.d(LOG_TAG, "Skipped huge tool/result line")
-                    !wasDup -> Log.w(LOG_TAG, "Skipped oversized RPC line (${trimmed.length} chars)")
+        suspend fun processDshLine(rawLine: String) {
+            val line = rawLine.trimEnd('\r')
+            if (line.isBlank()) return
+            if (line.endsWith("... [truncated]") || line.length > MAX_DSH_PROTOCOL_LINE_CHARS) {
+                val duplicate = parser.consumeDuplicateAssistantMessage(line)
+                // Judge the frame by its own header: file or log text inside a tool result can contain "TurnCompleted".
+                val head = line.take(400)
+                if (head.contains("\"turn/end\"")) {
+                    handle(DshSdkProtocolEvent.TurnCompleted)
+                } else if (head.contains("\"tool/result\"")) {
+                    // A large tool output is not a protocol failure; the agent continues with it.
+                    Log.d("DshBridge", "Dropped oversized tool/result frame (${line.length} chars)")
+                } else if (!duplicate) {
+                    // Our own reader cut this frame; that says nothing about the turn's outcome, so don't fail it.
+                    Log.w("DshBridge", "Dropped oversized frame (${line.length} chars): ${head.take(120)}")
                 }
                 return
             }
-            if (!protocolParser.consumeDuplicateAssistantMessage(trimmed)) {
-                dispatchEvent(protocolParser.parseLine(trimmed))
+            if (!parser.consumeDuplicateAssistantMessage(line)) {
+                handle(parser.parseLine(line))
             }
         }
 
-        InotifyLogTailer(spawned.outputFile, maxLineBytes = MAX_DSH_LINE_BYTES).use { logTailer ->
-            while (proc.isAlive || logTailer.hasUnreadBytes()) {
-                val shutdownTimedOut = proc.isAlive &&
-                    !forceKilled &&
-                    shutdownTimestamp > 0L &&
-                    SystemClock.elapsedRealtime() - shutdownTimestamp >= SHUTDOWN_GRACE_MS
-                if (shutdownTimedOut) {
-                    closeStdinSafely()
-                    forceKilled = true
-                    proc.destroyForcibly()
+        InotifyLogTailer(nativeProcess.outputFile, maxLineBytes = MAX_DSH_PROTOCOL_LINE_CHARS).use { tailer ->
+            while (process.isAlive || tailer.hasUnreadBytes()) {
+                if (
+                    process.isAlive &&
+                    !forcedShutdown &&
+                    shutdownSentAt > 0L &&
+                    android.os.SystemClock.elapsedRealtime() - shutdownSentAt >= SDK_SHUTDOWN_TIMEOUT_MS
+                ) {
+                    closeInput()
+                    forcedShutdown = true
+                    Log.w("DshBridge", "SDK acknowledged completion but did not exit; stopping its runtime wrapper")
+                    process.destroyForcibly()
                 }
-                for (ln in logTailer.readLines(timeoutMs = 250L)) {
-                    ingestLine(ln)
+                for (line in tailer.readLines(timeoutMs = 250L)) {
+                    processDshLine(line)
                 }
             }
-            for (ln in logTailer.readLines(timeoutMs = 0L, flushIncomplete = true)) {
-                ingestLine(ln)
+            for (line in tailer.readLines(timeoutMs = 0L, flushIncomplete = true)) {
+                processDshLine(line)
             }
         }
-        closeStdinSafely()
-        return DshTurnOutcome(completed = turnSucceeded, failure = errorReason)
+        closeInput()
+        return DshSdkRunResult(completed = completed, failure = failure)
     }
 
-    override suspend fun respondToApproval(request: ToolRequest, approved: Boolean) = Unit
+    override suspend fun respondToApproval(request: ToolRequest, approved: Boolean) {
+        // No approval answerer is wired for dsh; DSH_PERMISSION_MODE is not read by the upstream dsh packages (unverified for the bundled build).
+    }
 
     override suspend fun stopSession(sessionId: String) = withContext(Dispatchers.IO) {
-        if (currentSid == sessionId) {
-            cancelledByUser = true
-            runningProc?.destroy()
-            delay(500L)
-            if (runningProc?.isAlive == true) runningProc?.destroyForcibly()
-            publishFailureOnce(sessionId, "Stopped by user")
+        if (activeSessionId == sessionId) {
+            userStopRequested = true
+            activeProcess?.destroy()
+            delay(500)
+            if (activeProcess?.isAlive == true) activeProcess?.destroyForcibly()
+            emitFailureOnce(sessionId, "Stopped by user")
         }
     }
 
     override suspend fun stopActiveSession() {
-        currentSid?.let { stopSession(it) }
+        activeSessionId?.let { stopSession(it) }
     }
 
     fun configureProjectRoot(projectId: String, rootPath: String) {
-        diffStore.configureProjectRoot(projectId, rootPath)
+        checkpoints.configureProjectRoot(projectId, rootPath)
     }
 
     override suspend fun undoLastChanges(projectId: String): Boolean = withContext(Dispatchers.IO) {
-        val dir = diffStore.ensureWorkspace(projectId)
-        diffStore.revertLatestTurn(projectId, dir).isNotEmpty()
+        val workspace = checkpoints.ensureWorkspace(projectId)
+        checkpoints.revertLatestTurn(projectId, workspace).isNotEmpty()
     }
 
-    override suspend fun acceptLastChanges(projectId: String) = withContext(Dispatchers.IO) {
-        diffStore.acceptAll(projectId)
+    override suspend fun acceptLastChanges(projectId: String) {
+        withContext(Dispatchers.IO) {
+            checkpoints.acceptAll(projectId)
+        }
     }
 
     override suspend fun loadPendingChanges(projectId: String): List<ChangeItem> = withContext(Dispatchers.IO) {
-        val dir = diffStore.ensureWorkspace(projectId)
-        val pending = diffStore.readChangedPaths(projectId).filterNot(diffStore::isInternalRuntimePath)
-        if (pending.isEmpty()) emptyList() else diffStore.buildChangeDetails(projectId, dir, pending)
+        val workspace = checkpoints.ensureWorkspace(projectId)
+        val paths = checkpoints.readChangedPaths(projectId).filterNot(checkpoints::isInternalRuntimePath)
+        if (paths.isEmpty()) emptyList() else checkpoints.buildChangeDetails(projectId, workspace, paths)
     }
 
     override suspend fun undoFileChange(projectId: String, path: String): Boolean = withContext(Dispatchers.IO) {
-        val dir = diffStore.ensureWorkspace(projectId)
-        diffStore.revertFile(projectId, dir, path)
+        val workspace = checkpoints.ensureWorkspace(projectId)
+        checkpoints.revertFile(projectId, workspace, path)
     }
 
     override suspend fun acceptFileChange(projectId: String, path: String): Boolean = withContext(Dispatchers.IO) {
-        val dir = diffStore.ensureWorkspace(projectId)
-        diffStore.acceptFile(projectId, dir, path)
+        val workspace = checkpoints.ensureWorkspace(projectId)
+        checkpoints.acceptFile(projectId, workspace, path)
     }
 
-    private fun provisionDshConfigFiles(
-        rootfsDir: File,
+    private fun writeDshSettings(
+        rootfs: File,
         route: DshRoute,
-        profile: ProviderProfile,
-        guestHome: String = DSH_HOME_GUEST_PATH,
+        provider: ProviderProfile,
+        guestHomePath: String = DSH_HOME_GUEST_PATH,
     ): File {
-        val targetHome = File(rootfsDir, guestHome.removePrefix("/")).apply { mkdirs() }
-        val chosenModel = quoteYamlSingle(profile.model.ifBlank { route.defaultModel })
-        val yamlLines = mutableListOf(
-            "agent-default-model:",
-            "  provider: ${route.name}",
-            "  model: $chosenModel",
-        )
-        if (route.custom != null) {
-            yamlLines.addAll(
-                listOf(
-                    "llm-pi-ai:",
-                    "  providers:",
-                    "    ${route.name}:",
-                    "      apiKeyEnv: ${route.keyEnv}",
-                    "      api: ${route.custom.api}",
-                    "      baseURL: ${quoteYamlSingle(route.custom.baseUrl)}",
-                    "      models:",
-                    "        - id: $chosenModel",
-                ),
-            )
-        }
-        val settingsContent = yamlLines.joinToString("\n") + "\n"
-        val cordisContent = ForgeMcpServer.toDshCordisPatchYaml(
-            runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull(),
-        )
-
-        fun writeMode0600(file: File, content: String) {
-            file.writeText(content)
-            runCatching { Os.chmod(file.absolutePath, 384) }
-        }
-
-        writeMode0600(File(targetHome, "settings.yaml"), settingsContent)
-        writeMode0600(File(targetHome, "cordis.patch.yml"), cordisContent)
-
-        if (guestHome != DSH_HOME_GUEST_PATH) {
-            val sharedHome = File(rootfsDir, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
-            runCatching {
-                writeMode0600(File(sharedHome, "settings.yaml"), settingsContent)
-                writeMode0600(File(sharedHome, "cordis.patch.yml"), cordisContent)
+        val home = File(rootfs, guestHomePath.removePrefix("/")).apply { mkdirs() }
+        val body = buildString {
+            appendLine("agent-default-model:")
+            appendLine("  provider: ${route.name}")
+            appendLine("  model: ${yamlQuote(provider.model.ifBlank { route.defaultModel })}")
+            if (route.custom != null) {
+                appendLine("llm-pi-ai:")
+                appendLine("  providers:")
+                appendLine("    ${route.name}:")
+                appendLine("      apiKeyEnv: ${route.keyEnv}")
+                appendLine("      api: ${route.custom.api}")
+                appendLine("      baseURL: ${yamlQuote(route.custom.baseUrl)}")
+                appendLine("      models:")
+                appendLine("        - id: ${yamlQuote(provider.model.ifBlank { route.defaultModel })}")
             }
         }
-        return targetHome
+        val mcpPatchYaml = ForgeMcpServer.toDshCordisPatchYaml(
+            runCatching { ConnectorStore(context).mcpServersJson() }.getOrNull(),
+        )
+        File(home, "settings.yaml").writeText(body)
+        File(home, "cordis.patch.yml").writeText(mcpPatchYaml)
+        if (guestHomePath != DSH_HOME_GUEST_PATH) {
+            val defaultHome = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
+            runCatching {
+                File(defaultHome, "settings.yaml").writeText(body)
+                // The MCP patch carries bearer tokens: it lives only in the per-session home, which is deleted when
+                // the session ends. A copy left behind by an older build is removed.
+                File(defaultHome, "cordis.patch.yml").delete()
+            }
+        }
+        return home
     }
 
-    private fun quoteYamlSingle(raw: String): String = "'${raw.replace("'", "''")}'"
+    private fun yamlQuote(value: String): String = "'${value.replace("'", "''")}'"
 
-    private suspend fun publishReasoning(
-        sid: String,
-        content: String,
+    private suspend fun emitReasoningSummary(
+        sessionId: String,
+        text: String,
         blockId: Long,
-        isNew: Boolean,
-        done: Boolean,
-        immediate: Boolean = false,
+        startsNewBlock: Boolean,
+        isFinal: Boolean,
+        force: Boolean = false,
     ) {
-        val nowMs = SystemClock.elapsedRealtime()
-        if (!immediate && nowMs - prevReasoningEmitMs < 400L) return
-        val cleaned = compactDshText(content, REASONING_BUF_CAP, REASONING_SUMMARY_CAP)
-        if (cleaned.isBlank()) return
-        prevReasoningEmitMs = nowMs
-        streamBus.emit(
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!force && now - lastThinkingUpdateAt < 400) return
+        val summary = compactDshText(text, MAX_DSH_REASONING_BUFFER, MAX_DSH_REASONING_SUMMARY)
+        if (summary.isBlank()) return
+        lastThinkingUpdateAt = now
+        eventBus.emit(
             RuntimeEvent.ReasoningSummary(
-                sessionId = sid,
-                summary = cleaned,
+                sessionId = sessionId,
+                summary = summary,
                 blockId = blockId,
-                startsNewBlock = isNew,
-                isFinal = done,
+                startsNewBlock = startsNewBlock,
+                isFinal = isFinal,
             ),
         )
-        notifyProgress("Thinking…")
+        pushForegroundProgress("Thinking…")
     }
 
-    private suspend fun publishCompletionOnce(sid: String) {
-        if (!completedSessionIds.add(sid)) return
-        streamBus.emit(RuntimeEvent.SessionCompleted(sid))
-        val slug = currentSlug?.takeIf { it.isNotBlank() }
-        if (slug != null) {
-            fgNotifier.finishRes(true, slug, R.string.notif_agent_finished_in, "DeepSeek", slug)
-        } else {
-            fgNotifier.finishRes(true, "Project", R.string.notif_agent_finished, "DeepSeek")
+    private suspend fun emitCompletedOnce(sessionId: String) {
+        if (finishedSessions.add(sessionId)) {
+            eventBus.emit(RuntimeEvent.SessionCompleted(sessionId))
+            val slug = activeProjectSlug?.takeIf { it.isNotBlank() }
+            if (slug != null) {
+                finishForegroundRuntimeRes(true, slug, com.nextcraft.forge.R.string.notif_agent_finished_in, "DeepSeek", slug)
+            } else {
+                finishForegroundRuntimeRes(true, "Project", com.nextcraft.forge.R.string.notif_agent_finished, "DeepSeek")
+            }
         }
     }
 
-    private suspend fun publishFailureOnce(sid: String, detail: String) {
-        if (!completedSessionIds.add(sid)) return
-        streamBus.emit(RuntimeEvent.SessionFailed(sid, detail))
-        if (cancelledByUser) {
-            fgNotifier.cancel()
-        } else {
-            fgNotifier.finish(completed = false, projectName = currentSlug ?: "Project", detail = detail)
+    private suspend fun emitFailureOnce(sessionId: String, reason: String) {
+        if (finishedSessions.add(sessionId)) {
+            eventBus.emit(RuntimeEvent.SessionFailed(sessionId, reason))
+            if (userStopRequested) {
+                cancelForegroundRuntime()
+            } else {
+                finishForegroundRuntime(
+                    completed = false,
+                    projectName = activeProjectSlug ?: "Project",
+                    detail = reason,
+                )
+            }
         }
     }
 
-    private fun mapReadableDshFailure(err: Throwable): String {
-        val raw = err.message.orEmpty()
-        val low = raw.lowercase()
-        val isAuthRejection = "authentication" in low ||
-            "invalid api key" in low ||
-            "invalid_api_key" in low ||
-            "autherror" in low ||
-            "token has expired" in low ||
-            "api key expired" in low ||
-            (("401" in raw || "403" in raw) && ("auth" in low || "http" in low))
-
-        val isQuotaOrRate = "rate limit" in low ||
-            "quota" in low ||
-            ("429" in raw && "http" in low)
-
+    private fun friendlyError(error: Throwable): String {
+        val message = error.message.orEmpty()
         return when {
-            err is DshBridgeAbortedException && hasNonNullDshText(raw) -> raw
-            isAuthRejection -> "The provider rejected the saved API key."
-            isQuotaOrRate -> "The provider rate limit or quota was reached. Wait a moment or switch keys."
-            "missing_credential" in low -> "No API key reached DeepSeek. Re-save the provider key in Settings."
-            "not installed" in low -> raw.take(300)
-            !hasNonNullDshText(raw) -> "DeepSeek could not start."
-            else -> raw.take(500)
+            error is DshSessionException && message.isMeaningfulDshText() -> message
+            message.contains("authentication", true) ||
+                message.contains("invalid api key", true) ||
+                message.contains("invalid_api_key", true) ||
+                message.contains("autherror", true) ||
+                message.contains("token has expired", true) ||
+                message.contains("api key expired", true) ||
+                listOf("401", "403").any { code ->
+                    message.contains(code) && (message.contains("auth", true) || message.contains("HTTP", true))
+                } ->
+                "The provider rejected the saved API key."
+            message.contains("rate limit", true) ||
+                message.contains("quota", true) ||
+                (message.contains("429") && message.contains("HTTP", true)) ->
+                "The provider rate limit or quota was reached. Wait a moment or switch keys."
+            message.contains("missing_credential", true) ->
+                "No API key reached DeepSeek. Re-save the provider key in Settings."
+            message.contains("not installed", true) -> message.take(300)
+            !message.isMeaningfulDshText() -> "DeepSeek could not start."
+            else -> message.take(500)
         }
     }
 
-    private fun assemblePromptWithContext(
-        userPrompt: String,
-        historySlice: List<ChatMessage>,
-        guestWorkdir: String,
-        kind: ProjectKind,
-        isResumed: Boolean = false,
+    private fun buildContextPrompt(
+        currentPrompt: String,
+        priorMessages: List<ChatMessage>,
+        guestWorkspacePath: String,
+        projectKind: ProjectKind,
+        resumed: Boolean = false,
     ): String = buildAgentWorkspacePrompt(
-        currentPrompt = userPrompt,
-        priorMessages = historySlice,
-        guestWorkspacePath = guestWorkdir,
-        projectKind = kind,
-        androidStackInstalled = rtInstaller.isStackInstalled(DevStack.ANDROID),
-        maxHistoryChars = HISTORY_CHAR_BUDGET,
-        resumed = isResumed,
+        currentPrompt = currentPrompt,
+        priorMessages = priorMessages,
+        guestWorkspacePath = guestWorkspacePath,
+        projectKind = projectKind,
+        androidStackInstalled = installer.isStackInstalled(DevStack.ANDROID),
+        maxHistoryChars = MAX_CONVERSATION_HISTORY_CHARACTERS,
+        resumed = resumed,
     )
 
-    private fun notifyProgress(statusText: String) {
-        if (currentSid != null) {
-            fgNotifier.progress(currentSlug, statusText)
-        }
+    private fun pushForegroundProgress(detailRaw: String) {
+        if (activeSessionId == null) return
+        foreground.progress(activeProjectSlug, detailRaw)
     }
 
-    private class DshBridgeAbortedException(msg: String) : IllegalStateException(msg)
+    private fun startForegroundRuntime(projectName: String) = foreground.start(projectName)
+
+    private fun finishForegroundRuntime(completed: Boolean, projectName: String, detail: String) =
+        foreground.finish(completed, projectName, detail)
+
+    private fun finishForegroundRuntimeRes(completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, vararg args: String) =
+        foreground.finishRes(completed, projectName, detailRes, *args)
+
+    private fun cancelForegroundRuntime() = foreground.cancel()
+
+    private class DshSessionException(message: String) : IllegalStateException(message)
 
     companion object {
-        private const val LOG_TAG = "DshBridge"
         const val DSH_HOME_GUEST_PATH = "/root/.dsh"
         const val FALLBACK_KEY_ENV = "MH_DSH_API_KEY"
-        private const val HISTORY_CHAR_BUDGET = 160_000
-        private const val RPC_ID_INIT = 1
-        private const val RPC_ID_PROMPT = 2
-        private const val RPC_ID_SHUTDOWN = 3
-        private const val SHUTDOWN_GRACE_MS = 3_000L
+        private const val MAX_CONVERSATION_HISTORY_CHARACTERS = 160_000
+        private const val SDK_INITIALIZE_ID = 1
+        private const val SDK_PROMPT_ID = 2
+        private const val SDK_SHUTDOWN_ID = 3
+        private const val SDK_SHUTDOWN_TIMEOUT_MS = 3_000L
     }
 }
 
-private data class DshTurnOutcome(
-    val completed: Boolean,
-    val failure: String,
-)
+private data class DshSdkRunResult(val completed: Boolean, val failure: String)
 
+/** dsh provider route resolved from our saved provider profile. */
 internal data class DshRoute(
     val name: String,
     val keyEnv: String,
@@ -580,69 +597,67 @@ internal data class DshRoute(
     val custom: DshCustomRoute? = null,
 )
 
-internal data class DshCustomRoute(
-    val api: String,
-    val baseUrl: String,
-)
+internal data class DshCustomRoute(val api: String, val baseUrl: String)
 
-private val ALLOWED_DSH_WIRE_FORMATS = setOf(
-    "anthropic-messages",
-    "openai-completions",
-    "openai-responses",
-)
+private val DSH_WIRE_APIS = setOf("anthropic-messages", "openai-completions", "openai-responses")
 
-internal fun safeDshApi(candidate: String): String {
-    val clean = candidate.trim()
-    return if (clean in ALLOWED_DSH_WIRE_FORMATS) clean else "anthropic-messages"
-}
+/** dshApi is user-editable and written unquoted into settings.yaml, so only known wire protocols pass through. */
+internal fun safeDshApi(value: String): String = value.trim().takeIf { it in DSH_WIRE_APIS } ?: "anthropic-messages"
 
 internal object DshRouteMapper {
     fun forProfile(profile: ProviderProfile): DshRoute {
-        val modelId = profile.model.ifBlank { profile.kind.defaultModel }
-        val endpoint = profile.resolvedBaseUrl
+        val model = profile.model.ifBlank { profile.kind.defaultModel }
         return when (profile.kind) {
-            ProviderKind.DEEPSEEK -> DshRoute("deepseek-official", "DEEPSEEK_API_KEY", modelId)
+            ProviderKind.DEEPSEEK -> DshRoute(
+                name = "deepseek-official",
+                keyEnv = "DEEPSEEK_API_KEY",
+                defaultModel = model,
+            )
             ProviderKind.ANTHROPIC -> DshRoute(
-                "mh-anthropic",
-                DshRuntimeBridge.FALLBACK_KEY_ENV,
-                modelId,
-                DshCustomRoute("anthropic-messages", endpoint),
+                name = "mh-anthropic",
+                keyEnv = DshRuntimeBridge.FALLBACK_KEY_ENV,
+                defaultModel = model,
+                custom = DshCustomRoute("anthropic-messages", profile.resolvedBaseUrl),
             )
             ProviderKind.LLM_ROUTER -> DshRoute(
-                "mh-openrouter",
-                DshRuntimeBridge.FALLBACK_KEY_ENV,
-                modelId,
-                DshCustomRoute("anthropic-messages", endpoint.trimEnd('/').removeSuffix("/v1")),
+                name = "mh-openrouter",
+                keyEnv = DshRuntimeBridge.FALLBACK_KEY_ENV,
+                defaultModel = model,
+                custom = DshCustomRoute(
+                    "anthropic-messages",
+                    profile.resolvedBaseUrl.trimEnd('/').removeSuffix("/v1"),
+                ),
             )
             ProviderKind.KIMI -> DshRoute(
-                "mh-kimi",
-                DshRuntimeBridge.FALLBACK_KEY_ENV,
-                modelId,
-                DshCustomRoute(safeDshApi(profile.dshApi), endpoint),
+                name = "mh-kimi",
+                keyEnv = DshRuntimeBridge.FALLBACK_KEY_ENV,
+                defaultModel = model,
+                custom = DshCustomRoute(safeDshApi(profile.dshApi), profile.resolvedBaseUrl),
             )
             ProviderKind.OPENCODE_ZEN -> DshRoute(
-                "opencode-zen",
-                DshRuntimeBridge.FALLBACK_KEY_ENV,
-                modelId,
-                DshCustomRoute("openai-responses", endpoint),
+                name = "opencode-zen",
+                keyEnv = DshRuntimeBridge.FALLBACK_KEY_ENV,
+                defaultModel = model,
+                custom = DshCustomRoute("openai-responses", profile.resolvedBaseUrl),
             )
             ProviderKind.NVIDIA_NIM -> DshRoute(
-                "nvidia-nim",
-                DshRuntimeBridge.FALLBACK_KEY_ENV,
-                modelId,
-                DshCustomRoute("openai-completions", endpoint),
+                name = "nvidia-nim",
+                keyEnv = DshRuntimeBridge.FALLBACK_KEY_ENV,
+                defaultModel = model,
+                custom = DshCustomRoute("openai-completions", profile.resolvedBaseUrl),
             )
             ProviderKind.CUSTOM -> DshRoute(
-                "mh-custom",
-                DshRuntimeBridge.FALLBACK_KEY_ENV,
-                modelId,
-                DshCustomRoute(safeDshApi(profile.dshApi), endpoint),
+                name = "mh-custom",
+                keyEnv = DshRuntimeBridge.FALLBACK_KEY_ENV,
+                defaultModel = model,
+                custom = DshCustomRoute(safeDshApi(profile.dshApi), profile.resolvedBaseUrl),
             )
             ProviderKind.CLAUDE -> throw IllegalArgumentException("Claude subscription login is not supported by DeepSeek")
         }
     }
 }
 
+/** One classified line of merged headless output (stdout+stderr share a capture file). */
 internal sealed interface DshLine {
     data object ReasoningHeading : DshLine
     data class Reasoning(val text: String) : DshLine
@@ -651,15 +666,17 @@ internal sealed interface DshLine {
 }
 
 internal object DshHeadlessParser {
-    fun parseLine(raw: String): DshLine {
-        val stripped = raw.trim()
-        if (!stripped.startsWith("dsh:")) return DshLine.Answer(stripped)
-        val afterPrefix = stripped.removePrefix("dsh:").trim()
-        if (afterPrefix.startsWith("reasoning:")) {
-            val content = afterPrefix.removePrefix("reasoning:").trim()
-            return if (content.isEmpty()) DshLine.ReasoningHeading else DshLine.Reasoning(content)
+    fun parseLine(rawLine: String): DshLine {
+        val line = rawLine.trim()
+        if (line.startsWith("dsh:")) {
+            val body = line.removePrefix("dsh:").trim()
+            if (body.startsWith("reasoning:")) {
+                val rest = body.removePrefix("reasoning:").trim()
+                return if (rest.isBlank()) DshLine.ReasoningHeading else DshLine.Reasoning(rest)
+            }
+            return DshLine.Diagnostic(body.ifBlank { line })
         }
-        return DshLine.Diagnostic(afterPrefix.ifEmpty { stripped })
+        return DshLine.Answer(line)
     }
 }
 
@@ -682,47 +699,45 @@ internal sealed interface DshSdkProtocolEvent {
     data object Ignored : DshSdkProtocolEvent
 }
 
-private fun hasNonNullDshText(str: String): Boolean {
-    val t = str.trim()
-    return t.isNotEmpty() && !t.equals("null", ignoreCase = true)
-}
+private fun String.isMeaningfulDshText(): Boolean =
+    isNotBlank() && !trim().equals("null", ignoreCase = true)
 
-private fun nonBlankDshOrFallback(candidate: String, fallback: String): String =
-    if (hasNonNullDshText(candidate)) candidate.trim() else fallback
+/** Stateful parser for the pinned dsh SDK's newline-delimited JSON-RPC stream. */
+internal class DshSdkProtocolParser(private val expectedSessionId: String) {
+    private val reasoningByBlock = mutableMapOf<Long, StringBuilder>()
+    private val textByBlock = mutableMapOf<Long, StringBuilder>()
+    private var streamedTextSinceMessage = false
+    private val toolNames = mutableMapOf<String, String>()
 
-internal class DshSdkProtocolParser(private val targetSessionId: String) {
-    private val reasoningAccumulators = HashMap<Long, StringBuilder>()
-    private val textAccumulators = HashMap<Long, StringBuilder>()
-    private val activeToolLabels = HashMap<String, String>()
-    private var emittedDeltaSinceLastMessage = false
-
-    fun consumeDuplicateAssistantMessage(rawLine: CharSequence): Boolean {
-        if (!emittedDeltaSinceLastMessage) return false
-        val isAssistantMsgFrame = rawLine.contains("\"method\":\"session.event\"") &&
-            rawLine.contains("\"type\":\"assistant/message\"")
-        if (!isAssistantMsgFrame) return false
-        emittedDeltaSinceLastMessage = false
+    fun consumeDuplicateAssistantMessage(line: CharSequence): Boolean {
+        if (!streamedTextSinceMessage) return false
+        if (!line.contains("\"method\":\"session.event\"") ||
+            !line.contains("\"type\":\"assistant/message\"")
+        ) return false
+        streamedTextSinceMessage = false
         return true
     }
 
-    fun parseLine(rawLine: String): DshSdkProtocolEvent {
-        val json = runCatching { JSONObject(rawLine) }.getOrNull()
-        if (json == null) {
-            if (rawLine.startsWith("dsh:", ignoreCase = true)) {
-                val errBody = rawLine.substring(4).trim()
-                return DshSdkProtocolEvent.Failed(nonBlankDshOrFallback(errBody, "DeepSeek reported an unspecified error"))
+    fun parseLine(line: String): DshSdkProtocolEvent {
+        val frame = runCatching { JSONObject(line) }.getOrNull()
+            ?: return if (line.startsWith("dsh:", ignoreCase = true)) {
+                DshSdkProtocolEvent.Failed(
+                    line.removePrefix("dsh:").trim().meaningfulDshText(
+                        "DeepSeek reported an unspecified error",
+                    ),
+                )
+            } else {
+                DshSdkProtocolEvent.Ignored
             }
-            return DshSdkProtocolEvent.Ignored
-        }
 
-        if (json.has("id")) {
-            val rpcId = json.optInt("id", -1)
-            val errObj = json.optJSONObject("error")
-            if (errObj != null) {
-                val msg = nonBlankDshOrFallback(errObj.stringOrEmpty("message"), "DeepSeek SDK request $rpcId failed")
-                return DshSdkProtocolEvent.Failed(msg)
+        if (frame.has("id")) {
+            val id = frame.optInt("id", -1)
+            frame.optJSONObject("error")?.let { error ->
+                return DshSdkProtocolEvent.Failed(
+                    error.stringOrEmpty("message").meaningfulDshText("DeepSeek SDK request $id failed"),
+                )
             }
-            return when (rpcId) {
+            return when (id) {
                 1 -> DshSdkProtocolEvent.Initialized
                 2 -> DshSdkProtocolEvent.PromptAccepted
                 3 -> DshSdkProtocolEvent.ShutdownAcknowledged
@@ -730,65 +745,63 @@ internal class DshSdkProtocolParser(private val targetSessionId: String) {
             }
         }
 
-        val paramsObj = json.optJSONObject("params") ?: return DshSdkProtocolEvent.Ignored
-        return when (json.stringOrEmpty("method")) {
+        val params = frame.optJSONObject("params") ?: return DshSdkProtocolEvent.Ignored
+        return when (frame.stringOrEmpty("method")) {
             "session.status" -> {
-                if (paramsObj.stringOrEmpty("sessionId") != targetSessionId) {
-                    DshSdkProtocolEvent.Ignored
-                } else {
-                    DshSdkProtocolEvent.Status(paramsObj.stringOrEmpty("status") == "running")
-                }
+                if (params.stringOrEmpty("sessionId") != expectedSessionId) DshSdkProtocolEvent.Ignored
+                else DshSdkProtocolEvent.Status(params.stringOrEmpty("status") == "running")
             }
-            "session.event" -> decodeSessionEvent(paramsObj)
+            "session.event" -> parseSessionEvent(params)
             else -> DshSdkProtocolEvent.Ignored
         }
     }
 
-    private fun decodeSessionEvent(paramsObj: JSONObject): DshSdkProtocolEvent {
-        if (paramsObj.stringOrEmpty("sessionId") != targetSessionId) return DshSdkProtocolEvent.Ignored
-        val evObj = paramsObj.optJSONObject("event") ?: return DshSdkProtocolEvent.Ignored
-        val payload = evObj.optJSONObject("data") ?: return DshSdkProtocolEvent.Ignored
-
-        return when (evObj.stringOrEmpty("type")) {
-            "assistant/chunk" -> decodeChunkEvent(payload)
+    private fun parseSessionEvent(params: JSONObject): DshSdkProtocolEvent {
+        if (params.stringOrEmpty("sessionId") != expectedSessionId) return DshSdkProtocolEvent.Ignored
+        val event = params.optJSONObject("event") ?: return DshSdkProtocolEvent.Ignored
+        val data = event.optJSONObject("data") ?: return DshSdkProtocolEvent.Ignored
+        return when (event.stringOrEmpty("type")) {
+            "assistant/chunk" -> parseAssistantChunk(data)
             "assistant/message" -> {
-                val blocks = payload.optJSONObject("message")?.optJSONArray("content")
-                val extracted = extractBlocksText(blocks)
-                when {
-                    extracted.isBlank() -> DshSdkProtocolEvent.Ignored
-                    emittedDeltaSinceLastMessage -> {
-                        emittedDeltaSinceLastMessage = false
-                        DshSdkProtocolEvent.Ignored
-                    }
-                    else -> DshSdkProtocolEvent.AssistantText(extracted)
+                val content = data.optJSONObject("message")?.optJSONArray("content")
+                val text = contentText(content)
+                if (text.isBlank()) {
+                    DshSdkProtocolEvent.Ignored
+                } else if (streamedTextSinceMessage) {
+                    streamedTextSinceMessage = false
+                    DshSdkProtocolEvent.Ignored
+                } else {
+                    DshSdkProtocolEvent.AssistantText(text)
                 }
             }
             "tool/call" -> {
-                val id = payload.stringOrEmpty("callId")
-                val rawTool = payload.stringOrEmpty("name").ifBlank { "Tool" }
-                val rawArgs = payload.stringOrEmpty("arguments")
-                val friendlyLabel = resolveFriendlyToolLabel(rawTool, rawArgs)
-                activeToolLabels[id] = friendlyLabel
-                DshSdkProtocolEvent.ToolStarted(id, friendlyLabel, summarizeToolArgs(rawArgs))
+                val callId = data.stringOrEmpty("callId")
+                val rawName = data.stringOrEmpty("name").ifBlank { "Tool" }
+                val arguments = data.stringOrEmpty("arguments")
+                val displayName = displayToolName(rawName, arguments)
+                toolNames[callId] = displayName
+                DshSdkProtocolEvent.ToolStarted(callId, displayName, toolDetail(arguments))
             }
             "tool/result" -> {
-                val msgObj = payload.optJSONObject("message")
-                val firstContent = msgObj?.optJSONArray("content")?.optJSONObject(0)
-                val id = firstContent?.stringOrEmpty("toolCallId").orEmpty()
-                val label = activeToolLabels.remove(id) ?: "Tool"
-                val errText = payload.optJSONObject("error")?.stringOrEmpty("message").orEmpty()
-                val bodyText = extractBlocksText(firstContent?.optJSONArray("content"))
-                val combined = nonBlankDshOrFallback(errText, bodyText)
-                val summary = compactDshText(combined, TOOL_RAW_CAP, 180).ifBlank { "$label completed" }
-                DshSdkProtocolEvent.ToolCompleted(id, label, summary)
+                val message = data.optJSONObject("message")
+                val resultBlock = message?.optJSONArray("content")?.optJSONObject(0)
+                val callId = resultBlock?.stringOrEmpty("toolCallId").orEmpty()
+                val name = toolNames.remove(callId) ?: "Tool"
+                val error = data.optJSONObject("error")
+                val text = contentText(resultBlock?.optJSONArray("content"))
+                val summary = error?.stringOrEmpty("message").orEmpty()
+                    .meaningfulDshText(text)
+                    .let { compactDshText(it, MAX_DSH_TOOL_RAW_TEXT, 180) }
+                    .ifBlank { "$name completed" }
+                DshSdkProtocolEvent.ToolCompleted(callId, name, summary)
             }
             "turn/end" -> {
-                val reasonObj = payload.optJSONObject("reason")
-                when (reasonObj?.stringOrEmpty("kind")) {
-                    "error" -> {
-                        val errMsg = reasonObj.optJSONObject("error")?.stringOrEmpty("message").orEmpty()
-                        DshSdkProtocolEvent.Failed(nonBlankDshOrFallback(errMsg, "DeepSeek turn failed"))
-                    }
+                val reason = data.optJSONObject("reason")
+                when (reason?.stringOrEmpty("kind")) {
+                    "error" -> DshSdkProtocolEvent.Failed(
+                        reason.optJSONObject("error")?.stringOrEmpty("message").orEmpty()
+                            .meaningfulDshText("DeepSeek turn failed"),
+                    )
                     "blocked" -> DshSdkProtocolEvent.Failed("DeepSeek was blocked from completing the task")
                     else -> DshSdkProtocolEvent.TurnCompleted
                 }
@@ -797,69 +810,60 @@ internal class DshSdkProtocolParser(private val targetSessionId: String) {
         }
     }
 
-    private fun decodeChunkEvent(payload: JSONObject): DshSdkProtocolEvent {
-        val chunkObj = payload.optJSONObject("chunk") ?: return DshSdkProtocolEvent.Ignored
-        val blockKey = payload.optInt("turn", 0) * 1_000_000L +
-            payload.optInt("step", 0) * 1_000L +
-            chunkObj.optInt("index", 0)
+    private fun String.meaningfulDshText(fallback: String): String =
+        if (isMeaningfulDshText()) trim() else fallback
 
-        return when (chunkObj.stringOrEmpty("type")) {
+    private fun parseAssistantChunk(data: JSONObject): DshSdkProtocolEvent {
+        val chunk = data.optJSONObject("chunk") ?: return DshSdkProtocolEvent.Ignored
+        val index = chunk.optInt("index", 0)
+        val blockId = data.optInt("turn", 0) * 1_000_000L + data.optInt("step", 0) * 1_000L + index
+        return when (chunk.stringOrEmpty("type")) {
             "text-delta" -> {
-                val piece = chunkObj.stringOrEmpty("text")
-                if (piece.isEmpty()) return DshSdkProtocolEvent.Ignored
-                val buf = textAccumulators.getOrPut(blockKey) { StringBuilder() }
-                appendCapped(buf, piece, TEXT_BLOCK_CAP)
-                emittedDeltaSinceLastMessage = true
-                DshSdkProtocolEvent.AssistantText(piece)
+                val delta = chunk.stringOrEmpty("text")
+                if (delta.isEmpty()) return DshSdkProtocolEvent.Ignored
+                textByBlock.getOrPut(blockId) { StringBuilder() }
+                    .appendBounded(delta, MAX_DSH_TEXT_BLOCK_BUFFER)
+                streamedTextSinceMessage = true
+                DshSdkProtocolEvent.AssistantText(delta)
             }
             "reasoning-delta" -> {
-                val buf = reasoningAccumulators.getOrPut(blockKey) { StringBuilder() }
-                val isFirst = buf.isEmpty()
-                appendCapped(buf, chunkObj.stringOrEmpty("text"), REASONING_BUF_CAP)
-                DshSdkProtocolEvent.Reasoning(blockKey, buf.toString(), isFirst, isFinal = false)
+                val buffer = reasoningByBlock.getOrPut(blockId) { StringBuilder() }
+                val starts = buffer.isEmpty()
+                buffer.appendBounded(chunk.stringOrEmpty("text"), MAX_DSH_REASONING_BUFFER)
+                DshSdkProtocolEvent.Reasoning(blockId, buffer.toString(), starts, isFinal = false)
             }
             "block-end" -> {
-                val innerBlock = chunkObj.optJSONObject("block") ?: return DshSdkProtocolEvent.Ignored
-                when (innerBlock.stringOrEmpty("type")) {
-                    "text" -> {
-                        val prior = textAccumulators.remove(blockKey)?.toString().orEmpty()
-                        val full = innerBlock.stringOrEmpty("text")
-                        val remainder = if (prior.isEmpty()) full.takeLast(TEXT_BLOCK_CAP) else ""
-                        if (remainder.isBlank()) {
-                            DshSdkProtocolEvent.Ignored
-                        } else {
-                            emittedDeltaSinceLastMessage = true
-                            DshSdkProtocolEvent.AssistantText(remainder)
-                        }
-                    }
-                    "reasoning" -> {
-                        val fullReasoning = innerBlock.stringOrEmpty("text")
-                            .ifBlank { reasoningAccumulators[blockKey]?.toString().orEmpty() }
-                            .takeLast(REASONING_BUF_CAP)
-                        val wasUnseen = !reasoningAccumulators.containsKey(blockKey)
-                        reasoningAccumulators.remove(blockKey)
-                        if (fullReasoning.isBlank()) {
-                            DshSdkProtocolEvent.Ignored
-                        } else {
-                            DshSdkProtocolEvent.Reasoning(blockKey, fullReasoning, wasUnseen, isFinal = true)
-                        }
-                    }
-                    else -> DshSdkProtocolEvent.Ignored
+                val block = chunk.optJSONObject("block")
+                if (block?.stringOrEmpty("type") == "text") {
+                    val streamed = textByBlock.remove(blockId)?.toString().orEmpty()
+                    val complete = block.stringOrEmpty("text")
+                    val missingSuffix = if (streamed.isEmpty()) complete.takeLast(MAX_DSH_TEXT_BLOCK_BUFFER) else ""
+                    if (missingSuffix.isBlank()) return DshSdkProtocolEvent.Ignored
+                    streamedTextSinceMessage = true
+                    return DshSdkProtocolEvent.AssistantText(missingSuffix)
                 }
+                if (block?.stringOrEmpty("type") != "reasoning") return DshSdkProtocolEvent.Ignored
+                val text = block.stringOrEmpty("text")
+                    .ifBlank { reasoningByBlock[blockId]?.toString().orEmpty() }
+                    .takeLast(MAX_DSH_REASONING_BUFFER)
+                val starts = blockId !in reasoningByBlock
+                reasoningByBlock.remove(blockId)
+                if (text.isBlank()) DshSdkProtocolEvent.Ignored
+                else DshSdkProtocolEvent.Reasoning(blockId, text, starts, isFinal = true)
             }
             else -> DshSdkProtocolEvent.Ignored
         }
     }
 
-    private fun resolveFriendlyToolLabel(rawName: String, argsJson: String): String {
-        val subCmd = runCatching { JSONObject(argsJson).stringOrEmpty("command") }.getOrDefault("")
+    private fun displayToolName(rawName: String, arguments: String): String {
+        val operation = runCatching { JSONObject(arguments).stringOrEmpty("command") }.getOrDefault("")
         return when (rawName.lowercase()) {
             "bash", "shell" -> "Bash"
             "read", "view" -> "Read"
             "glob" -> "Glob"
             "grep", "search" -> "Grep"
             "write", "create" -> "Write"
-            "edit", "str_replace_editor" -> when (subCmd.lowercase()) {
+            "edit", "str_replace_editor" -> when (operation.lowercase()) {
                 "view" -> "Read"
                 "create" -> "Write"
                 else -> "Edit"
@@ -868,77 +872,75 @@ internal class DshSdkProtocolParser(private val targetSessionId: String) {
         }
     }
 
-    private fun summarizeToolArgs(argsJson: String): String {
-        val obj = runCatching { JSONObject(argsJson) }.getOrNull()
-        val extracted = obj?.let { node ->
-            TOOL_ARG_KEYS.firstNotNullOfOrNull { k -> node.stringOrEmpty(k).takeIf(String::isNotBlank) }
+    private fun toolDetail(arguments: String): String {
+        val parsed = runCatching { JSONObject(arguments) }.getOrNull()
+        val detail = parsed?.let { json ->
+            listOf("path", "file_path", "command", "pattern", "query")
+                .firstNotNullOfOrNull { key -> json.stringOrEmpty(key).takeIf(String::isNotBlank) }
         }.orEmpty()
-        return compactDshText(extracted.ifBlank { argsJson }, TOOL_RAW_CAP, 240)
+        return compactDshText(detail.ifBlank { arguments }, MAX_DSH_TOOL_RAW_TEXT, 240)
             .ifBlank { "Working in the project" }
     }
 
-    private fun extractBlocksText(arr: JSONArray?): String {
-        if (arr == null) return ""
-        val sb = StringBuilder()
-        for (i in 0 until arr.length()) {
-            val item = arr.optJSONObject(i) ?: continue
-            val segment = when (item.stringOrEmpty("type")) {
-                "text" -> item.stringOrEmpty("text")
-                "tool-result" -> extractBlocksText(item.optJSONArray("content"))
+    private fun contentText(content: JSONArray?): String {
+        if (content == null) return ""
+        val result = StringBuilder()
+        for (index in 0 until content.length()) {
+            val block = content.optJSONObject(index) ?: continue
+            val text = when (block.stringOrEmpty("type")) {
+                "text" -> block.stringOrEmpty("text")
+                "tool-result" -> contentText(block.optJSONArray("content"))
                 else -> ""
             }
-            if (segment.isBlank()) continue
-            if (sb.isNotEmpty()) sb.append('\n')
-            appendCapped(sb, segment, CONTENT_TEXT_CAP)
+            if (text.isBlank()) continue
+            if (result.isNotEmpty()) result.append('\n')
+            result.appendBounded(text, MAX_DSH_CONTENT_TEXT)
         }
-        return sb.toString()
-    }
-
-    private companion object {
-        val TOOL_ARG_KEYS = listOf("path", "file_path", "command", "pattern", "query")
+        return result.toString()
     }
 }
 
-private const val REASONING_BUF_CAP = 8_000
-private const val REASONING_SUMMARY_CAP = 2_000
-private const val TOOL_RAW_CAP = 4_000
-private const val TEXT_BLOCK_CAP = 8_000
-private const val CONTENT_TEXT_CAP = 16_000
-private const val MAX_DSH_LINE_BYTES = 256 * 1024
+private const val MAX_DSH_REASONING_BUFFER = 8_000
+private const val MAX_DSH_REASONING_SUMMARY = 2_000
+private const val MAX_DSH_TOOL_RAW_TEXT = 4_000
+private const val MAX_DSH_TEXT_BLOCK_BUFFER = 8_000
+private const val MAX_DSH_CONTENT_TEXT = 16_000
+private const val MAX_DSH_PROTOCOL_LINE_CHARS = 256 * 1024
 
-private fun appendCapped(target: StringBuilder, chunk: String, limit: Int) {
-    if (chunk.length >= limit) {
-        target.clear()
-        target.append(chunk.takeLast(limit))
+private fun StringBuilder.appendBounded(value: String, maxChars: Int) {
+    if (value.length >= maxChars) {
+        clear()
+        append(value.takeLast(maxChars))
         return
     }
-    target.append(chunk)
-    val excess = target.length - limit
-    if (excess > 0) target.delete(0, excess)
+    append(value)
+    val overflow = length - maxChars
+    if (overflow > 0) delete(0, overflow)
 }
 
-private val SK_TOKEN_PATTERN = Regex("sk-[A-Za-z0-9_-]{8,}")
-private val KV_SECRET_PATTERN = Regex("(?i)(api[_-]?key|token|secret|password)(\\s*[=:]\\s*)([^\\s'\",}]+)")
-private val BEARER_HEADER_PATTERN = Regex("(?i)(authorization:\\s*bearer\\s+)[^\\s'\",}]+")
+private val DSH_SECRET_TOKEN_REGEX = Regex("sk-[A-Za-z0-9_-]{8,}")
+private val DSH_KEY_VALUE_SECRET_REGEX = Regex("(?i)(api[_-]?key|token|secret|password)(\\s*[=:]\\s*)([^\\s'\",}]+)")
+private val DSH_BEARER_SECRET_REGEX = Regex("(?i)(authorization:\\s*bearer\\s+)[^\\s'\",}]+")
 
-internal fun compactDshText(rawInput: String, sourceTailCap: Int, finalCap: Int): String {
-    if (rawInput.isEmpty() || sourceTailCap <= 0 || finalCap <= 0) return ""
-    val startIdx = (rawInput.length - sourceTailCap).coerceAtLeast(0)
-    val collapsed = StringBuilder(rawInput.length - startIdx)
-    var emitSpace = false
-    for (idx in startIdx until rawInput.length) {
-        val ch = rawInput[idx]
-        if (ch.isWhitespace()) {
-            emitSpace = collapsed.isNotEmpty()
+/** Collapses whitespace and redacts secrets while inspecting only a bounded tail of untrusted agent output. */
+internal fun compactDshText(value: String, rawLimit: Int, outputLimit: Int): String {
+    if (value.isEmpty() || rawLimit <= 0 || outputLimit <= 0) return ""
+    val start = (value.length - rawLimit).coerceAtLeast(0)
+    val result = StringBuilder(value.length - start)
+    var pendingSpace = false
+    for (index in start until value.length) {
+        val char = value[index]
+        if (char.isWhitespace()) {
+            pendingSpace = result.isNotEmpty()
         } else {
-            if (emitSpace) collapsed.append(' ')
-            emitSpace = false
-            collapsed.append(ch)
+            if (pendingSpace) result.append(' ')
+            pendingSpace = false
+            result.append(char)
         }
     }
-    return collapsed.toString()
-        .replace(SK_TOKEN_PATTERN, "sk-••••")
-        .replace(KV_SECRET_PATTERN, "$1$2••••")
-        .replace(BEARER_HEADER_PATTERN, "$1••••")
-        .takeLast(finalCap)
+    return result.toString()
+        .replace(DSH_SECRET_TOKEN_REGEX, "sk-••••")
+        .replace(DSH_KEY_VALUE_SECRET_REGEX, "$1$2••••")
+        .replace(DSH_BEARER_SECRET_REGEX, "$1••••")
+        .takeLast(outputLimit)
 }

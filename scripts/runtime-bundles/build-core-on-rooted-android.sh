@@ -12,6 +12,20 @@ ROOTFS_FILE="ubuntu-base-24.04.5-base-arm64.tar.gz"
 ROOTFS_SHA256="a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2"
 ROOTFS_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/${ROOTFS_FILE}"
 
+# $REMOTE is spliced into `su -c '...'` strings that the device shell re-parses, so it must be a plain absolute path.
+case "$REMOTE" in
+  /*/*) ;;
+  *) echo "NEXTCRAFT_REMOTE_DIR must be an absolute path with at least two components: $REMOTE" >&2; exit 1 ;;
+esac
+case "$REMOTE" in
+  *[!A-Za-z0-9._/-]*) echo "NEXTCRAFT_REMOTE_DIR contains unsafe characters: $REMOTE" >&2; exit 1 ;;
+esac
+
+# sha256sum (GNU coreutils) with a shasum (perl, macOS) fallback.
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi
+}
+
 adb_cmd() {
   if [[ -n "$ADB_SERIAL" ]]; then adb -s "$ADB_SERIAL" "$@"; else adb "$@"; fi
 }
@@ -27,16 +41,18 @@ temp_dir="$(mktemp -d)"
 # The rootfs gets /dev, /dev/pts, proc and sys bind-mounted below. If a run fails with those still mounted, the next
 # run's `rm -rf` would walk into the real /dev of the phone, so unmount everything under the rootfs first and on exit.
 unmount_rootfs() {
-  adb_cmd shell "su -c 'for m in \$(grep \" $REMOTE/rootfs/\" /proc/mounts | cut -d\" \" -f2 | sort -r); do umount -l \$m 2>/dev/null; done'" || true
+  adb_cmd shell "su -c 'for m in \$(grep \" $REMOTE/rootfs/\" /proc/mounts | cut -d\" \" -f2 | sort -r); do umount -l \"\$m\" 2>/dev/null; done'" || true
 }
 trap 'unmount_rootfs; rm -rf "$temp_dir"' EXIT
 curl -fL --retry 3 -o "$temp_dir/$ROOTFS_FILE" "$ROOTFS_URL"
-printf '%s  %s\n' "$ROOTFS_SHA256" "$temp_dir/$ROOTFS_FILE" | shasum -a 256 -c -
+printf '%s  %s\n' "$ROOTFS_SHA256" "$temp_dir/$ROOTFS_FILE" | sha256_check
 adb_cmd push "$temp_dir/$ROOTFS_FILE" /data/local/tmp/"$ROOTFS_FILE"
 
 unmount_rootfs
-adb_cmd shell "su -c 'rm -rf --one-file-system $REMOTE 2>/dev/null || rm -rf $REMOTE; mkdir -p $REMOTE/rootfs $REMOTE/output; toybox tar -xzf /data/local/tmp/$ROOTFS_FILE -C $REMOTE/rootfs; rm -f /data/local/tmp/$ROOTFS_FILE'"
-adb_cmd shell "su -c 'mount --bind /dev $REMOTE/rootfs/dev; mount --bind /dev/pts $REMOTE/rootfs/dev/pts; mount -t proc proc $REMOTE/rootfs/proc; mount -t sysfs sysfs $REMOTE/rootfs/sys'"
+# No plain `rm -rf` fallback: if --one-file-system is unsupported or a mount is still pinned, stop instead of
+# walking into the phone's real /dev, /proc or /sys through a leftover bind mount.
+adb_cmd shell "su -c 'rm -rf --one-file-system \"$REMOTE\" || { echo \"cannot remove $REMOTE safely (unmount leftovers first)\" >&2; exit 1; }; mkdir -p \"$REMOTE/rootfs\" \"$REMOTE/output\" && toybox tar -xzf \"/data/local/tmp/$ROOTFS_FILE\" -C \"$REMOTE/rootfs\" && rm -f \"/data/local/tmp/$ROOTFS_FILE\"'"
+adb_cmd shell "su -c 'mount --bind /dev \"$REMOTE/rootfs/dev\" && mount --bind /dev/pts \"$REMOTE/rootfs/dev/pts\" && mount -t proc proc \"$REMOTE/rootfs/proc\" && mount -t sysfs sysfs \"$REMOTE/rootfs/sys\"'"
 
 # Run a command inside the rootfs. The command is base64-encoded so it reaches bash byte-for-byte:
 # passing it through adb shell -> su -c '...' -> bash -lc "..." re-parses it three times, which drops
@@ -44,7 +60,7 @@ adb_cmd shell "su -c 'mount --bind /dev $REMOTE/rootfs/dev; mount --bind /dev/pt
 guest() {
   local command="$1" encoded
   encoded="$(printf '%s' "$command" | base64 | tr -d '\n')"
-  adb_cmd shell "su -c 'chroot $REMOTE/rootfs /usr/bin/env -i HOME=/root USER=root LANG=C.UTF-8 GLIBC_TUNABLES=glibc.pthread.rseq=0 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -lc \"\$(echo $encoded | base64 -d)\"'"
+  adb_cmd shell "su -c 'chroot \"$REMOTE/rootfs\" /usr/bin/env -i HOME=/root USER=root LANG=C.UTF-8 GLIBC_TUNABLES=glibc.pthread.rseq=0 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -lc \"\$(echo $encoded | base64 -d)\"'"
 }
 
 # 1. Konfigurasi Android Paranoid Network (AID_INET = 3003) & APT Non-Sandbox untuk Chroot Android
@@ -52,6 +68,9 @@ guest "grep -q '^aid_inet:' /etc/group || printf 'aid_inet:x:3003:root,_apt\naid
 guest "printf 'APT::Sandbox::User \"root\";\nAcquire::Retries \"3\";\n' > /etc/apt/apt.conf.d/99android-chroot"
 
 # 2. Update sistem Ubuntu 24.04.5 LTS & instal kakas dasar
+# Catatan (audit D6): `apt-get update && upgrade` mengambil state apt saat build, sehingga isi arsip bergantung pada
+# tanggal build dan tidak sepenuhnya reproducible meski tar-nya deterministik (mtime/owner tetap). Diterima dengan
+# sengaja: bundle harus memuat patch keamanan terbaru; hash hasil dicatat di release notes.
 guest "printf 'nameserver $DNS_SERVER\\n' > /etc/resolv.conf; apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"
 guest "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl wget unzip zip xz-utils zstd jq ripgrep"
 
@@ -69,7 +88,7 @@ guest "printf '{\"WEB\":true,\"PYTHON\":false,\"CPP\":false,\"PHP\":false,\"ANDR
 guest "rm -rf /root/.cache /root/.npm /root/.composer /root/.gradle/caches /root/.ssh; find /var/log -type f -delete; rm -f /etc/ssh/ssh_host_* /etc/machine-id /var/lib/dbus/machine-id /root/.bash_history"
 
 # 5. Unmount virtual filesystems secara bersih sebelum membuat arsip deterministik .tar.zst
-adb_cmd shell "su -c 'umount -lf $REMOTE/rootfs/sys; umount -lf $REMOTE/rootfs/proc; umount -lf $REMOTE/rootfs/dev/pts; umount -lf $REMOTE/rootfs/dev; mkdir -p $REMOTE/rootfs/output; mount --bind $REMOTE/output $REMOTE/rootfs/output'"
+adb_cmd shell "su -c 'umount -lf \"$REMOTE/rootfs/sys\"; umount -lf \"$REMOTE/rootfs/proc\"; umount -lf \"$REMOTE/rootfs/dev/pts\"; umount -lf \"$REMOTE/rootfs/dev\"; mkdir -p \"$REMOTE/rootfs/output\"; mount --bind \"$REMOTE/output\" \"$REMOTE/rootfs/output\"'"
 guest "export ZSTD_CLEVEL=19 ZSTD_NBTHREADS=0; tar --exclude='./output' --exclude='._*' --exclude='.DS_Store' --sort=name --mtime=2026-09-05T00:00:00Z --owner=0 --group=0 --numeric-owner --use-compress-program=/usr/bin/zstd -cf /output/nextcraft-core-arm64-$VERSION.tar.zst -C / ."
-adb_cmd shell "su -c 'umount -lf $REMOTE/rootfs/output; sha256sum $REMOTE/output/nextcraft-core-arm64-$VERSION.tar.zst; ls -lh $REMOTE/output/nextcraft-core-arm64-$VERSION.tar.zst'"
+adb_cmd shell "su -c 'umount -lf \"$REMOTE/rootfs/output\"; sha256sum \"$REMOTE/output/nextcraft-core-arm64-$VERSION.tar.zst\"; ls -lh \"$REMOTE/output/nextcraft-core-arm64-$VERSION.tar.zst\"'"
 echo "Core bundle created on the rooted ARM64 device at $REMOTE/output/nextcraft-core-arm64-$VERSION.tar.zst"

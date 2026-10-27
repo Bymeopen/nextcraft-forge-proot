@@ -108,7 +108,11 @@ object ScheduleLogic {
         return updated to started
     }
 
-    /** Applies the agent's directives for one chat; returns the new list. */
+    /**
+     * Applies the agent's directives for one chat; returns the new list. A directive comes from model output, so a
+     * timer it creates starts disabled (pending the user's approval via the schedule list's switch) and a re-issued
+     * directive never re-enables a timer the user switched off. `[[unschedule]]` only removes, so it applies at once.
+     */
     fun applyDirectives(
         tasks: List<ScheduledTask>,
         directives: List<ScheduleDirective>,
@@ -126,13 +130,14 @@ object ScheduleLogic {
                         // The same prompt again replaces its timer instead of stacking a second one.
                         mine.any { it.prompt == d.prompt } -> result.map {
                             if (it.projectId == projectId && it.chatId == chatId && it.byAgent && it.prompt == d.prompt)
-                                it.copy(intervalMinutes = d.intervalMinutes, nextRunAtMillis = now + d.intervalMinutes * 60_000L, enabled = true)
+                                it.copy(intervalMinutes = d.intervalMinutes, nextRunAtMillis = now + d.intervalMinutes * 60_000L)
                             else it
                         }
                         mine.size >= ScheduleRules.MAX_AGENT_TASKS_PER_CHAT -> result
                         else -> result + ScheduledTask(
                             projectId = projectId, chatId = chatId, prompt = d.prompt,
                             intervalMinutes = d.intervalMinutes, nextRunAtMillis = now + d.intervalMinutes * 60_000L, byAgent = true,
+                            enabled = false,
                         )
                     }
                 }
