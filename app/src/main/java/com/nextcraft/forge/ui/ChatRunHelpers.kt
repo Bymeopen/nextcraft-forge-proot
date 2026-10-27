@@ -32,6 +32,7 @@ internal fun isTransientAgentFailure(reason: String): Boolean {
         "stream idle timeout", "context deadline exceeded", "sent nothing for 5 minutes", "stream was interrupted",
         // agy's own wording for a dropped request, and our message for an unreachable Google.
         "network issue connecting to the server", "could not reach google",
+        "could not fetch the model catalog", "invalid model selection", "not recognized as a known model",
         "dropped mid-answer", "connection reset", "server returned an error", "overloaded", "code 500", "code 502",
         "code 503", "internal error encountered",
         // The agent's saved session is gone; the retry starts a new one with the chat history.
