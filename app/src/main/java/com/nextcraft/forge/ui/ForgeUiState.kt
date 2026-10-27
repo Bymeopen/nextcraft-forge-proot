@@ -152,6 +152,8 @@ data class ForgeUiState(
     /** Stored engine choice id (auto / chroot / proot). */
     val runtimeEngineChoice: String = "auto",
     val runtimeInstalled: Boolean = false,
+    /** False until the first root/rootfs probe finishes, so the setup screen is not shown on stale defaults. */
+    val runtimeStatusLoaded: Boolean = false,
     val setupSnapshot: RuntimeSetupSnapshot = RuntimeSetupSnapshot(),
     val selectedDevStacks: Set<DevStack> = setOf(DevStack.WEB, DevStack.PYTHON, DevStack.ANDROID),
     val installedDevStacks: Set<DevStack> = emptySet(),

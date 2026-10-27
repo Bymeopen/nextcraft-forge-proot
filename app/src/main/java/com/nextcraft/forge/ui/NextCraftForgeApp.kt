@@ -60,6 +60,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -155,6 +156,11 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
     var showFigmaDialog by rememberSaveable { mutableStateOf(false) }
     if (paletteOpen) ForgeCommandPalette(onDismiss = { paletteOpen = false }, onOpen = viewModel::selectTab)
 
+    // Wait for the first root/rootfs probe; otherwise the setup screen flashes with a false "no root" result.
+    if (!state.runtimeStatusLoaded && !bypassSetupGate) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
+    }
     if ((!state.runtimeInstalled && !bypassSetupGate) || !state.ramSupported || !state.androidVersionSupported) {
         RuntimeOnboardingScreen(
             state = state,

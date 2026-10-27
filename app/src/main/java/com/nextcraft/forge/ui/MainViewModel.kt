@@ -538,6 +538,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     rootAvailable = rootOk,
                     prootAvailable = engine == RuntimeEngine.PROOT,
                     runtimeInstalled = installed,
+                    runtimeStatusLoaded = true,
                     selectedDevStacks = savedStacks,
                     installedDevStacks = installedStacks,
                     agentKind = savedAgent,
@@ -646,6 +647,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     rootAvailable = rootOk,
                     prootAvailable = engine == RuntimeEngine.PROOT,
                     runtimeInstalled = installed,
+                    runtimeStatusLoaded = true,
                     installedDevStacks = installedStacks,
                     installedAgents = installedAgents,
                 )
