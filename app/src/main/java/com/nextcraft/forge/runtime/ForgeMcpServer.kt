@@ -24,8 +24,47 @@ internal object ForgeMcpServer {
     const val FORGE_MCP_GUEST_PATH = "/$GUEST_BIN_DIR/$FORGE_MCP_SCRIPT_NAME"
     const val PLAYWRIGHT_WRAPPER_NAME = "forge-playwright-mcp"
     const val PLAYWRIGHT_WRAPPER_GUEST_PATH = "/$GUEST_BIN_DIR/$PLAYWRIGHT_WRAPPER_NAME"
+    const val UVX_WRAPPER_NAME = "uvx"
+    const val UVX_WRAPPER_GUEST_PATH = "/$GUEST_BIN_DIR/$UVX_WRAPPER_NAME"
 
     private val VALID_DSH_SERVER_NAME = Regex("^[A-Za-z0-9_-]{1,32}$")
+
+    val UVX_WRAPPER_SH: String = """#!/bin/sh
+# ARM64 Android Chroot/PRoot wrapper for uvx (Python MCP package runner):
+# Delegates to native uvx when installed, or auto-installs/runs via pip/venv inside /root/.cache/forge-uvx.
+for bin in /root/.local/bin/uvx /usr/local/bin/uvx /usr/bin/uvx; do
+    if [ -x "${'$'}bin" ]; then
+        exec "${'$'}bin" "${'$'}@"
+    fi
+done
+pkg=""
+entry=""
+if [ "${'$'}1" = "--from" ] && [ -n "${'$'}2" ] && [ -n "${'$'}3" ]; then
+    pkg="${'$'}2"
+    entry="${'$'}3"
+    shift 3
+elif [ -n "${'$'}1" ]; then
+    pkg="${'$'}1"
+    entry="${'$'}1"
+    shift 1
+else
+    echo "Usage: uvx [--from <pkg>] <tool> [args...]" >&2
+    exit 2
+fi
+venv_dir="/root/.cache/forge-uvx/${'$'}(printf '%s' "${'$'}pkg" | tr -c 'A-Za-z0-9_.-' '_')"
+if [ ! -x "${'$'}venv_dir/bin/${'$'}entry" ]; then
+    python3 -m venv "${'$'}venv_dir" >/dev/null 2>&1 || {
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get install -y -qq python3-venv python3-pip >/dev/null 2>&1 || true
+        python3 -m venv "${'$'}venv_dir" >/dev/null 2>&1
+    }
+    "${'$'}venv_dir/bin/pip" install --quiet --disable-pip-version-check "${'$'}pkg" >/dev/null 2>&1
+fi
+if [ -x "${'$'}venv_dir/bin/${'$'}entry" ]; then
+    exec "${'$'}venv_dir/bin/${'$'}entry" "${'$'}@"
+fi
+exec python3 -m "${'$'}(printf '%s' "${'$'}entry" | tr '-' '_')" "${'$'}@"
+"""
 
     val PLAYWRIGHT_WRAPPER_SH: String = """#!/bin/sh
 # ARM64 Android Chroot/PRoot wrapper for @playwright/mcp:
@@ -657,6 +696,7 @@ if __name__ == "__main__":
         val binDir = File(rootfs, GUEST_BIN_DIR)
         writeExecutable(File(binDir, FORGE_MCP_SCRIPT_NAME), FORGE_MCP_SERVER_PY)
         writeExecutable(File(binDir, PLAYWRIGHT_WRAPPER_NAME), PLAYWRIGHT_WRAPPER_SH)
+        writeExecutable(File(binDir, UVX_WRAPPER_NAME), UVX_WRAPPER_SH)
     }
 
     /**
