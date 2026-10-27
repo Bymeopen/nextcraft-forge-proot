@@ -257,7 +257,7 @@ done
 
 if [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
     mkdir -p "$ROOTFS/etc"
-    printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "$ROOTFS/etc/resolv.conf"
+    printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions use-vc timeout:2 attempts:2 rotate\n" > "$ROOTFS/etc/resolv.conf"
 fi
 
 fix_workspace_ownership() {

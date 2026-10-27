@@ -55,6 +55,7 @@ class ConnectorsTest {
             }
             assertTrue(java.io.File(tempRootfs, "opt/nextcraft/bin/forge-mcp-server.py").isFile)
             assertTrue(java.io.File(tempRootfs, "opt/nextcraft/bin/forge-playwright-mcp").isFile)
+            assertTrue(java.io.File(tempRootfs, "opt/nextcraft/bin/uvx").isFile)
 
             val managed = org.json.JSONObject()
                 .put("forge-figma", org.json.JSONObject().put("type", "stdio").put("command", "npx").put("args", org.json.JSONArray().put("-y").put("figma-developer-mcp")))

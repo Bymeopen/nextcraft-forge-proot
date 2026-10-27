@@ -108,19 +108,31 @@ internal object AntigravityEventParser {
 
 private fun antigravityToolDisplayName(name: String): String = when (name.lowercase()) {
     "run_command" -> "Bash"
-    "write_to_file", "replace_file_content", "multi_replace_file_content" -> "Write"
-    "view_file" -> "Read"
+    "write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file" -> "Write"
+    "view_file", "read_file" -> "Read"
     "list_dir" -> "List files"
     "grep_search", "search_files" -> "Search"
     "schedule" -> "Wait"
     "manage_task" -> "Manage task"
-    else -> name.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    "call_mcp_tool" -> "MCP"
+    else -> if (name.startsWith("mcp_", ignoreCase = true)) {
+        "MCP · " + name.removePrefix("mcp_").replace('_', ' ')
+    } else {
+        name.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
 }
 
 private fun antigravityToolDetail(step: JSONObject, rawName: String): String {
     step.stringOrEmpty("description").takeIf(String::isNotBlank)?.let { return redactToolDetail(it) }
     val info = step.optJSONObject("tool_info")
     val parameters = info?.optJSONObject("parameters")
+    if (rawName.equals("call_mcp_tool", ignoreCase = true) && parameters != null) {
+        val server = parameters.stringOrEmpty("ServerName")
+        val tool = parameters.stringOrEmpty("ToolName")
+        if (server.isNotBlank() || tool.isNotBlank()) {
+            return redactToolDetail(listOf(server, tool).filter { it.isNotBlank() }.joinToString(" / "))
+        }
+    }
     val preferredKeys = when (rawName.lowercase()) {
         "run_command" -> listOf("CommandLine", "command", "cmd")
         "write_to_file", "replace_file_content", "multi_replace_file_content" ->

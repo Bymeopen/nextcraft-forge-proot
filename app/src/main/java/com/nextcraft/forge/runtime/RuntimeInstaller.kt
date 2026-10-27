@@ -600,13 +600,7 @@ class RuntimeInstaller(private val context: Context) {
             )
             runCatching { Os.chmod(ghHosts.absolutePath, 384) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) } // 0600
         }
-        runCatching {
-            val managedMcp = ConnectorStore(context).mcpServersJson()
-            AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
-            val dshPatch = File(rootfs, "root/.dsh/cordis.patch.yml")
-            writeRootfsFileAtomically(dshPatch, ForgeMcpServer.toDshCordisPatchYaml(managedMcp), mode = 0b110000000)
-            ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
-        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+        syncMcpConfigs()
     }
 
     /** Removes stored Git and GitHub CLI credentials from the guest rootfs. */
@@ -618,6 +612,11 @@ class RuntimeInstaller(private val context: Context) {
             RootfsRepair.reclaimOwnership(file, AndroidProcess.myUid())
             if (!file.delete() && file.exists()) Log.w("RuntimeInstaller", "Could not remove ${file.name}")
         }
+        syncMcpConfigs()
+    }
+
+    /** Synchronizes enabled MCP connectors into Antigravity (`mcp_config.json`), DeepSeek Harness (`cordis.patch.yml`), and Claude Code (`~/.claude.json`). */
+    fun syncMcpConfigs() {
         runCatching {
             val managedMcp = ConnectorStore(context).mcpServersJson()
             AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
@@ -2571,7 +2570,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         if (java.nio.file.Files.isSymbolicLink(resolvFile.toPath())) {
             resolvFile.delete()
         }
-        val resolver = servers.joinToString("\n") { "nameserver $it" } + "\noptions timeout:2 attempts:2 rotate\n"
+        val resolver = servers.joinToString("\n") { "nameserver $it" } + "\noptions use-vc timeout:2 attempts:2 rotate\n"
         try {
             // A link that survived the delete above (not ours to unlink) would send the write into /run, which is root's.
             if (java.nio.file.Files.isSymbolicLink(resolvFile.toPath())) throw java.io.IOException("resolv.conf is still a symlink")
@@ -3536,7 +3535,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
 
             if [ ! -s "${'$'}ROOTFS/etc/resolv.conf" ]; then
                 mkdir -p "${'$'}ROOTFS/etc"
-                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "${'$'}ROOTFS/etc/resolv.conf"
+                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions use-vc timeout:2 attempts:2 rotate\n" > "${'$'}ROOTFS/etc/resolv.conf"
             fi
 
             fix_workspace_ownership() {
@@ -3771,7 +3770,7 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
 
             if [ ! -s "${'$'}ROOTFS/etc/resolv.conf" ]; then
                 mkdir -p "${'$'}ROOTFS/etc"
-                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "${'$'}ROOTFS/etc/resolv.conf"
+                printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions use-vc timeout:2 attempts:2 rotate\n" > "${'$'}ROOTFS/etc/resolv.conf"
             fi
 
             unset ANDROID_ROOT ANDROID_DATA ANDROID_ART_ROOT ANDROID_I18N_ROOT ANDROID_TZDATA_ROOT

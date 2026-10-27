@@ -1516,6 +1516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     McpConnector(id, name.trim().take(40), transport, cleanTarget, secretName.trim(), existing?.enabled ?: true),
                     secret.takeIf { it.isNotBlank() },
                 )
+                installer.syncMcpConfigs()
             }
             _state.update { it.copy(bannerMessage = UiText.res(R.string.connector_saved)) }
             loadConnectors()
@@ -1525,14 +1526,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setConnectorEnabled(id: String, enabled: Boolean) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { connectorStore.setEnabled(id, enabled) }
+            withContext(Dispatchers.IO) {
+                connectorStore.setEnabled(id, enabled)
+                installer.syncMcpConfigs()
+            }
             loadConnectors()
         }
     }
 
     fun deleteConnector(id: String) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { connectorStore.delete(id) }
+            withContext(Dispatchers.IO) {
+                connectorStore.delete(id)
+                installer.syncMcpConfigs()
+            }
             loadConnectors()
         }
     }
@@ -4059,7 +4066,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val proc = ProcessBuilder(
                         "su",
                         "-c",
-                        "uiautomator dump /sdcard/forge_ui_dump.xml >/dev/null 2>&1 && cat /sdcard/forge_ui_dump.xml; rm -f /sdcard/forge_ui_dump.xml",
+                        "uiautomator dump /data/local/tmp/forge_ui_dump.xml >/dev/null 2>&1 && cat /data/local/tmp/forge_ui_dump.xml; rm -f /data/local/tmp/forge_ui_dump.xml",
                     ).redirectErrorStream(true).redirectOutput(outFile).start()
                     runCatching { proc.outputStream.close() }
                     val finished = proc.waitFor(12, java.util.concurrent.TimeUnit.SECONDS)
@@ -4073,7 +4080,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     uiInspectorNodes = nodes,
                     uiInspectorBusy = false,
-                    bannerMessage = if (nodes.isEmpty()) UiText.res(R.string.mt_root_required) else it.bannerMessage,
+                    bannerMessage = if (nodes.isEmpty()) UiText.res(R.string.inspector_empty_hint) else it.bannerMessage,
                 )
             }
         }

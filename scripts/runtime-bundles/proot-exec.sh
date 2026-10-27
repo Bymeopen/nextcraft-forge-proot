@@ -56,7 +56,7 @@ mkdir -p "$ROOTFS$GUEST_WORKSPACE" "$HOST_WORKSPACE" "$HOST_BRIDGE" "$HOST_RESP"
 
 if [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
     mkdir -p "$ROOTFS/etc"
-    printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "$ROOTFS/etc/resolv.conf"
+    printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions use-vc timeout:2 attempts:2 rotate\n" > "$ROOTFS/etc/resolv.conf"
 fi
 
 unset ANDROID_ROOT ANDROID_DATA ANDROID_ART_ROOT ANDROID_I18N_ROOT ANDROID_TZDATA_ROOT

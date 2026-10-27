@@ -194,8 +194,10 @@ fun AgentScreen(
     var renameOpen by rememberSaveable { mutableStateOf(false) }
     var modelSheetOpen by rememberSaveable { mutableStateOf(false) }
     var routeSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var connectorsSheetOpen by rememberSaveable { mutableStateOf(false) }
     // The chip shows the model of the primary agent, which can differ from the selected one in the multi-agent modes.
     androidx.compose.runtime.LaunchedEffect(state.routing) { viewModel.refreshAgentProfiles(); viewModel.refreshReadyAgents() }
+    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.loadConnectors() }
     var branchSheetOpen by rememberSaveable { mutableStateOf(false) }
     androidx.activity.compose.BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
 
@@ -603,6 +605,8 @@ fun AgentScreen(
             onGenerateImage = { imageDialogOpen = true },
             workspaceFiles = state.workspaceFiles,
             readyAgents = state.readyAgents,
+            connectors = state.connectors,
+            onOpenConnectors = { connectorsSheetOpen = true },
             onExecuteSlashCommand = { cmd -> viewModel.sendPrompt(cmd) },
             onSelectAgentTag = {
                 if (state.routing.mode == com.nextcraft.forge.model.RouteMode.SINGLE) {
@@ -614,6 +618,7 @@ fun AgentScreen(
     }
     }
 
+    if (connectorsSheetOpen) ConnectorsSheet(state = state, viewModel = viewModel, onDismiss = { connectorsSheetOpen = false })
     if (usageOpen) ChatUsageSheet(state = state, onDismiss = { usageOpen = false })
     if (scheduleOpen) ScheduleDialog(state = state, viewModel = viewModel, onDismiss = { scheduleOpen = false })
     if (branchSheetOpen) BranchSheet(state = state, viewModel = viewModel, chatId = state.activeChatId, onDismiss = { branchSheetOpen = false })
