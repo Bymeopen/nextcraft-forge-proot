@@ -429,10 +429,8 @@ class ChatBranches(context: Context) {
               local attempt=0
               while true; do
                 forge_wait_git_lock
-                if git -c user.name="NextCraft Forge" -c user.email="forge@localhost" -c safe.directory='*' -c core.fileMode=false "§@"; then
-                  return 0
-                fi
-                local rc=§?
+                local rc=0
+                git -c user.name="NextCraft Forge" -c user.email="forge@localhost" -c safe.directory='*' -c core.fileMode=false "§@" && return 0 || rc=§?
                 if [ "§attempt" -lt 6 ] && { [ -f ".git/index.lock" ] || [ -f "§M/.git/index.lock" ] || [ -f "§C/.git/index.lock" ] || pgrep -x git >/dev/null 2>&1 || pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; }; then
                   if [ "§attempt" -eq 0 ]; then echo "[FORGE_GIT_WAITING]"; fi
                   attempt=§((attempt + 1))
@@ -445,7 +443,7 @@ class ChatBranches(context: Context) {
         """.trimIndent() + "\n" + body.trimIndent()).replace('§', '$')
 
         /** Makes sure the project is a git repository with everything committed, then clones it for the chat. */
-        private val ENSURE_SCRIPT = script("""
+        internal val ENSURE_SCRIPT = script("""
             cd "§M"
             [ -d .git ] || G init -q -b main
             mkdir -p .git/info
@@ -507,7 +505,7 @@ class ChatBranches(context: Context) {
             if ! G diff --cached --quiet; then G commit -q -m "§MSG"; fi
         """)
 
-        private val COMMIT_SCRIPT = script("""
+        internal val COMMIT_SCRIPT = script("""
             cd "§C"
             # `add -A` marks every conflicted file as resolved. After a merge that stopped on conflicts, a file that still
             # holds conflict markers must not be committed: the markers would end up in the user's project.
@@ -523,7 +521,7 @@ class ChatBranches(context: Context) {
             fi
         """)
 
-        private val STATUS_SCRIPT = script("""
+        internal val STATUS_SCRIPT = script("""
             cd "§C"
             # Auto-reconcile when the isolated branch is already synchronized with the main project repository (§M),
             # so redundant commit/merge prompts are cleared automatically.
@@ -556,7 +554,7 @@ class ChatBranches(context: Context) {
         """)
 
         /** Merges the committed branch into the project; a conflict aborts the merge and leaves the project untouched. */
-        private val MERGE_SCRIPT = script("""
+        internal val MERGE_SCRIPT = script("""
             if [ -n "§(G -C "§C" diff --name-only --diff-filter=U)" ]; then
               echo RESULT=conflict
               echo "files=§(G -C "§C" diff --name-only --diff-filter=U | tr '\n' ',')"

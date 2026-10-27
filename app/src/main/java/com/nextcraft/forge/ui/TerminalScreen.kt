@@ -178,7 +178,12 @@ fun TerminalScreen(
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.terminal_clear_terminal)) },
                             enabled = session != null,
-                            onClick = { menuOpen = false; viewModel.clearTerminal(chatId) },
+                            onClick = {
+                                menuOpen = false
+                                viewModel.clearTerminal(chatId)
+                                // reset() only edits the emulator buffer; repaint now instead of waiting for the next key.
+                                holder.view?.onScreenUpdated()
+                            },
                         )
                     }
                 }
