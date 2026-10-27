@@ -14,6 +14,9 @@ VERSION_NAME="${3:?versionName}"
 TAG="${4:?release tag}"
 VARIANT="${5:-release}"
 NOTES="${6:-}"
+if [[ -z "$NOTES" ]] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    NOTES="$(git log -n 8 --no-merges --pretty=format:'• %s (%h)' 2>/dev/null || true)"
+fi
 REPO="${NEXTCRAFT_REPO:-bymeopen/nextcraft-forge}"
 OUT="${NEXTCRAFT_OUT_DIR:-$(dirname "$APK")}/update-manifest.json"
 # Optional: the applicationId the APK installs as. The app ignores a manifest meant for another package (for example

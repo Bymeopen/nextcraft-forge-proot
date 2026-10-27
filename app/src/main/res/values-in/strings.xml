@@ -1416,7 +1416,7 @@
     <string name="settings_schedule_agent_subtitle">Agen boleh mengulang atau memantau sesuatu dengan menambah pewaktu ke chat (maks 3 per chat).</string>
     <string name="chg_notif_channel">Yang baru</string>
     <string name="chg_notif_title">NextCraft Dev diperbarui</string>
-    <string name="chg_notif_text">• Chat lebih lancar: tidak lagi macet saat agent bekerja lama\n• Perubahan file dari agent tersimpan otomatis\n• Build Gradle disesuaikan dengan RAM HP (heap, daemon, cache): build ulang jauh lebih cepat\n• Proyek Room/KSP (mis. NewPipe) berhasil sejak build pertama\n• Tombol Stop benar-benar menghentikan agent; bersihkan cache unduhan di Pengaturan\n• Runtime 2026.10.2: Claude Code 2.1.308, Antigravity 1.4.5, DeepSeek 0.2.1\n• Proyek cepat diberi nomor: Proyek cepat 1, 2, 3…</string>
+    <string name="chg_notif_text">• Pembaruan aplikasi otomatis me-refresh manifest &amp; catatan rilis (changelog) terbaru di setiap update\n• GitHub MCP Connector otomatis tersinkronisasi dari GITHUB_TOKEN yang terhubung\n• Audit Fullstack 5-Pilar (100/100): pengamanan penuh Chroot &amp; PRoot, verifikasi HTTPS redirect, dan peningkatan performa UI\n• Suite MCP Desain, Mobile, Game &amp; Playwright ARM64 bawaan di /opt/nextcraft/bin\n• Chat &amp; build Gradle lebih cepat, stabil, dan otomatis tersinkronisasi ke GitHub</string>
     <string name="notif_channel_sign_in">Masuk akun</string>
     <string name="notif_sign_in_return">Ketuk untuk kembali ke NextCraft Dev</string>
     <string name="settings_android_host_tools">Akses sistem Android</string>

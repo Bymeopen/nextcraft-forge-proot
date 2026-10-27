@@ -273,6 +273,10 @@ class AppPreferences(private val context: Context) {
         get() = preferences.getString("debug_update_manifest_url", "") ?: ""
         set(value) { preferences.edit().putString("debug_update_manifest_url", value).apply() }
 
+    var latestReleaseNotes: String
+        get() = preferences.getString("latest_release_notes", "") ?: ""
+        set(value) { preferences.edit().putString("latest_release_notes", value).apply() }
+
     /** Development stacks the user picked during onboarding (names of DevStack). */
     var selectedDevStacks: Set<String>
         get() {
