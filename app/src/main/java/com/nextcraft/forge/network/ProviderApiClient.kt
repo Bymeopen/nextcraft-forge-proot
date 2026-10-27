@@ -3,13 +3,13 @@ package com.nextcraft.forge.network
 import android.content.Context
 import com.nextcraft.forge.model.ProviderProtocol
 import com.nextcraft.forge.model.stringOrEmpty
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.UUID
 
 data class DiscoveredModel(
     val id: String,
@@ -38,49 +38,49 @@ class ProviderApiClient(@Suppress("UNUSED_PARAMETER") private val context: Conte
         apiKey: String,
         protocol: ProviderProtocol,
     ): ModelDiscoveryResult = withContext(Dispatchers.IO) {
-        val effectiveBaseUrl = if (protocol == ProviderProtocol.CLAUDE_LOGIN && baseUrl.isBlank()) {
-            "https://api.anthropic.com"
-        } else {
-            baseUrl.trim()
-        }
-        if (effectiveBaseUrl.isBlank()) {
+        val targetBase = resolveDefaultBase(baseUrl, protocol)
+        if (targetBase.isBlank()) {
             return@withContext ModelDiscoveryResult.Failure("Enter a base URL first.")
         }
 
-        var authError = false
-        var lastMessage = "This provider did not expose a model list. You can enter a custom model name."
-        var lastProviderMessage: String? = null
-        for (endpoint in modelEndpoints(effectiveBaseUrl, protocol)) {
-            // OpenRouter's complete catalog is public. Fetch it anonymously even when
-            // OpenRouter is configured through Custom API so an account-scoped key does
-            // not reduce discovery to the models allowed by that key's preferences.
-            val discoveryKey = if (isOpenRouterCatalogEndpoint(endpoint)) "" else apiKey
-            val response = request(endpoint, "GET", discoveryKey, protocol = protocol)
+        var rejectedAuth = false
+        var fallbackError = "This provider did not expose a model list. You can enter a custom model name."
+        var upstreamDetail: String? = null
+
+        for (candidateUri in buildDiscoveryUris(targetBase, protocol)) {
+            val tokenToUse = if (isPublicOpenRouterCatalog(candidateUri)) "" else apiKey
+            val resp = executeHttpCall(
+                uri = candidateUri,
+                verb = "GET",
+                token = tokenToUse,
+                wireProtocol = protocol,
+            )
             when {
-                response.code == 401 || response.code == 403 -> {
-                    authError = true
-                    lastProviderMessage = providerErrorMessage(response.body)
+                resp.statusCode == 401 || resp.statusCode == 403 -> {
+                    rejectedAuth = true
+                    upstreamDetail = extractRedactedError(resp.payload)
                 }
-                response.code in 200..299 -> {
-                    val models = ModelResponseParser.parse(response.body)
-                    if (models.isNotEmpty()) return@withContext ModelDiscoveryResult.Success(models, endpoint)
-                    lastMessage = "The provider replied, but its model list was empty or unsupported."
+                resp.statusCode in 200..299 -> {
+                    val catalog = ModelResponseParser.parse(resp.payload)
+                    if (catalog.isNotEmpty()) {
+                        return@withContext ModelDiscoveryResult.Success(catalog, candidateUri)
+                    }
+                    fallbackError = "The provider replied, but its model list was empty or unsupported."
                 }
-                response.code > 0 && response.code != 404 -> {
-                    lastMessage = friendlyHttpError(response.code)
-                    lastProviderMessage = providerErrorMessage(response.body)
+                resp.statusCode > 0 && resp.statusCode != 404 -> {
+                    fallbackError = describeStatusFailure(resp.statusCode)
+                    upstreamDetail = extractRedactedError(resp.payload)
                 }
-                response.error != null -> lastMessage = response.error
+                resp.transportError != null -> fallbackError = resp.transportError
             }
         }
-        ModelDiscoveryResult.Failure(
-            if (authError) {
-                "Check the saved API key, then try refreshing again."
-            } else {
-                lastMessage
-            },
-            lastProviderMessage,
-        )
+
+        val summary = if (rejectedAuth) {
+            "Check the saved API key, then try refreshing again."
+        } else {
+            fallbackError
+        }
+        ModelDiscoveryResult.Failure(summary, upstreamDetail)
     }
 
     suspend fun validate(
@@ -92,200 +92,220 @@ class ProviderApiClient(@Suppress("UNUSED_PARAMETER") private val context: Conte
         openRouterProviderOrder: String = "",
         openRouterAllowFallbacks: Boolean = true,
     ): ConnectionValidation = withContext(Dispatchers.IO) {
-        val effectiveBaseUrl = if (protocol == ProviderProtocol.CLAUDE_LOGIN && baseUrl.isBlank()) {
-            "https://api.anthropic.com"
-        } else {
-            baseUrl.trim()
-        }
-        val effectiveModel = if (
-            (protocol == ProviderProtocol.CLAUDE_LOGIN || protocol == ProviderProtocol.ANTHROPIC) &&
-            (model.isBlank() || model.trim().equals("default", ignoreCase = true))
-        ) {
-            "claude-sonnet-4-6"
-        } else {
-            model.trim()
-        }
-        if (effectiveBaseUrl.isBlank() || effectiveModel.isBlank()) {
+        val targetBase = resolveDefaultBase(baseUrl, protocol)
+        val trimmedModel = model.trim()
+        val usesAnthropicDefault = (protocol == ProviderProtocol.CLAUDE_LOGIN || protocol == ProviderProtocol.ANTHROPIC) &&
+            (trimmedModel.isEmpty() || trimmedModel.equals("default", ignoreCase = true))
+        val targetModel = if (usesAnthropicDefault) "claude-sonnet-4-6" else trimmedModel
+
+        if (targetBase.isBlank() || targetModel.isBlank()) {
             return@withContext ConnectionValidation.Failure("Base URL, model, and API key are required.")
         }
-        val endpoint = messagesEndpoint(effectiveBaseUrl, protocol)
-        val body = validationBody(effectiveModel, protocol, openRouterProviderOrder, openRouterAllowFallbacks)
-        val response = request(
-            endpoint = endpoint,
-            method = "POST",
-            apiKey = apiKey,
-            body = body,
-            protocol = protocol,
+
+        val probeUri = buildInferenceUri(targetBase, protocol)
+        val probeJson = validationBody(targetModel, protocol, openRouterProviderOrder, openRouterAllowFallbacks)
+        val resp = executeHttpCall(
+            uri = probeUri,
+            verb = "POST",
+            token = apiKey,
+            jsonBody = probeJson,
+            wireProtocol = protocol,
             connectTimeoutMs = 12_000,
             readTimeoutMs = 45_000,
         )
+
+        val errDetail = extractRedactedError(resp.payload)
         when {
-            response.code in 200..299 -> ConnectionValidation.Success("Connection verified.")
-            response.code == 401 || response.code == 403 -> ConnectionValidation.Failure(
+            resp.statusCode in 200..299 -> ConnectionValidation.Success("Connection verified.")
+            resp.statusCode == 401 || resp.statusCode == 403 -> ConnectionValidation.Failure(
                 "Check this API key or select another saved key.",
-                providerErrorMessage(response.body),
+                errDetail,
                 "Rejected",
             )
-            response.code == 404 -> ConnectionValidation.Failure(
+            resp.statusCode == 404 -> ConnectionValidation.Failure(
                 "Check the Base URL and selected gateway protocol.",
-                providerErrorMessage(response.body),
+                errDetail,
                 "Endpoint error",
             )
-            response.code == 400 && response.body.contains("model", ignoreCase = true) ->
-                ConnectionValidation.Failure(
-                    "Refresh the model list or select a different model.",
-                    providerErrorMessage(response.body),
-                    "Model error",
-                )
-            response.code == 429 -> ConnectionValidation.Failure(
+            resp.statusCode == 400 && resp.payload.contains("model", ignoreCase = true) -> ConnectionValidation.Failure(
+                "Refresh the model list or select a different model.",
+                errDetail,
+                "Model error",
+            )
+            resp.statusCode == 429 -> ConnectionValidation.Failure(
                 "Wait a moment, then retry or use another API key.",
-                providerErrorMessage(response.body),
+                errDetail,
                 "Rate limited",
             )
-            response.code in 500..599 -> ConnectionValidation.Failure(
+            resp.statusCode in 500..599 -> ConnectionValidation.Failure(
                 "The provider is temporarily unavailable. Try again shortly.",
-                providerErrorMessage(response.body),
+                errDetail,
                 "Provider error",
             )
-            response.code > 0 -> ConnectionValidation.Failure(
+            resp.statusCode > 0 -> ConnectionValidation.Failure(
                 "Review the model, protocol, and endpoint settings.",
-                providerErrorMessage(response.body),
+                errDetail,
                 "Request failed",
             )
-            response.error?.contains("timeout", ignoreCase = true) == true ||
-                response.error?.contains("timed out", ignoreCase = true) == true ->
-                ConnectionValidation.Failure(
-                    "Check your connection and try again.",
-                    response.error,
-                    "Timed out",
-                )
+            resp.transportError?.contains("timeout", ignoreCase = true) == true ||
+                resp.transportError?.contains("timed out", ignoreCase = true) == true -> ConnectionValidation.Failure(
+                "Check your connection and try again.",
+                resp.transportError,
+                "Timed out",
+            )
             else -> ConnectionValidation.Failure(
                 "Check your internet connection and provider settings.",
-                response.error,
+                resp.transportError,
                 "Network error",
             )
         }
     }
 
-    private fun request(
-        endpoint: String,
-        method: String,
-        apiKey: String,
-        body: String? = null,
-        protocol: ProviderProtocol,
+    private fun resolveDefaultBase(rawUrl: String, protocol: ProviderProtocol): String {
+        val clean = rawUrl.trim()
+        return if (protocol == ProviderProtocol.CLAUDE_LOGIN && clean.isEmpty()) {
+            "https://api.anthropic.com"
+        } else {
+            clean
+        }
+    }
+
+    private fun executeHttpCall(
+        uri: String,
+        verb: String,
+        token: String,
+        jsonBody: String? = null,
+        wireProtocol: ProviderProtocol,
         connectTimeoutMs: Int = 12_000,
         readTimeoutMs: Int = 20_000,
-    ): HttpResult {
-        if (!LocalNetwork.isPlainHttpAllowed(endpoint)) {
-            return HttpResult(
-                0,
-                "",
-                "Plain http:// is only allowed for localhost. Use https:// for this server.",
+    ): TransportResponse {
+        if (!LocalNetwork.isPlainHttpAllowed(uri)) {
+            return TransportResponse(
+                statusCode = 0,
+                payload = "",
+                transportError = "Plain http:// is only allowed for localhost. Use https:// for this server.",
             )
         }
         return runCatching {
-            val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                // Redirects are not followed: HttpURLConnection drops Authorization on a cross-host redirect but not
-                // custom headers such as x-api-key, so a redirecting base URL could receive the key elsewhere.
+            val parsedUrl = URL(uri)
+            val conn = (parsedUrl.openConnection() as HttpURLConnection).apply {
+                requestMethod = verb
                 instanceFollowRedirects = false
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Content-Type", "application/json")
-                val cleanKey = apiKey.trim()
-                val isClaudeOAuthToken = cleanKey.startsWith("sk-ant-oat")
-                val isAnthropicApiKey = cleanKey.startsWith("sk-ant-api")
-                val isAnthropicHost = runCatching {
-                    URL(endpoint).host.equals("api.anthropic.com", ignoreCase = true)
-                }.getOrDefault(endpoint.contains("api.anthropic.com", ignoreCase = true))
-                val isAnthropicProtocol = protocol == ProviderProtocol.ANTHROPIC ||
-                    protocol == ProviderProtocol.CLAUDE_LOGIN ||
-                    protocol == ProviderProtocol.ANTHROPIC_GATEWAY
-
-                if (cleanKey.isNotEmpty()) {
-                    val useOAuthBearer = isClaudeOAuthToken ||
-                        (protocol == ProviderProtocol.CLAUDE_LOGIN && !isAnthropicApiKey)
-                    when {
-                        useOAuthBearer -> {
-                            setRequestProperty("Authorization", "Bearer $cleanKey")
-                            setRequestProperty("anthropic-version", "2023-06-01")
-                            setRequestProperty("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-                        }
-                        isAnthropicHost || protocol == ProviderProtocol.ANTHROPIC || isAnthropicApiKey -> {
-                            // First-party api.anthropic.com rejects Authorization: Bearer <sk-ant-api...>
-                            // with HTTP 401 "Invalid bearer token". Send x-api-key only.
-                            setRequestProperty("x-api-key", cleanKey)
-                            setRequestProperty("anthropic-version", "2023-06-01")
-                        }
-                        isAnthropicProtocol -> {
-                            setRequestProperty("Authorization", "Bearer $cleanKey")
-                            setRequestProperty("x-api-key", cleanKey)
-                            setRequestProperty("anthropic-version", "2023-06-01")
-                        }
-                        else -> {
-                            setRequestProperty("Authorization", "Bearer $cleanKey")
-                        }
-                    }
-                } else if (isAnthropicProtocol) {
-                    setRequestProperty("anthropic-version", "2023-06-01")
-                }
-                if (endpoint.startsWith("https://opencode.ai/zen/")) {
+                attachAuthHeaders(this, parsedUrl, uri, token.trim(), wireProtocol)
+                if (uri.startsWith("https://opencode.ai/zen/")) {
                     setRequestProperty("User-Agent", "NextCraft-Forge-Android/1.0")
                     setRequestProperty("x-session-id", "session-${UUID.randomUUID()}")
                 }
-                if (body != null) doOutput = true
+                if (jsonBody != null) doOutput = true
             }
             try {
-                if (body != null) {
-                    connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                if (jsonBody != null) {
+                    conn.outputStream.use { out -> out.write(jsonBody.encodeToByteArray()) }
                 }
-                val code = connection.responseCode
-                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val responseBody = stream?.bufferedReader(Charsets.UTF_8)?.use { reader ->
-                    buildString {
-                        val buffer = CharArray(8 * 1024)
-                        while (length < MAX_PROVIDER_RESPONSE_CHARS) {
-                            val count = reader.read(buffer, 0, minOf(buffer.size, MAX_PROVIDER_RESPONSE_CHARS - length))
-                            if (count <= 0) break
-                            append(buffer, 0, count)
-                        }
+                val code = conn.responseCode
+                val activeStream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = activeStream?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+                    val sb = StringBuilder()
+                    val chunk = CharArray(8 * 1024)
+                    while (sb.length < RESPONSE_CHAR_CAP) {
+                        val maxRead = minOf(chunk.size, RESPONSE_CHAR_CAP - sb.length)
+                        val n = reader.read(chunk, 0, maxRead)
+                        if (n <= 0) break
+                        sb.append(chunk, 0, n)
                     }
+                    sb.toString()
                 }.orEmpty()
-                HttpResult(code, responseBody)
+                TransportResponse(code, text)
             } finally {
-                connection.disconnect()
+                conn.disconnect()
             }
-        }.getOrElse { HttpResult(0, "", it.message ?: "Network connection failed") }
-    }
-
-    private fun modelEndpoints(baseUrl: String, protocol: ProviderProtocol): List<String> {
-        val base = baseUrl.trim().trimEnd('/')
-        val withoutV1 = base.removeSuffix("/v1")
-        val withoutAnthropic = base.removeSuffix("/anthropic")
-        val candidates = when (protocol) {
-            ProviderProtocol.OPENROUTER -> listOf("$withoutV1/v1/models", "$base/models")
-            ProviderProtocol.OPENAI_CHAT, ProviderProtocol.OPENAI_RESPONSES -> listOf("$base/models", "$withoutV1/v1/models")
-            else -> listOf("$withoutV1/v1/models", "$base/models", "$withoutAnthropic/models", "$withoutAnthropic/v1/models")
+        }.getOrElse { err ->
+            TransportResponse(0, "", err.message ?: "Network connection failed")
         }
-        return candidates.distinct()
     }
 
-    private fun messagesEndpoint(baseUrl: String, protocol: ProviderProtocol): String {
-        val base = baseUrl.trim().trimEnd('/')
-        val withoutV1 = base.removeSuffix("/v1")
+    private fun attachAuthHeaders(
+        conn: HttpURLConnection,
+        parsedUrl: URL,
+        rawUri: String,
+        trimmedToken: String,
+        protocol: ProviderProtocol,
+    ) {
+        val isOatToken = trimmedToken.startsWith("sk-ant-oat")
+        val isAntApiKey = trimmedToken.startsWith("sk-ant-api")
+        val targetsOfficialAnthropic = runCatching {
+            parsedUrl.host.equals("api.anthropic.com", ignoreCase = true)
+        }.getOrDefault(rawUri.contains("api.anthropic.com", ignoreCase = true))
+
+        val isAnthropicFamily = protocol == ProviderProtocol.ANTHROPIC ||
+            protocol == ProviderProtocol.CLAUDE_LOGIN ||
+            protocol == ProviderProtocol.ANTHROPIC_GATEWAY
+
+        if (trimmedToken.isEmpty()) {
+            if (isAnthropicFamily) {
+                conn.setRequestProperty("anthropic-version", ANTHROPIC_API_VERSION)
+            }
+            return
+        }
+
+        val sendOAuthHeaders = isOatToken || (protocol == ProviderProtocol.CLAUDE_LOGIN && !isAntApiKey)
+        when {
+            sendOAuthHeaders -> {
+                conn.setRequestProperty("Authorization", "Bearer $trimmedToken")
+                conn.setRequestProperty("anthropic-version", ANTHROPIC_API_VERSION)
+                conn.setRequestProperty("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+            }
+            targetsOfficialAnthropic || protocol == ProviderProtocol.ANTHROPIC || isAntApiKey -> {
+                conn.setRequestProperty("x-api-key", trimmedToken)
+                conn.setRequestProperty("anthropic-version", ANTHROPIC_API_VERSION)
+            }
+            isAnthropicFamily -> {
+                conn.setRequestProperty("Authorization", "Bearer $trimmedToken")
+                conn.setRequestProperty("x-api-key", trimmedToken)
+                conn.setRequestProperty("anthropic-version", ANTHROPIC_API_VERSION)
+            }
+            else -> {
+                conn.setRequestProperty("Authorization", "Bearer $trimmedToken")
+            }
+        }
+    }
+
+    private fun buildDiscoveryUris(baseUrl: String, protocol: ProviderProtocol): List<String> {
+        val cleanBase = baseUrl.trim().trimEnd('/')
+        val strippedV1 = cleanBase.removeSuffix("/v1")
+        val strippedAnthropic = cleanBase.removeSuffix("/anthropic")
+        val rawList = when (protocol) {
+            ProviderProtocol.OPENROUTER -> listOf("$strippedV1/v1/models", "$cleanBase/models")
+            ProviderProtocol.OPENAI_CHAT, ProviderProtocol.OPENAI_RESPONSES -> listOf("$cleanBase/models", "$strippedV1/v1/models")
+            else -> listOf(
+                "$strippedV1/v1/models",
+                "$cleanBase/models",
+                "$strippedAnthropic/models",
+                "$strippedAnthropic/v1/models",
+            )
+        }
+        return rawList.distinct()
+    }
+
+    private fun buildInferenceUri(baseUrl: String, protocol: ProviderProtocol): String {
+        val cleanBase = baseUrl.trim().trimEnd('/')
+        val strippedV1 = cleanBase.removeSuffix("/v1")
         return when (protocol) {
-            ProviderProtocol.OPENROUTER -> "$withoutV1/v1/messages"
-            ProviderProtocol.OPENAI_CHAT -> "${base.removeSuffix("/chat/completions")}/chat/completions"
-            ProviderProtocol.OPENAI_RESPONSES -> "${base.removeSuffix("/responses")}/responses"
-            else -> "$withoutV1/v1/messages"
+            ProviderProtocol.OPENROUTER -> "$strippedV1/v1/messages"
+            ProviderProtocol.OPENAI_CHAT -> "${cleanBase.removeSuffix("/chat/completions")}/chat/completions"
+            ProviderProtocol.OPENAI_RESPONSES -> "${cleanBase.removeSuffix("/responses")}/responses"
+            else -> "$strippedV1/v1/messages"
         }
     }
 
-    private fun isOpenRouterCatalogEndpoint(endpoint: String): Boolean = runCatching {
-        val url = URL(endpoint)
-        url.host.equals("openrouter.ai", ignoreCase = true) &&
-            url.path.trimEnd('/').endsWith("/models")
+    private fun isPublicOpenRouterCatalog(uri: String): Boolean = runCatching {
+        val parsed = URL(uri)
+        parsed.host.equals("openrouter.ai", ignoreCase = true) &&
+            parsed.path.trimEnd('/').endsWith("/models")
     }.getOrDefault(false)
 
     internal fun validationBody(
@@ -293,119 +313,118 @@ class ProviderApiClient(@Suppress("UNUSED_PARAMETER") private val context: Conte
         protocol: ProviderProtocol,
         openRouterProviderOrder: String = "",
         openRouterAllowFallbacks: Boolean = true,
-    ): String = when (protocol) {
-        ProviderProtocol.OPENAI_RESPONSES -> JSONObject()
+    ): String {
+        if (protocol == ProviderProtocol.OPENAI_RESPONSES) {
+            val textPart = JSONObject().put("type", "input_text").put("text", "Hello, reply with 1 word.")
+            val userMsg = JSONObject().put("role", "user").put("content", JSONArray().put(textPart))
+            return JSONObject()
+                .put("model", model)
+                .put("input", JSONArray().put(userMsg))
+                .toString()
+        }
+
+        val chatMsg = JSONObject().put("role", "user").put("content", "Reply OK")
+        val rootObj = JSONObject()
             .put("model", model)
-            .put(
-                "input",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put(
-                            "content",
-                            JSONArray().put(
-                                JSONObject()
-                                    .put("type", "input_text")
-                                    .put("text", "Hello, reply with 1 word."),
-                            ),
-                        ),
-                ),
-            )
-            .toString()
-        ProviderProtocol.OPENAI_CHAT -> JSONObject()
-            .put("model", model)
-            .put("max_tokens", VALIDATION_MAX_TOKENS)
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", "Reply OK")))
-            .toString()
-        else -> JSONObject()
-            .put("model", model)
-            .put("max_tokens", VALIDATION_MAX_TOKENS)
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", "Reply OK")))
-            .also { body ->
-                val providers = openRouterProviderOrder.split(',')
-                    .map(String::trim)
-                    .filter(String::isNotBlank)
-                    .distinct()
-                if (protocol == ProviderProtocol.OPENROUTER && providers.isNotEmpty()) {
-                    body.put(
-                        "provider",
-                        JSONObject()
-                            .put("order", JSONArray(providers))
-                            .put("allow_fallbacks", openRouterAllowFallbacks),
-                    )
-                }
+            .put("max_tokens", PROBE_MAX_TOKENS)
+            .put("messages", JSONArray().put(chatMsg))
+
+        if (protocol == ProviderProtocol.OPENROUTER) {
+            val slugs = openRouterProviderOrder
+                .splitToSequence(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .toList()
+            if (slugs.isNotEmpty()) {
+                val routingObj = JSONObject()
+                    .put("order", JSONArray(slugs))
+                    .put("allow_fallbacks", openRouterAllowFallbacks)
+                rootObj.put("provider", routingObj)
             }
-            .toString()
+        }
+        return rootObj.toString()
     }
 
-    private fun friendlyHttpError(code: Int): String = when (code) {
+    private fun describeStatusFailure(statusCode: Int): String = when (statusCode) {
         429 -> "The provider rate limit was reached. Wait a moment and try again."
-        in 500..599 -> "The provider is temporarily unavailable (HTTP $code)."
-        else -> "The provider returned HTTP $code. Check the URL and account access."
+        in 500..599 -> "The provider is temporarily unavailable (HTTP $statusCode)."
+        else -> "The provider returned HTTP $statusCode. Check the URL and account access."
     }
 
-    private fun providerErrorMessage(body: String): String? {
-        if (body.isBlank()) return null
-        val extracted = runCatching {
-            val root = JSONObject(body)
-            when (val error = root.opt("error")) {
-                is JSONObject -> error.stringOrEmpty("message").ifBlank { error.stringOrEmpty("detail") }
-                is String -> error
-                else -> root.stringOrEmpty("message").ifBlank { root.stringOrEmpty("detail") }
+    private fun extractRedactedError(rawBody: String): String? {
+        if (rawBody.isBlank()) return null
+        val message = runCatching {
+            val json = JSONObject(rawBody)
+            when (val errNode = json.opt("error")) {
+                is JSONObject -> errNode.stringOrEmpty("message").ifBlank { errNode.stringOrEmpty("detail") }
+                is String -> errNode
+                else -> json.stringOrEmpty("message").ifBlank { json.stringOrEmpty("detail") }
             }
         }.getOrNull().orEmpty()
-        if (extracted.isBlank()) return null
-        return extracted
-            .replace(Regex("(?i)bearer\\s+\\S+"), "Bearer ••••")
-            .replace(Regex("(?i)sk-[a-z0-9_-]{8,}"), "sk-••••")
-            .replace(Regex("\\s+"), " ")
+        if (message.isBlank()) return null
+        return message
+            .replace(BEARER_REDACT_REGEX, "Bearer ••••")
+            .replace(SK_REDACT_REGEX, "sk-••••")
+            .replace(WS_COLLAPSE_REGEX, " ")
             .trim()
             .take(280)
     }
 
-    private data class HttpResult(val code: Int, val body: String, val error: String? = null)
+    private data class TransportResponse(
+        val statusCode: Int,
+        val payload: String,
+        val transportError: String? = null,
+    )
 
     private companion object {
-        const val VALIDATION_MAX_TOKENS = 8
-        const val MAX_PROVIDER_RESPONSE_CHARS = 2 * 1024 * 1024
+        const val PROBE_MAX_TOKENS = 8
+        const val RESPONSE_CHAR_CAP = 2 * 1024 * 1024
+        const val ANTHROPIC_API_VERSION = "2023-06-01"
+        val BEARER_REDACT_REGEX = Regex("(?i)bearer\\s+\\S+")
+        val SK_REDACT_REGEX = Regex("(?i)sk-[a-z0-9_-]{8,}")
+        val WS_COLLAPSE_REGEX = Regex("\\s+")
     }
 }
 
 object ModelResponseParser {
+    private val ZERO_PRICING_FIELDS = listOf("prompt", "completion", "request")
+
     fun parse(json: String): List<DiscoveredModel> = runCatching {
-        val trimmed = json.trim()
-        val array = when {
-            trimmed.startsWith("[") -> JSONArray(trimmed)
-            else -> {
-                val root = JSONObject(trimmed)
-                root.optJSONArray("data") ?: root.optJSONArray("models") ?: JSONArray()
+        val clean = json.trim()
+        val itemsArray = if (clean.startsWith("[")) {
+            JSONArray(clean)
+        } else {
+            val obj = JSONObject(clean)
+            obj.optJSONArray("data") ?: obj.optJSONArray("models") ?: JSONArray()
+        }
+
+        val parsed = ArrayList<DiscoveredModel>(itemsArray.length())
+        for (i in 0 until itemsArray.length()) {
+            when (val entry = itemsArray.opt(i)) {
+                is String -> if (entry.isNotBlank()) parsed.add(DiscoveredModel(entry))
+                is JSONObject -> parseModelObject(entry)?.let(parsed::add)
             }
         }
-        buildList {
-            for (index in 0 until array.length()) {
-                when (val item = array.opt(index)) {
-                    is String -> if (item.isNotBlank()) add(DiscoveredModel(item))
-                    is JSONObject -> {
-                        val id = item.stringOrEmpty("id")
-                            .ifBlank { item.stringOrEmpty("name") }
-                            .ifBlank { item.stringOrEmpty("model") }
-                        if (id.isNotBlank()) {
-                            val label = item.stringOrEmpty("display_name")
-                                .ifBlank { item.stringOrEmpty("displayName") }
-                                .ifBlank { id }
-                            val pricing = item.optJSONObject("pricing")
-                            val free = id.endsWith(":free", ignoreCase = true) || pricing?.let {
-                                listOf("prompt", "completion", "request").all { field ->
-                                    it.stringOrEmpty(field, "0").toDoubleOrNull() == 0.0
-                                }
-                            } == true
-                            add(DiscoveredModel(id, label, free))
-                        }
-                    }
-                }
-            }
-        }.distinctBy { it.id }.sortedWith(
-            compareByDescending<DiscoveredModel> { it.isFree }.thenBy { it.displayName.lowercase() },
-        )
+        parsed.distinctBy { it.id }
+            .sortedWith(compareByDescending<DiscoveredModel> { it.isFree }.thenBy { it.displayName.lowercase() })
     }.getOrDefault(emptyList())
+
+    private fun parseModelObject(node: JSONObject): DiscoveredModel? {
+        val modelId = node.stringOrEmpty("id")
+            .ifBlank { node.stringOrEmpty("name") }
+            .ifBlank { node.stringOrEmpty("model") }
+        if (modelId.isBlank()) return null
+
+        val title = node.stringOrEmpty("display_name")
+            .ifBlank { node.stringOrEmpty("displayName") }
+            .ifBlank { modelId }
+
+        val pricingNode = node.optJSONObject("pricing")
+        val hasZeroPrice = pricingNode != null && ZERO_PRICING_FIELDS.all { key ->
+            pricingNode.stringOrEmpty(key, "0").toDoubleOrNull() == 0.0
+        }
+        val isFreeTier = modelId.endsWith(":free", ignoreCase = true) || hasZeroPrice
+        return DiscoveredModel(id = modelId, displayName = title, isFree = isFreeTier)
+    }
 }

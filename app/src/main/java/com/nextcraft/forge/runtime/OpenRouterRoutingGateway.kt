@@ -1,6 +1,9 @@
 package com.nextcraft.forge.runtime
 
 import com.nextcraft.forge.model.ProviderProfile
+import com.nextcraft.forge.network.LocalNetwork
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -8,178 +11,209 @@ import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import org.json.JSONArray
-import org.json.JSONObject
 
-/** Adds NextCraft Forge's saved OpenRouter routing policy to Anthropic Messages requests. */
 internal fun applyOpenRouterRouting(source: JSONObject, profile: ProviderProfile): JSONObject {
-    val providers = profile.openRouterProviders
-    if (providers.isEmpty()) return source
-    val routing = JSONObject()
-        .put("order", JSONArray(providers))
+    val slugList = profile.openRouterProviders
+    if (slugList.isEmpty()) return source
+    val providerSpec = JSONObject()
+        .put("order", JSONArray(slugList))
         .put("allow_fallbacks", profile.openRouterAllowFallbacks)
-    return source.put("provider", routing)
+    return source.put("provider", providerSpec)
 }
 
-/** Loopback proxy used because coding-agent CLIs do not expose OpenRouter's provider body field. */
 internal class OpenRouterRoutingGateway(
     private val profile: ProviderProfile,
     private val apiKey: String,
-    val sessionToken: String = "forge-local-${java.util.UUID.randomUUID()}",
+    val sessionToken: String = "forge-local-${UUID.randomUUID()}",
     private val onRotateApiKey: (() -> String?)? = null,
 ) : AutoCloseable {
-    private val running = AtomicBoolean(true)
-    private val rotationLock = Any()
-    @Volatile private var activeApiKey: String = apiKey
-    private val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
-    val url: String = "http://127.0.0.1:${server.localPort}"
+    private val isActive = AtomicBoolean(true)
+    private val keySwapMutex = Any()
+    @Volatile private var currentUpstreamKey: String = apiKey
 
-    fun start(): OpenRouterRoutingGateway = apply {
-        Thread({ acceptLoop() }, "forge-openrouter-routing").apply { isDaemon = true; start() }
+    private val listenSocket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+    val url: String = "http://127.0.0.1:${listenSocket.localPort}"
+
+    private val activeUpstreamCalls: MutableSet<HttpURLConnection> = ConcurrentHashMap.newKeySet()
+
+    private val requestExecutor = ThreadPoolExecutor(
+        0,
+        MAX_WORKER_THREADS,
+        30L,
+        TimeUnit.SECONDS,
+        SynchronousQueue(),
+    ) { runnable ->
+        Thread(runnable, "forge-or-worker").apply { isDaemon = true }
     }
 
-    // Bounded pool: caps concurrent connections instead of one unbounded thread per accept().
-    private val workers = java.util.concurrent.ThreadPoolExecutor(
-        0, MAX_CONNECTIONS, 30L, TimeUnit.SECONDS, java.util.concurrent.SynchronousQueue(),
-    ) { task -> Thread(task, "forge-openrouter-request").apply { isDaemon = true } }
+    fun start(): OpenRouterRoutingGateway = apply {
+        Thread(::runAcceptLoop, "forge-or-acceptor").apply {
+            isDaemon = true
+            start()
+        }
+    }
 
-    private fun acceptLoop() {
-        var failures = 0
-        while (running.get()) {
-            val socket = try {
-                server.accept().also { failures = 0 }
+    private fun runAcceptLoop() {
+        var consecutiveErrors = 0
+        while (isActive.get()) {
+            val clientSock = try {
+                listenSocket.accept().also { consecutiveErrors = 0 }
             } catch (_: Exception) {
-                // Closed server ends the loop; transient errors (e.g. EMFILE) back off instead of busy-spinning.
-                if (!running.get() || server.isClosed || ++failures > MAX_ACCEPT_FAILURES) break
-                Thread.sleep(ACCEPT_BACKOFF_MS)
+                if (!isActive.get() || listenSocket.isClosed || ++consecutiveErrors > ACCEPT_ERROR_LIMIT) {
+                    break
+                }
+                Thread.sleep(ACCEPT_PAUSE_MS)
                 continue
             }
             runCatching {
-                socket.soTimeout = SOCKET_TIMEOUT_MS
-                socket.tcpNoDelay = true
-            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
+                clientSock.soTimeout = CLIENT_SO_TIMEOUT_MS
+                clientSock.tcpNoDelay = true
+            }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
+
             try {
-                workers.execute { runCatching { socket.use(::handle) } } // client disconnects must not escape as uncaught exceptions (crashes the app)
-            } catch (_: java.util.concurrent.RejectedExecutionException) {
-                runCatching { socket.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
+                requestExecutor.execute {
+                    runCatching { clientSock.use(::serveClientConnection) }
+                }
+            } catch (_: RejectedExecutionException) {
+                runCatching { clientSock.close() }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
             }
         }
     }
 
-    private fun handle(socket: Socket) {
-        val input = BufferedInputStream(socket.getInputStream())
-        val requestLine = readLine(input) ?: return
-        val parts = requestLine.split(' ')
-        val method = parts.getOrNull(0).orEmpty()
-        val path = parts.getOrNull(1).orEmpty().substringBefore('?')
-        val headers = mutableMapOf<String, String>()
+    private fun serveClientConnection(sock: Socket) {
+        val reader = BufferedInputStream(sock.getInputStream())
+        val reqLine = readCrLfLine(reader) ?: return
+        val tokens = reqLine.split(' ')
+        val httpMethod = tokens.getOrNull(0).orEmpty()
+        val reqPath = tokens.getOrNull(1).orEmpty().substringBefore('?')
+
+        val reqHeaders = HashMap<String, String>()
         while (true) {
-            val line = readLine(input) ?: return
-            if (line.isEmpty()) break
-            val split = line.indexOf(':')
-            if (split > 0) headers[line.substring(0, split).lowercase(Locale.US)] = line.substring(split + 1).trim()
+            val hdrLine = readCrLfLine(reader) ?: return
+            if (hdrLine.isEmpty()) break
+            val colonIdx = hdrLine.indexOf(':')
+            if (colonIdx > 0) {
+                val hdrName = hdrLine.substring(0, colonIdx).lowercase(Locale.US)
+                reqHeaders[hdrName] = hdrLine.substring(colonIdx + 1).trim()
+            }
         }
-        val output = GatewayOutput(socket.getOutputStream())
-        if (!isAuthorized(headers)) {
-            writeJson(output, 401, errorJson("Missing or invalid loopback gateway credentials"))
+
+        val respOut = GatewayOutput(sock.getOutputStream())
+        if (!verifyLoopbackCredentials(reqHeaders)) {
+            sendJsonResponse(respOut, 401, buildErrorPayload("Missing or invalid loopback gateway credentials"))
             return
         }
-        if (headers["expect"]?.equals("100-continue", ignoreCase = true) == true) {
-            // Without this the client waits for a go-ahead until the socket timeout before sending the body.
-            output.write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray())
-            output.flush()
+
+        if (reqHeaders["expect"]?.equals("100-continue", ignoreCase = true) == true) {
+            respOut.write("HTTP/1.1 100 Continue\r\n\r\n".encodeToByteArray())
+            respOut.flush()
         }
-        val body: ByteArray
-        var offset: Int
-        if (headers["transfer-encoding"]?.lowercase()?.contains("chunked") == true) {
-            // No Content-Length: reading it as 0 would turn the request into an empty body.
-            body = readChunkedBody(input) ?: run {
-                writeJson(output, 400, errorJson("Malformed or too large chunked request body"))
+
+        val rawBody: ByteArray
+        val bodyLen: Int
+        val isChunked = reqHeaders["transfer-encoding"]?.lowercase(Locale.US)?.contains("chunked") == true
+        if (isChunked) {
+            val decoded = decodeChunkedStream(reader)
+            if (decoded == null) {
+                sendJsonResponse(respOut, 400, buildErrorPayload("Malformed or too large chunked request body"))
                 return
             }
-            offset = body.size
+            rawBody = decoded
+            bodyLen = decoded.size
         } else {
-            val length = headers["content-length"]?.toIntOrNull() ?: 0
-            if (length !in 0..MAX_REQUEST_BYTES) {
-                writeJson(output, 413, errorJson("Request is too large"))
+            val declaredLen = reqHeaders["content-length"]?.toIntOrNull() ?: 0
+            if (declaredLen !in 0..BODY_SIZE_LIMIT_BYTES) {
+                sendJsonResponse(respOut, 413, buildErrorPayload("Request is too large"))
                 return
             }
-            body = ByteArray(length)
-            offset = 0
-            while (offset < length) {
-                val count = input.read(body, offset, length - offset)
-                if (count < 0) break
-                offset += count
+            rawBody = ByteArray(declaredLen)
+            var cursor = 0
+            while (cursor < declaredLen) {
+                val n = reader.read(rawBody, cursor, declaredLen - cursor)
+                if (n < 0) break
+                cursor += n
             }
-            if (offset < length) {
-                writeJson(output, 400, errorJson("Truncated request body"))
+            if (cursor < declaredLen) {
+                sendJsonResponse(respOut, 400, buildErrorPayload("Truncated request body"))
                 return
             }
+            bodyLen = cursor
         }
-        if (path.endsWith("/count_tokens")) {
-            writeJson(output, 200, JSONObject().put("input_tokens", body.decodeToString(0, offset).length / 4 + 1).toString())
+
+        if (reqPath.endsWith("/count_tokens")) {
+            val approxTokens = rawBody.decodeToString(0, bodyLen).length / 4 + 1
+            sendJsonResponse(respOut, 200, JSONObject().put("input_tokens", approxTokens).toString())
             return
         }
-        val isChatCompletions = path == "/chat/completions" || path == "/v1/chat/completions"
-        val isMessages = path == "/messages" || path == "/v1/messages"
-        if (method != "POST" || (!isMessages && !isChatCompletions)) {
-            writeJson(output, 404, errorJson("Unsupported OpenRouter endpoint"))
+
+        val targetsCompletions = reqPath == "/chat/completions" || reqPath == "/v1/chat/completions"
+        val targetsMessages = reqPath == "/messages" || reqPath == "/v1/messages"
+        if (httpMethod != "POST" || (!targetsMessages && !targetsCompletions)) {
+            sendJsonResponse(respOut, 404, buildErrorPayload("Unsupported OpenRouter endpoint"))
             return
         }
 
         runCatching {
-            val routedBody = applyOpenRouterRouting(JSONObject(body.decodeToString(0, offset)), profile).toString().toByteArray()
-            val normalizedBase = profile.resolvedBaseUrl.trim().trimEnd('/')
+            val parsedJson = JSONObject(rawBody.decodeToString(0, bodyLen))
+            val enrichedPayload = applyOpenRouterRouting(parsedJson, profile).toString().encodeToByteArray()
+            val strippedBase = profile.resolvedBaseUrl.trim().trimEnd('/')
                 .removeSuffix("/chat/completions")
                 .removeSuffix("/messages")
                 .removeSuffix("/v1")
-            val endpoint = if (isChatCompletions) "$normalizedBase/v1/chat/completions" else "$normalizedBase/v1/messages"
-            if (!com.nextcraft.forge.network.LocalNetwork.isPlainHttpAllowed(endpoint)) {
-                writeJson(output, 400, errorJson("Plain http:// is only allowed for localhost"))
+            val targetUri = if (targetsCompletions) "$strippedBase/v1/chat/completions" else "$strippedBase/v1/messages"
+
+            if (!LocalNetwork.isPlainHttpAllowed(targetUri)) {
+                sendJsonResponse(respOut, 400, buildErrorPayload("Plain http:// is only allowed for localhost"))
                 return
             }
-            if (!forwardUpstream(endpoint, headers, routedBody, output, allowRetry = true)) {
-                writeFailure(output, "OpenRouter upstream request failed")
+            if (!relayToOpenRouter(targetUri, reqHeaders, enrichedPayload, respOut, canRotateKey = true)) {
+                emitStreamOrHttpError(respOut, "OpenRouter upstream request failed")
             }
-        }.onFailure { error ->
-            writeFailure(output, error.message ?: "OpenRouter request failed")
+        }.onFailure { err ->
+            emitStreamOrHttpError(respOut, err.message ?: "OpenRouter request failed")
         }
     }
 
-    private fun forwardUpstream(
-        endpoint: String,
-        headers: Map<String, String>,
-        routedBody: ByteArray,
-        output: GatewayOutput,
-        allowRetry: Boolean,
+    private fun relayToOpenRouter(
+        targetUri: String,
+        clientHeaders: Map<String, String>,
+        payloadBytes: ByteArray,
+        respOut: GatewayOutput,
+        canRotateKey: Boolean,
     ): Boolean {
-        val currentKey = activeApiKey
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).also(upstreamConnections::add).apply { instanceFollowRedirects = false }
-        try {
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 20_000
-            connection.readTimeout = 180_000
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.setRequestProperty("Accept", headers["accept"] ?: "application/json")
-            connection.setRequestProperty("Authorization", "Bearer $currentKey")
-            connection.setRequestProperty("anthropic-version", headers["anthropic-version"] ?: "2023-06-01")
-            headers["anthropic-beta"]?.let { connection.setRequestProperty("anthropic-beta", it) }
-            connection.outputStream.use { it.write(routedBody) }
+        val keySnapshot = currentUpstreamKey
+        val conn = (URL(targetUri).openConnection() as HttpURLConnection).also(activeUpstreamCalls::add)
+        conn.instanceFollowRedirects = false
 
-            val code = connection.responseCode
-            if (allowRetry && code in setOf(402, 429) && onRotateApiKey != null) {
-                val shouldRetry = synchronized(rotationLock) {
-                    if (activeApiKey == currentKey) {
-                        val rotated = onRotateApiKey.invoke()?.takeIf { it.isNotBlank() && it != currentKey }
-                        if (rotated != null) {
-                            activeApiKey = rotated
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 180_000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Accept", clientHeaders["accept"] ?: "application/json")
+            conn.setRequestProperty("Authorization", "Bearer $keySnapshot")
+            conn.setRequestProperty("anthropic-version", clientHeaders["anthropic-version"] ?: "2023-06-01")
+            clientHeaders["anthropic-beta"]?.let { conn.setRequestProperty("anthropic-beta", it) }
+            conn.outputStream.use { it.write(payloadBytes) }
+
+            val status = conn.responseCode
+            if (canRotateKey && (status == 402 || status == 429) && onRotateApiKey != null) {
+                val rotatedSuccessfully = synchronized(keySwapMutex) {
+                    if (currentUpstreamKey == keySnapshot) {
+                        val nextKey = onRotateApiKey.invoke()?.takeIf { it.isNotBlank() && it != keySnapshot }
+                        if (nextKey != null) {
+                            currentUpstreamKey = nextKey
                             true
                         } else {
                             false
@@ -188,134 +222,137 @@ internal class OpenRouterRoutingGateway(
                         true
                     }
                 }
-                if (shouldRetry) {
-                    connection.disconnect()
-                    return forwardUpstream(endpoint, headers, routedBody, output, allowRetry = false)
+                if (rotatedSuccessfully) {
+                    conn.disconnect()
+                    return relayToOpenRouter(targetUri, clientHeaders, payloadBytes, respOut, canRotateKey = false)
                 }
             }
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val reason = if (code in 200..299) "OK" else "Error"
-            val contentType = connection.contentType ?: "application/json"
-            output.eventStream = contentType.contains("text/event-stream", ignoreCase = true)
-            output.write(
-                "HTTP/1.1 $code $reason\r\nContent-Type: $contentType\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n".toByteArray(),
-            )
-            output.flush()
-            stream?.use { input ->
-                val buffer = ByteArray(4096)
+
+            val bodyStream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val statusPhrase = if (status in 200..299) "OK" else "Error"
+            val mimeType = conn.contentType ?: "application/json"
+            respOut.eventStream = mimeType.contains("text/event-stream", ignoreCase = true)
+
+            val responseHeader = "HTTP/1.1 $status $statusPhrase\r\n" +
+                "Content-Type: $mimeType\r\n" +
+                "Cache-Control: no-cache\r\n" +
+                "Connection: close\r\n\r\n"
+            respOut.write(responseHeader.encodeToByteArray())
+            respOut.flush()
+
+            bodyStream?.use { upstreamIn ->
+                val chunkBuf = ByteArray(4096)
                 while (true) {
-                    val count = input.read(buffer)
-                    if (count <= 0) break
-                    output.write(buffer, 0, count)
-                    output.flush()
+                    val got = upstreamIn.read(chunkBuf)
+                    if (got <= 0) break
+                    respOut.write(chunkBuf, 0, got)
+                    respOut.flush()
                 }
             }
-            output.flush()
+            respOut.flush()
             return true
         } finally {
-            upstreamConnections.remove(connection)
-            connection.disconnect()
+            activeUpstreamCalls.remove(conn)
+            conn.disconnect()
         }
     }
 
-    /** Open upstream calls; close() disconnects them so a stopped session stops spending the user's quota. */
-    private val upstreamConnections: MutableSet<HttpURLConnection> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-    private fun isAuthorized(headers: Map<String, String>): Boolean {
-        val presented = headers["x-api-key"]
+    private fun verifyLoopbackCredentials(headers: Map<String, String>): Boolean {
+        val tokenHeader = headers["x-api-key"]
             ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
             ?: return false
-        val presentedBytes = presented.toByteArray()
-        return MessageDigest.isEqual(presentedBytes, sessionToken.toByteArray()) ||
-            MessageDigest.isEqual(presentedBytes, activeApiKey.toByteArray()) ||
-            MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
+        val candidateBytes = tokenHeader.encodeToByteArray()
+        return MessageDigest.isEqual(candidateBytes, sessionToken.encodeToByteArray()) ||
+            MessageDigest.isEqual(candidateBytes, currentUpstreamKey.encodeToByteArray()) ||
+            MessageDigest.isEqual(candidateBytes, apiKey.encodeToByteArray())
     }
 
-    /**
-     * Reports a failure on a response that may already be under way: once the status line is out, a second HTTP
-     * response would land inside the event stream, so a stream gets an Anthropic `error` event and anything else
-     * is just closed.
-     */
-    private fun writeFailure(output: GatewayOutput, message: String) {
+    private fun emitStreamOrHttpError(respOut: GatewayOutput, reason: String) {
         runCatching {
             when {
-                !output.committed -> writeJson(output, 502, errorJson(message))
-                output.eventStream -> {
-                    val error = JSONObject().put("type", "error")
-                        .put("error", JSONObject().put("type", "api_error").put("message", message))
-                    output.write("event: error\ndata: $error\n\n".toByteArray())
-                    output.flush()
+                !respOut.committed -> sendJsonResponse(respOut, 502, buildErrorPayload(reason))
+                respOut.eventStream -> {
+                    val errData = buildErrorPayload(reason)
+                    respOut.write("event: error\ndata: $errData\n\n".encodeToByteArray())
+                    respOut.flush()
                 }
-                else -> Unit
             }
-        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
+        }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
     }
 
-    /** Reads an HTTP/1.1 chunked body, or returns null when it is malformed or larger than [MAX_REQUEST_BYTES]. */
-    private fun readChunkedBody(input: BufferedInputStream): ByteArray? {
-        val body = ByteArrayOutputStream()
+    private fun decodeChunkedStream(reader: BufferedInputStream): ByteArray? {
+        val accumulator = ByteArrayOutputStream()
         while (true) {
-            val sizeLine = readLine(input) ?: return null
-            val size = sizeLine.substringBefore(';').trim().toIntOrNull(16) ?: return null
-            if (size < 0 || body.size() + size > MAX_REQUEST_BYTES) return null
-            if (size == 0) {
+            val hexHeader = readCrLfLine(reader) ?: return null
+            val chunkBytes = hexHeader.substringBefore(';').trim().toIntOrNull(16) ?: return null
+            if (chunkBytes < 0 || accumulator.size() + chunkBytes > BODY_SIZE_LIMIT_BYTES) return null
+            if (chunkBytes == 0) {
                 while (true) {
-                    val trailer = readLine(input) ?: return null
-                    if (trailer.isEmpty()) break
+                    val trailerLine = readCrLfLine(reader) ?: return null
+                    if (trailerLine.isEmpty()) break
                 }
-                return body.toByteArray()
+                return accumulator.toByteArray()
             }
-            val chunk = ByteArray(size)
-            var read = 0
-            while (read < size) {
-                val count = input.read(chunk, read, size - read)
-                if (count < 0) return null
-                read += count
+            val block = ByteArray(chunkBytes)
+            var totalRead = 0
+            while (totalRead < chunkBytes) {
+                val n = reader.read(block, totalRead, chunkBytes - totalRead)
+                if (n < 0) return null
+                totalRead += n
             }
-            body.write(chunk)
-            if (readLine(input) != "") return null
+            accumulator.write(block)
+            if (readCrLfLine(reader) != "") return null
         }
     }
 
-    private fun writeJson(output: BufferedOutputStream, code: Int, body: String) {
-        val bytes = body.toByteArray()
-        val reason = if (code in 200..299) "OK" else "Error"
-        output.write(
-            "HTTP/1.1 $code $reason\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray(),
-        )
-        output.write(bytes)
-        output.flush()
+    private fun sendJsonResponse(out: BufferedOutputStream, statusCode: Int, jsonBody: String) {
+        val bodyBytes = jsonBody.encodeToByteArray()
+        val phrase = if (statusCode in 200..299) "OK" else "Error"
+        val headerBlock = "HTTP/1.1 $statusCode $phrase\r\n" +
+            "Content-Type: application/json\r\n" +
+            "Content-Length: ${bodyBytes.size}\r\n" +
+            "Connection: close\r\n\r\n"
+        out.write(headerBlock.encodeToByteArray())
+        out.write(bodyBytes)
+        out.flush()
     }
 
-    private fun readLine(input: BufferedInputStream): String? {
-        val out = ByteArrayOutputStream(128)
-        while (out.size() <= MAX_HEADER_LINE_BYTES) {
-            val value = input.read()
-            if (value < 0) return if (out.size() == 0) null else out.toByteArray().decodeToString()
-            if (value == '\n'.code) return out.toByteArray().decodeToString().trimEnd('\r')
-            out.write(value)
+    private fun readCrLfLine(reader: BufferedInputStream): String? {
+        val lineBuf = ByteArrayOutputStream(128)
+        while (lineBuf.size() <= HEADER_LINE_LIMIT_BYTES) {
+            val b = reader.read()
+            if (b < 0) {
+                return if (lineBuf.size() == 0) null else lineBuf.toByteArray().decodeToString()
+            }
+            if (b == '\n'.code) {
+                return lineBuf.toByteArray().decodeToString().trimEnd('\r')
+            }
+            lineBuf.write(b)
         }
         return null
     }
 
-    private fun errorJson(message: String): String = JSONObject()
+    private fun buildErrorPayload(reason: String): String = JSONObject()
         .put("type", "error")
-        .put("error", JSONObject().put("type", "api_error").put("message", message))
+        .put("error", JSONObject().put("type", "api_error").put("message", reason))
         .toString()
 
     override fun close() {
-        running.set(false)
-        runCatching { server.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("OpenRouterRoutingGateway", it) }
-        workers.shutdown()
-        upstreamConnections.toList().forEach { runCatching { it.disconnect() } }
+        isActive.set(false)
+        runCatching { listenSocket.close() }.onFailure { ErrorLog.swallowed(LOG_TAG, it) }
+        requestExecutor.shutdown()
+        for (conn in activeUpstreamCalls.toList()) {
+            runCatching { conn.disconnect() }
+        }
     }
 
     private companion object {
-        const val MAX_CONNECTIONS = 32
-        const val MAX_ACCEPT_FAILURES = 50
-        const val ACCEPT_BACKOFF_MS = 100L
-        const val MAX_REQUEST_BYTES = 16 * 1024 * 1024
-        const val MAX_HEADER_LINE_BYTES = 16 * 1024
-        const val SOCKET_TIMEOUT_MS = 30_000
+        const val LOG_TAG = "OpenRouterRoutingGateway"
+        const val MAX_WORKER_THREADS = 32
+        const val ACCEPT_ERROR_LIMIT = 50
+        const val ACCEPT_PAUSE_MS = 100L
+        const val BODY_SIZE_LIMIT_BYTES = 16 * 1024 * 1024
+        const val HEADER_LINE_LIMIT_BYTES = 16 * 1024
+        const val CLIENT_SO_TIMEOUT_MS = 30_000
     }
 }
