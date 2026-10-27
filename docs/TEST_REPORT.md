@@ -20,6 +20,8 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 | UI: proyek cepat, laci obrolan, menu +, lembar agen, lembar model | LULUS | layar overlay |
 | UI: tab File (kosong), Terminal (perintah), Pratinjau (server 3000) | LULUS | layar overlay |
 - **Tab File (UI `.x`, tap nyata, diverifikasi di disk)**: buat file `tes/halo.txt` (folder induk dibuat otomatis), edit + Simpan (isi `halo dunia` tertulis), ganti nama folder (path di editor ikut berubah), hapus file dan folder (dialog konfirmasi + banner). Path `../luar.txt` ditolak, tidak ada berkas di luar proyek.
+- **Tab Alat (UI `.x`)**: daftar Alat tampil; Diagnostik Sistem menampilkan data nyata (Snapdragon SM8450, 8 inti, RAM 10,9 GB, chroot, Ubuntu 24.04.5 arm64, root KernelSU); Manajer toolchain ada di Alat (stack bahasa + agen coding). Tombol Copot sengaja tidak ditekan (merusak).
+- **Setelan (UI `.x`)**: tema Gelap/Kaca/Putih berganti langsung dan terbaca; opsi Solid Glass muncul hanya di tema Kaca; Bahasa English berlaku seketika (semua label ikut berganti); pengaturan dikembalikan ke Gelap + Bawaan sistem.
 
 ## Bug yang ditemukan dan perbaikannya (branch lokal, belum di GitHub)
 
