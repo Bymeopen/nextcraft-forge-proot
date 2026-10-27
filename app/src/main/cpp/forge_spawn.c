@@ -178,11 +178,16 @@ Java_com_nextcraft_forge_runtime_NativeSpawn_spawn(JNIEnv *env, jobject self, jo
     pid_t parent_pid_before_fork = getpid();
     pid_t pid = fork();
     if (pid == 0) {
-        // Ensure child receives SIGTERM if parent JVM process dies unexpectedly
-        prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
         if (getppid() != parent_pid_before_fork) {
             _exit(126);
         }
+        sigset_t empty_mask;
+        sigemptyset(&empty_mask);
+        sigprocmask(SIG_SETMASK, &empty_mask, NULL);
+        signal(SIGPIPE, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGCHLD, SIG_DFL);
         if (use_pty) {
             if (setsid() < 0) _exit(126);
             int slave_fd = open(slave_name, O_RDWR | O_CLOEXEC);

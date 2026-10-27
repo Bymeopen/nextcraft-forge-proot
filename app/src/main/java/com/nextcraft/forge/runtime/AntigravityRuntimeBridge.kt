@@ -468,7 +468,7 @@ class AntigravityRuntimeBridge(
         var cancelCallback: (() -> Unit)? = null
 
         runCatching {
-            cancelCallback = {
+            val stopAction: () -> Unit = {
                 stopRequestedByUser = true
                 runningProcess?.let { proc ->
                     Thread {
@@ -480,7 +480,8 @@ class AntigravityRuntimeBridge(
                     }.apply { isDaemon = true }.start()
                 }
             }
-            cancelCallback?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
+            cancelCallback = stopAction
+            RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", stopAction)
             fgNotifier.start(projectSlug)
             updateForegroundStatus("Starting Antigravity…")
             val rt = runtimeInstaller.installedRuntime()
@@ -708,7 +709,7 @@ class AntigravityRuntimeBridge(
                 val warmEntry = WarmAgyInstance(
                     proc = proc,
                     logTailer = tailer,
-                    logFile = sessionLogFile!!,
+                    logFile = sessionLogFile,
                     projectId = projectId,
                     modelId = selectedModel,
                     effortLevel = selectedEffort,

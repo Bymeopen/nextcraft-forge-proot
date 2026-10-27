@@ -92,7 +92,7 @@ class DshRuntimeBridge(
         var sessionHomeHostDir: File? = null
         var stopHandler: (() -> Unit)? = null
         runCatching {
-            stopHandler = {
+            val stopAction: () -> Unit = {
                 userStopRequested = true
                 val running = activeProcess
                 if (running != null) {
@@ -105,7 +105,8 @@ class DshRuntimeBridge(
                     }, "forge-dsh-stop").apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
+            stopHandler = stopAction
+            RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", stopAction)
             startForegroundRuntime(projectSlug)
             val installed = installer.installedRuntime()
             check(installer.isAgentInstalled(AgentKind.DEEPSEEK_HARNESS)) {
@@ -117,11 +118,12 @@ class DshRuntimeBridge(
             checkpoints.createCheckpoint(projectId, workspace)
             val before = checkpoints.snapshot(workspace)
             val baseRoute = DshRouteMapper.forProfile(provider)
-            openRouterGateway = if (
+            val activeGateway = if (
                 provider.kind == ProviderKind.LLM_ROUTER && provider.openRouterProviders.isNotEmpty()
             ) OpenRouterRoutingGateway(provider, secret) { rotateSecretFor(provider) }.start() else null
-            val route = if (openRouterGateway != null && baseRoute.custom != null) {
-                baseRoute.copy(custom = baseRoute.custom.copy(baseUrl = openRouterGateway!!.url))
+            openRouterGateway = activeGateway
+            val route = if (activeGateway != null && baseRoute.custom != null) {
+                baseRoute.copy(custom = baseRoute.custom.copy(baseUrl = activeGateway.url))
             } else {
                 baseRoute
             }
@@ -172,7 +174,6 @@ class DshRuntimeBridge(
             }
             if (sdkResult.completed && sdkResult.failure.isBlank() && !userStopRequested) {
                 emitCompletedOnce(sessionId)
-                finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "DeepSeek", projectSlug)
             } else {
                 if (userStopRequested) throw DshSessionException("Stopped by user")
                 error(sdkResult.failure.ifBlank { "DeepSeek stopped with exit code $exit" })
@@ -183,15 +184,6 @@ class DshRuntimeBridge(
             activeProcess?.let { running -> runCatching { if (running.isAlive) running.destroyForcibly() } }
             val message = friendlyError(error)
             emitFailureOnce(sessionId, message)
-            if (userStopRequested) {
-                cancelForegroundRuntime()
-            } else {
-                finishForegroundRuntime(
-                    completed = false,
-                    projectName = projectSlug,
-                    detail = message,
-                )
-            }
         }
         runCatching { openRouterGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }
         runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("DshRuntimeBridge", it) }

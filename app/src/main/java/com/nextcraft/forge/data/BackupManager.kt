@@ -43,7 +43,7 @@ class BackupManager(private val context: Context) {
         var files = 0
         var bytes = 0L
         var skipped = 0
-        val sink = if (encrypted) BackupCrypto.encrypt(out, password!!) else out
+        val sink = if (password != null && password.isNotEmpty()) BackupCrypto.encrypt(out, password) else out
         ZipOutputStream(sink.buffered()).use { zip ->
             fun addFile(entryName: String, file: File) {
                 runCatching {

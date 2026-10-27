@@ -411,24 +411,29 @@ class ClaudeAuthController(
     private fun readAccountEmail(): String? = runCatching {
         val runtime = installer.installedRuntime()
         val workspace = File(context.filesDir, "workspaces/claude-auth").apply { mkdirs() }
-        val output = File(context.cacheDir, "claude-status-output.log")
-        val status = installer.process(
-            runtime.chrootExec,
-            runtime.rootfs,
-            workspace,
-            mapOf("DISABLE_AUTOUPDATER" to "1"),
-            listOf(CLAUDE_BINARY, "auth", "status", "--json"),
-            guestWorkspacePath = "/workspace/claude-auth",
-            emulateHardLinks = false,
-            outputFile = output,
-        )
-        runCatching { status.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
-        if (!status.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) status.destroyForcibly()
-        val text = output.readText()
-        output.delete()
-        val json = org.json.JSONObject(text.substring(text.indexOf('{')))
-        json.optString("email").takeIf { it.isNotBlank() }
-            ?: json.optJSONObject("account")?.optString("email")?.takeIf { it.isNotBlank() }
+        val output = File(context.cacheDir, "claude-status-${System.nanoTime()}.log")
+        try {
+            val status = installer.process(
+                runtime.chrootExec,
+                runtime.rootfs,
+                workspace,
+                mapOf("DISABLE_AUTOUPDATER" to "1"),
+                listOf(CLAUDE_BINARY, "auth", "status", "--json"),
+                guestWorkspacePath = "/workspace/claude-auth",
+                emulateHardLinks = false,
+                outputFile = output,
+            )
+            runCatching { status.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeAuthController", it) }
+            if (!status.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) status.destroyForcibly()
+            val text = if (output.isFile) output.readText() else ""
+            val braceIdx = text.indexOf('{')
+            if (braceIdx < 0) return@runCatching null
+            val json = org.json.JSONObject(text.substring(braceIdx))
+            json.optString("email").takeIf { it.isNotBlank() }
+                ?: json.optJSONObject("account")?.optString("email")?.takeIf { it.isNotBlank() }
+        } finally {
+            output.delete()
+        }
     }.getOrNull()
 
     private companion object {

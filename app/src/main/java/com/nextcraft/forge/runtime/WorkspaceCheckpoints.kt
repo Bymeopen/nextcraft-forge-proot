@@ -282,7 +282,10 @@ class WorkspaceCheckpoints(
             } else {
                 val crlf = newBytes.decodeToString().contains("\r\n") || oldBytes.decodeToString().contains("\r\n")
                 val eol = if (crlf) "\r\n" else "\n"
-                val endsWithLf = newBytes.isNotEmpty() && newBytes.last() == '\n'.code.toByte()
+                val oldEndsWithLf = oldBytes.isNotEmpty() && oldBytes.last() == '\n'.code.toByte()
+                val newEndsWithLf = newBytes.isNotEmpty() && newBytes.last() == '\n'.code.toByte()
+                val lastTag = hunkTagged.lastOrNull()?.second ?: -1
+                val endsWithLf = if (lastTag == hunkIndex) oldEndsWithLf else newEndsWithLf
                 val tailEol = if (endsWithLf && reconstructed.isNotEmpty()) eol else ""
                 liveFile.writeText(reconstructed.joinToString(eol) + tailEol, Charsets.UTF_8)
             }

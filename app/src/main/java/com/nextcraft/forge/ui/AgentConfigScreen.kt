@@ -557,7 +557,6 @@ private fun AgentStatusPill(status: AgentStatus, busy: Boolean, onClick: (() -> 
         status == AgentStatus.NOT_TESTED -> stringResource(R.string.agent_status_not_tested) to scheme.onSurfaceVariant
         else -> stringResource(R.string.agent_status_not_installed) to scheme.onSurfaceVariant
     }
-    val tappable = onClick != null && !busy
     Surface(
         shape = RoundedCornerShape(100),
         color = tokens.cardElevatedColor,
@@ -565,7 +564,7 @@ private fun AgentStatusPill(status: AgentStatus, busy: Boolean, onClick: (() -> 
         modifier = Modifier
             .heightIn(min = ForgeSpace.minTouch)
             .clip(RoundedCornerShape(100))
-            .then(if (tappable) Modifier.clickable(role = Role.Button, onClickLabel = stringResource(R.string.agent_test_connection), onClick = onClick!!) else Modifier),
+            .then(if (!busy && onClick != null) Modifier.clickable(role = Role.Button, onClickLabel = stringResource(R.string.agent_test_connection), onClick = onClick) else Modifier),
     ) {
         Row(
             modifier = Modifier.heightIn(min = ForgeSpace.minTouch).padding(horizontal = 14.dp),

@@ -42,7 +42,14 @@ class ChrootRunner(context: Context) {
             envFile.delete()
             throw error
         }
-        guestPidFiles[process] = GuestProcess.pidFileFor(envFile)
+        val pidFile = GuestProcess.pidFileFor(envFile)
+        guestPidFiles[process] = pidFile
+        Thread({
+            runCatching { process.waitFor() }
+            envFile.delete()
+            guestPidFiles.remove(process)
+            pidFile.delete()
+        }, "forge-chroot-reaper").apply { isDaemon = true }.start()
         return process
     }
 

@@ -99,9 +99,11 @@ object RuntimeSetupController {
     @Synchronized
     fun update(context: Context, event: RuntimeInstallProgress) {
         val current = mutableSnapshot.value
+        val dlBytes = event.downloadedBytes
+        val totBytes = event.totalBytes
         val line = event.terminalLine ?: when {
-            event.downloadedBytes != null && event.totalBytes != null ->
-                "${if (event.unpacking) UNPACK_PREFIX else DOWNLOAD_PREFIX} %.1f / %.1f MB".format(event.downloadedBytes / MB, event.totalBytes / MB)
+            dlBytes != null && totBytes != null ->
+                "${if (event.unpacking) UNPACK_PREFIX else DOWNLOAD_PREFIX} %.1f / %.1f MB".format(dlBytes / MB, totBytes / MB)
             event.event == RuntimeInstallEvent.STAGE -> "• ${event.message}"
             else -> null
         }

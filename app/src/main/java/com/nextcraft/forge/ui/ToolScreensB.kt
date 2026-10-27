@@ -55,7 +55,7 @@ fun BuildMatrixScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
     val matrix by viewModel.buildMatrix.state.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
-    LaunchedEffect(state.activeProjectId) { viewModel.buildMatrix.load() }
+    LaunchedEffect(state.activeProjectId, state.activeChatId) { viewModel.buildMatrix.load() }
     val blocked = state.runningChatIds.isNotEmpty() || state.activeProjectId in state.buildingProjectIds || !state.runtimeInstalled
     ToolScaffold(
         title = stringResource(R.string.tools_build_matrix),

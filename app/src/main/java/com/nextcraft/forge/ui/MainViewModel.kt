@@ -1153,6 +1153,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectChat(chatId: String) {
         val project = _state.value.activeProject ?: return
         if (_state.value.chats.none { it.id == chatId }) return
+        if (chatId != _state.value.activeChatId) {
+            leaveOpenFile { selectChatInternal(project, chatId) }
+        } else {
+            selectChatInternal(project, chatId)
+        }
+    }
+
+    private fun selectChatInternal(project: Project, chatId: String) {
         // A chat that is working shows its live copy, status and pending approval, not the last saved file.
         val run = runs[runKey(project.id, chatId)]?.also { applyPendingText(it) }
         _state.update {
@@ -1662,13 +1670,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 runCatching {
-                    val root = if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated == true) {
-                        chatBranches.branchFor(project, chatId).cloneDir
-                    } else {
-                        checkpoints.ensureWorkspace(project.id)
-                    }
+                    val root = activeWorkspaceRoot(project, chatId)
                     val input = attachment?.let { att ->
-                        val file = checkpoints.safeWorkspaceFile(root, att.relativePath)
+                        val file = resolveWorkspaceFile(project, att.relativePath, chatId)
                         if (file.isFile && file.length() <= ChatImageDecoder.MAX_BYTES) file.readBytes() to att.mimeType else null
                     }
                     when (val result = geminiImage.generate(key, model, clean, input?.first, input?.second ?: "image/png")) {
@@ -1726,13 +1730,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 runCatching {
-                    val root = if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated == true) {
-                        chatBranches.branchFor(project, chatId).cloneDir
-                    } else {
-                        checkpoints.ensureWorkspace(project.id)
-                    }
+                    val root = activeWorkspaceRoot(project, chatId)
                     val input = attachment?.let { att ->
-                        val file = checkpoints.safeWorkspaceFile(root, att.relativePath)
+                        val file = resolveWorkspaceFile(project, att.relativePath, chatId)
                         if (file.isFile && file.length() <= ChatImageDecoder.MAX_BYTES) file.readBytes() to att.mimeType else null
                     }
                     val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
@@ -2102,10 +2102,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val autoRebuildProjects = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     /** Prepend `<workspace>/.forge/memory.md` (if present and non-blank, up to 4 KB) to the prompt context. */
-    private fun augmentWithProjectMemory(projectId: String, prompt: String): String {
+    private fun augmentWithProjectMemory(projectId: String, prompt: String, chatId: String = _state.value.activeChatId): String {
         val memText = runCatching {
-            val ws = checkpoints.ensureWorkspace(projectId)
-            val memFile = checkpoints.safeWorkspaceFile(ws, ".forge/memory.md")
+            val proj = projectOf(projectId)
+            val memFile = if (proj != null) {
+                resolveWorkspaceFile(proj, ".forge/memory.md", chatId)
+            } else {
+                checkpoints.safeWorkspaceFile(checkpoints.ensureWorkspace(projectId), ".forge/memory.md")
+            }
             if (memFile.isFile) memFile.readBoundedText(4096).trim() else ""
         }.getOrDefault("")
         if (memText.isEmpty()) return prompt
@@ -2129,7 +2133,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (notes.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val ws = checkpoints.ensureWorkspace(run.projectId)
+                val proj = projectOf(run.projectId)
+                val ws = if (proj != null) activeWorkspaceRoot(proj, run.chatId) else checkpoints.ensureWorkspace(run.projectId)
                 val memFile = checkpoints.safeWorkspaceFile(ws, ".forge/memory.md")
                 memFile.parentFile?.mkdirs()
                 val existing = if (memFile.isFile) memFile.readBoundedText(16 * 1024) else "# Project Memory\n"
@@ -2149,7 +2154,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, path)
                     target.parentFile?.mkdirs()
                     if (!target.exists()) {
@@ -2284,15 +2289,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Accepts all pending checkpoint changes and immediately commits them to the project's Git repository. */
     fun acceptAndCommitChanges() {
         val project = _state.value.activeProject ?: return
+        val chatId = _state.value.activeChatId
         val pending = _state.value.changedItems.filter { it.accepted == null }
         if (pending.isEmpty()) return
         val fileNames = pending.take(3).joinToString(", ") { it.path.substringAfterLast('/') }
         val more = if (pending.size > 3) " +${pending.size - 3} more" else ""
         val commitMsg = "Apply agent changes ($fileNames$more)"
+        val checkpointId = activeCheckpointProjectId(project, chatId)
+        val isolated = _state.value.chats.firstOrNull { it.id == chatId }?.isolated == true &&
+            chatBranches.branchFor(project, chatId).cloneDir.isDirectory
         viewModelScope.launch {
-            workspaceIo(str(R.string.err_ws_keep)) { checkpoints.acceptAll(project.id) } ?: return@launch
+            workspaceIo(str(R.string.err_ws_keep)) { checkpoints.acceptAll(checkpointId) } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
-            commitProjectRepo(commitMsg)
+            if (isolated) commitChatBranch(chatId, commitMsg) else commitProjectRepo(commitMsg)
         }
     }
 
@@ -2657,7 +2666,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Binary-related messages also tell the agent that `rea` exists (only when REA is installed).
         val reaInstalled = preferences.reaChatHint &&
             com.nextcraft.forge.runtime.RuntimeMarkers.read(File(RuntimeInstaller.rootfsDir(getApplication()), "root/.nextcraft-rea-version")) != null
-        val promptWithMemory = augmentWithProjectMemory(project.id, basePrompt)
+        val promptWithMemory = augmentWithProjectMemory(project.id, basePrompt, chatId)
         val agentPrompt = ScheduleDirectives.augment(
             com.nextcraft.forge.runtime.AndroidHostTools.augment(ReaChatHint.augment(promptWithMemory, attachments, reaInstalled), preferences.androidHostTools),
             preferences.scheduleEnabled,
@@ -2789,9 +2798,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } catch (error: Throwable) {
                 if (error !is CancellationException) {
-                    val app = getApplication<Application>()
-                    if (tryFailover(run, error.message ?: app.getString(R.string.agent_turn_error_unknown))) return@launch
-                    appendAssistantText(run, "\n\n" + app.getString(R.string.agent_turn_error, error.message ?: app.getString(R.string.agent_turn_error_unknown)))
+                    val unknownMsg = str(R.string.agent_turn_error_unknown)
+                    if (tryFailover(run, error.message ?: unknownMsg)) return@launch
+                    appendAssistantText(run, "\n\n" + str(R.string.agent_turn_error, error.message ?: unknownMsg))
                     offerRetry(run)
                     finishRun(run)
                     // Messages queued behind this chat would otherwise wait for some other run to end.
@@ -3975,8 +3984,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } ?: error("Cannot open $target")
                 }.onFailure { Log.w("MainViewModel", "File export failed", it) }.isSuccess
             }
-            val app = getApplication<Application>()
-            val msg = if (ok) app.getString(R.string.msg_file_saved, relativePath.substringAfterLast('/')) else app.getString(R.string.msg_file_failed)
+            val msg = if (ok) str(R.string.msg_file_saved, relativePath.substringAfterLast('/')) else str(R.string.msg_file_failed)
             _state.update {
                 it.copy(
                     fileSavedBanner = msg,
@@ -4861,8 +4869,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     apkFile.name
                 }.onFailure { Log.w("MainViewModel", "APK export failed", it) }.getOrNull()
             }
-            val app = getApplication<Application>()
-            val msg = if (savedName != null) app.getString(R.string.msg_file_saved, savedName) else app.getString(R.string.msg_file_failed)
+            val msg = if (savedName != null) str(R.string.msg_file_saved, savedName) else str(R.string.msg_file_failed)
             _state.update {
                 it.copy(
                     fileSavedBanner = msg,
@@ -5497,6 +5504,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         // The project is never saved on failure; don't leave its workspace behind on disk.
                         ws.deleteRecursivelyNoFollow()
                         checkpoints.checkpointDir(project.id).deleteRecursively()
+                        synchronized(reservedSlugs) { reservedSlugs -= slug }
                         throw error
                     }
                     val isAndroidRepo = findAndroidProjectRoot(ws) != null
@@ -5816,12 +5824,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Lists the models the signed-in Google account can use by running `agy models` in the chroot. */
     fun refreshAntigravityModels() {
         if (_state.value.antigravityModelsLoading) return
-        if (!installer.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
-            _state.update { it.copy(apiStatusMessage = UiText.res(R.string.msg_install_antigravity_first)) }
-            return
-        }
         _state.update { it.copy(antigravityModelsLoading = true) }
         viewModelScope.launch(Dispatchers.IO) {
+            if (!installer.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
+                _state.update {
+                    it.copy(
+                        antigravityModelsLoading = false,
+                        apiStatusMessage = UiText.res(R.string.msg_install_antigravity_first),
+                    )
+                }
+                return@launch
+            }
             val result = runCatching {
                 val runtime = installer.installedRuntime()
                 val workspace = File(getApplication<Application>().filesDir, "workspaces/antigravity-models").apply { mkdirs() }

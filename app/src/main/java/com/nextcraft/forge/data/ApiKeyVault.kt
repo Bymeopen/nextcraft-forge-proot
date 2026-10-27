@@ -163,7 +163,7 @@ class ApiKeyVault(context: Context) {
     }
 
     private fun putEncrypted(storageId: String, secret: String) {
-        val plaintext = cleanSecret(secret).toByteArray(Charsets.UTF_8)
+        val plaintext = cleanSecret(secret, storageId).toByteArray(Charsets.UTF_8)
         val (iv, encrypted) = runCatching {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
@@ -209,7 +209,7 @@ class ApiKeyVault(context: Context) {
             val encrypted = Base64.decode(valStr, Base64.NO_WRAP)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
-            cleanSecret(cipher.doFinal(encrypted).toString(Charsets.UTF_8))
+            cleanSecret(cipher.doFinal(encrypted).toString(Charsets.UTF_8), storageId)
         }.onFailure { error ->
             // Never delete silently: a corrupt entry (AEAD tag or base64 failure) stays on disk so the user can be
             // told and re-enter the key, and transient keystore failures (device locked, daemon busy) lose nothing.
@@ -221,9 +221,12 @@ class ApiKeyVault(context: Context) {
     /**
      * API keys and OAuth tokens never contain whitespace. Terminals often wrap long tokens such as
      * `claude setup-token` output, so pasted secrets can include line breaks or a "Bearer " prefix.
+     * Backup passphrases (`auto_backup_password`) preserve internal spaces.
      */
-    private fun cleanSecret(secret: String): String =
-        secret.trim().removePrefix("Bearer ").removePrefix("bearer ").filterNot(Char::isWhitespace)
+    private fun cleanSecret(secret: String, storageId: String = ""): String {
+        if (storageId.startsWith("auto_backup_password")) return secret.trim()
+        return secret.trim().removePrefix("Bearer ").removePrefix("bearer ").filterNot(Char::isWhitespace)
+    }
 
     private fun removeEncrypted(storageId: String) {
         preferences.edit().remove("$storageId.iv").remove("$storageId.value").apply()

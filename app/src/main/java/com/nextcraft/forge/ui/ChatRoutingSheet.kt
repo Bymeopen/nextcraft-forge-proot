@@ -215,6 +215,7 @@ private fun KeywordRoutingRulesEditor(
     var keywordDraft by rememberSaveable { mutableStateOf("") }
     var targetAgentIdx by rememberSaveable { mutableIntStateOf(0) }
     val providerList = AgentKind.entries
+    val safeTargetIdx = targetAgentIdx.coerceIn(0, providerList.lastIndex)
 
     Text(
         text = stringResource(R.string.route_rules_title),
@@ -250,14 +251,14 @@ private fun KeywordRoutingRulesEditor(
     )
     ForgePillTabs(
         items = providerList.map { provider -> provider.shortTitle() },
-        selectedIndex = targetAgentIdx,
+        selectedIndex = safeTargetIdx,
         onSelect = { chosen -> targetAgentIdx = chosen },
         equalWidth = true,
     )
     ForgePrimaryButton(
         text = stringResource(R.string.route_rule_add),
         onClick = {
-            if (viewModel.addRouteRule(keywordDraft, providerList[targetAgentIdx])) {
+            if (viewModel.addRouteRule(keywordDraft, providerList[safeTargetIdx])) {
                 keywordDraft = ""
             }
         },

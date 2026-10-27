@@ -36,9 +36,14 @@ object ErrorLog {
     fun clear() = entries.clear()
 
     /** Newest first, one line each: "HH:mm:ss Tag ×3 IOException: ...". */
-    fun asText(): String = recent().asReversed().joinToString("\n") { e ->
-        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(e.atMillis))
-        val times = if (e.count > 1) " ×${e.count}" else ""
-        "$time ${e.tag}$times ${e.message}"
+    fun asText(): String {
+        val snapshot = recent().asReversed()
+        if (snapshot.isEmpty()) return ""
+        val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+        return snapshot.joinToString("\n") { e ->
+            val time = fmt.format(java.util.Date(e.atMillis))
+            val times = if (e.count > 1) " ×${e.count}" else ""
+            "$time ${e.tag}$times ${e.message}"
+        }
     }
 }

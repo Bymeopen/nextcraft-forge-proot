@@ -21,7 +21,8 @@ object SilentSelfUpdate {
     internal fun detachedScript(component: String, allowDowngrade: Boolean = false): String? {
         if (!SAFE_COMPONENT.matches(component)) return null
         val flags = if (allowDowngrade) "-r -d" else "-r"
-        val inner = "pm install $flags $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
+        val inner = "size=\$(wc -c < $STAGING_APK | tr -d '[:space:]'); " +
+            "pm install $flags -S \"\$size\" < $STAGING_APK > $LOG_FILE 2>&1; rc=\$?; rm -f $STAGING_APK; " +
             "echo rc=\$rc >> $LOG_FILE; " +
             "if [ \$rc -eq 0 ]; then am start --user 0 -n $component >/dev/null 2>&1; fi"
         return "mkdir -p $STAGING_DIR && chmod 700 $STAGING_DIR && rm -f $LOG_FILE; nohup setsid sh -c '$inner' >/dev/null 2>&1 &"

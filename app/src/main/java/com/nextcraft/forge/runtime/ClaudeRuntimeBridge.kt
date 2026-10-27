@@ -191,7 +191,7 @@ class ClaudeRuntimeBridge(
         var spawnedOutputFile: File? = null
         var stopHandler: (() -> Unit)? = null
         runCatching {
-            stopHandler = {
+            val stopAction: () -> Unit = {
                 userStopRequested = true
                 val running = activeProcess
                 if (running != null) {
@@ -204,7 +204,8 @@ class ClaudeRuntimeBridge(
                     }, "forge-claude-stop").apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
+            stopHandler = stopAction
+            RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", stopAction)
             startForegroundRuntime(projectSlug)
             val installed = installer.installedRuntime()
             installer.ensureSettingsAndHooks()
@@ -351,7 +352,6 @@ class ClaudeRuntimeBridge(
                     // The chat now holds the history plus this answer, all of which the session has seen.
                     saveConversation(SavedConversation(claudeConversationId, conversationHistory.size + 1, conversationTag).encode())
                     emitCompletedOnce(sessionId)
-                    finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Claude Code", projectSlug)
                 } else {
                     if (userStopRequested) throw ProviderSessionException("Stopped by user")
                     if (resumedConversation && lastDiagnostic.contains("No conversation found", ignoreCase = true)) {
@@ -373,15 +373,6 @@ class ClaudeRuntimeBridge(
             }
             val message = friendlyError(error)
             emitFailureOnce(sessionId, message)
-            if (userStopRequested) {
-                cancelForegroundRuntime()
-            } else {
-                finishForegroundRuntime(
-                    completed = false,
-                    projectName = projectSlug,
-                    detail = message,
-                )
-            }
         }
         runCatching { formatGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }
         runCatching { openRouterGateway?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ClaudeRuntimeBridge", it) }

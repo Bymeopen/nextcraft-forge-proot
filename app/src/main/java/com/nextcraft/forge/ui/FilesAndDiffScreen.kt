@@ -757,7 +757,7 @@ private fun NameDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var value by rememberSaveable { mutableStateOf(initial) }
+    var value by rememberSaveable(initial) { mutableStateOf(initial) }
     ForgeAlertDialog(
         modifier = Modifier.forgePopIn(),
         onDismissRequest = onDismiss,

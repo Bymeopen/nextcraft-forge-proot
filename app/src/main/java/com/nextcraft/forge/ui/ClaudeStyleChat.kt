@@ -304,7 +304,7 @@ internal fun ChatDrawerRow(
 
 @Composable
 internal fun RenameChatDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var text by rememberSaveable { mutableStateOf(initial) }
+    var text by rememberSaveable(initial) { mutableStateOf(initial) }
     ForgeAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.chat_rename_title), fontWeight = FontWeight.SemiBold) },

@@ -31,6 +31,7 @@ internal fun isRootAccessAvailable(timeoutSeconds: Long = 8L): Boolean = runCatc
  * are not killed by `ActivityManager` under heavy compilation load.
  */
 internal fun disablePhantomProcessKillerViaRoot() {
+    if (!RuntimeEngines.isRootEngine()) return
     runCatching {
         val cmd = """
             /system/bin/device_config set_sync_disabled_for_tests persistent 2>/dev/null || true
@@ -98,6 +99,9 @@ internal fun detectRomInfo(): RomInfo {
         prop("ro.crdroid.version").isNotBlank() -> "crDroid ${prop("ro.crdroid.version")}"
         prop("ro.pixelexperience.version").isNotBlank() -> "PixelExperience ${prop("ro.pixelexperience.version")}"
         else -> prop("ro.build.display.id").ifBlank { "AOSP/unknown" }
+    }
+    if (!RuntimeEngines.isRootEngine()) {
+        return RomInfo(rom, "PRoot (non-root engine active)", "unprobed")
     }
     val rootManager = runCatching {
         val proc = ProcessBuilder("su", "-c", "su -v; getenforce").redirectErrorStream(true).start()

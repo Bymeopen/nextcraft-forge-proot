@@ -173,6 +173,8 @@ internal class LocalFormatGateway(
         output.write(EVENT_STREAM_HEADERS.toByteArray())
     }
 
+    private fun JSONObject.optNonNull(key: String): Any? = opt(key)?.takeIf { it != JSONObject.NULL }
+
     private fun toOpenAi(source: JSONObject): JSONObject {
         if (isResponsesProtocol) return toOpenAiResponses(source)
         val target = JSONObject()
@@ -181,7 +183,7 @@ internal class LocalFormatGateway(
             .put(maxTokensField(), source.optInt("max_tokens", 4096))
         if (source.has("temperature")) target.put("temperature", source.get("temperature"))
         val messages = JSONArray()
-        source.opt("system")?.let { system ->
+        source.optNonNull("system")?.let { system ->
             val text = when (system) {
                 is JSONArray -> contentText(system)
                 else -> system.toString()
@@ -192,9 +194,9 @@ internal class LocalFormatGateway(
         for (index in 0 until sourceMessages.length()) {
             val message = sourceMessages.getJSONObject(index)
             val role = message.stringOrEmpty("role")
-            val content = message.opt("content")
+            val content = message.optNonNull("content")
             if (content !is JSONArray) {
-                messages.put(JSONObject().put("role", role).put("content", content ?: ""))
+                messages.put(JSONObject().put("role", role).put("content", content?.toString().orEmpty()))
                 continue
             }
             val text = contentText(content)
@@ -259,7 +261,7 @@ internal class LocalFormatGateway(
             .put("stream", false)
             .put("max_output_tokens", source.optInt("max_tokens", 4096))
         if (source.has("temperature")) target.put("temperature", source.get("temperature"))
-        source.opt("system")?.let { system ->
+        source.optNonNull("system")?.let { system ->
             val text = when (system) {
                 is JSONArray -> contentText(system)
                 else -> system.toString()
@@ -271,7 +273,7 @@ internal class LocalFormatGateway(
         for (index in 0 until sourceMessages.length()) {
             val message = sourceMessages.getJSONObject(index)
             val role = message.stringOrEmpty("role")
-            val content = message.opt("content")
+            val content = message.optNonNull("content")
             if (content !is JSONArray) {
                 input.put(JSONObject().put("role", role).put("content", content?.toString().orEmpty()))
                 continue
@@ -334,6 +336,8 @@ internal class LocalFormatGateway(
         }
         val message = source.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message") ?: JSONObject()
         val content = JSONArray()
+        val reasoning = message.stringOrEmpty("reasoning_content").ifEmpty { message.stringOrEmpty("reasoning") }
+        if (reasoning.isNotBlank()) content.put(JSONObject().put("type", "thinking").put("thinking", reasoning))
         val text = message.stringOrEmpty("content")
         if (text.isNotBlank()) content.put(JSONObject().put("type", "text").put("text", text))
         val calls = message.optJSONArray("tool_calls") ?: JSONArray()
@@ -497,6 +501,10 @@ internal class LocalFormatGateway(
             connection.setRequestProperty("Accept", "text/event-stream, application/json")
             if (currentKey.isNotBlank()) {
                 connection.setRequestProperty("Authorization", "Bearer $currentKey")
+            }
+            if (endpoint.startsWith("https://opencode.ai/zen/")) {
+                connection.setRequestProperty("User-Agent", "NextCraft-Forge-Android/1.0")
+                connection.setRequestProperty("x-session-id", "session-${UUID.randomUUID()}")
             }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
             val code = connection.responseCode
@@ -774,16 +782,16 @@ internal class LocalFormatGateway(
         for (index in 0 until content.length()) {
             val block = content.getJSONObject(index)
             val type = block.getString("type")
-            val start = if (type == "text") {
-                JSONObject().put("type", "text").put("text", "")
-            } else {
-                JSONObject().put("type", "tool_use").put("id", block.getString("id")).put("name", block.getString("name")).put("input", JSONObject())
+            val start = when (type) {
+                "thinking" -> JSONObject().put("type", "thinking").put("thinking", "")
+                "text" -> JSONObject().put("type", "text").put("text", "")
+                else -> JSONObject().put("type", "tool_use").put("id", block.getString("id")).put("name", block.getString("name")).put("input", JSONObject())
             }
             event("content_block_start", JSONObject().put("type", "content_block_start").put("index", index).put("content_block", start))
-            val delta = if (type == "text") {
-                JSONObject().put("type", "text_delta").put("text", block.getString("text"))
-            } else {
-                JSONObject().put("type", "input_json_delta").put("partial_json", block.getJSONObject("input").toString())
+            val delta = when (type) {
+                "thinking" -> JSONObject().put("type", "thinking_delta").put("thinking", block.getString("thinking"))
+                "text" -> JSONObject().put("type", "text_delta").put("text", block.getString("text"))
+                else -> JSONObject().put("type", "input_json_delta").put("partial_json", block.getJSONObject("input").toString())
             }
             event("content_block_delta", JSONObject().put("type", "content_block_delta").put("index", index).put("delta", delta))
             event("content_block_stop", JSONObject().put("type", "content_block_stop").put("index", index))
