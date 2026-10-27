@@ -46,7 +46,11 @@ android {
         // A fixed, public debug key: CI runners otherwise sign each debug APK with a fresh random key, so a newer
         // build cannot be installed over an older one and the app (rootfs, chats, root grant) must be uninstalled.
         create("sharedDebug") {
-            storeFile = file("debug.keystore")
+            // The PRoot edition keeps the debug key of the earlier PRoot fork (1.0.0-proot.200), so a copy installed from
+            // that fork still updates in place: Android refuses an update signed with a different key.
+            storeFile = file(
+                if ((project.findProperty("nextcraft.sideBySideSuffix") as String?) == "proot") "debug-proot.keystore" else "debug.keystore",
+            )
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
