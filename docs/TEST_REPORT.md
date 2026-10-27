@@ -27,6 +27,7 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - **Proyek baru + build Android (UI `.x`)**: dialog Proyek baru dengan templat Android Compose menghasilkan proyek AGP 9.4.1 / Kotlin 2.4.21 / compileSdk 37.2; `gradle assembleDebug` di chroot `.x` BUILD SUCCESSFUL (2m15s, exit 0), APK 29 MB terpasang dan berjalan ("Built with NextCraft Forge"), lalu dicopot.
 - **Hapus proyek (UI `.x`)**: dialog konfirmasi jelas; jendela urungkan 6 dtk; setelah perbaikan `72bb7c2` folder berisi `build/` dan `.gradle/` milik root terhapus penuh (diverifikasi di disk).
 - **Rotasi (UI `.x`)**: landscape pada daftar proyek tampil rapi, navigasi bawah utuh; rotasi dikembalikan ke semula.
+- **Ctrl+C di terminal (UI `.x`)**: chip `^C` menghentikan `sleep 300` dan prompt kembali. Catatan desain: Ctrl (sticky) hanya berlaku untuk tombol di baris chip; mengetik `c` di kolom perintah mengirim teks biasa, bukan Ctrl+C.
 
 ## Bug yang ditemukan dan perbaikannya (branch lokal, belum di GitHub)
 
@@ -49,4 +50,4 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - Penyebab kegagalan sesi berulang ("Claude Code reported an error") belum terbukti. Aplikasi sehat (0 crash/ANR); transkrip sesi 51 MB berisi 63 screenshot, dugaan: ukuran data sesi.
 
 ## Belum diuji
-Ctrl+C dan mematikan server dari terminal, tab Perubahan (butuh proyek git), kirim pesan tanpa login, cabang chat terisolasi + `.forge/chats` lewat UI, ukuran font 2.0, Glass solid hidup/mati.
+tab Perubahan (butuh proyek git), kirim pesan tanpa login, cabang chat terisolasi + `.forge/chats` lewat UI, ukuran font 2.0, Glass solid hidup/mati.
