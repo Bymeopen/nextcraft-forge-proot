@@ -341,13 +341,24 @@ fun MainViewModel.flushTerminalInput(chatId: String?) {
 }
 
 fun MainViewModel.clearTerminal() {
-    terminals.values.forEach { it.session?.reset() }
+    terminals.values.forEach { it.session?.let(::wipeTerminalScreen) }
     _state.update { it.copy(bannerMessage = UiText.res(R.string.terminal_clear_terminal)) }
 }
 
 fun MainViewModel.clearTerminal(chatId: String?) {
-    // reset() clears the screen and attributes; the shell redraws its prompt on the next key.
-    terminalHandle(chatId).session?.reset()
+    terminalHandle(chatId).session?.let(::wipeTerminalScreen)
+}
+
+/**
+ * Clears the visible screen and the scrollback. TerminalSession.reset() only restores modes and colours and leaves the
+ * screen buffer as it was (the menu item looked dead), so the clear sequence is fed to the emulator directly, then Ctrl+L
+ * makes an idle shell redraw its prompt at the top.
+ */
+private fun wipeTerminalScreen(session: TerminalSession) {
+    val emulator = session.emulator ?: return
+    val clear = "\u001b[3J\u001b[2J\u001b[H".toByteArray(Charsets.US_ASCII)
+    emulator.append(clear, clear.size)
+    session.write("\u000c")
 }
 
 internal fun MainViewModel.onTerminalSessionEnded(session: TerminalSession) {

@@ -768,7 +768,7 @@ fun MainViewModel.importZipProject(uri: android.net.Uri) {
                     val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                     if (c.moveToFirst() && idx >= 0) c.getString(idx) else null
                 } ?: "import.zip"
-                val magic = app.contentResolver.openInputStream(uri)?.use { it.readNBytes(4) } ?: ByteArray(0)
+                val magic = app.contentResolver.openInputStream(uri)?.use { readUpTo(it, 4) } ?: ByteArray(0)
                 val isZip = magic.size == 4 && magic[0] == 0x50.toByte() && magic[1] == 0x4B.toByte() &&
                     magic[2] == 0x03.toByte() && magic[3] == 0x04.toByte()
                 if (!isZip) throw IllegalArgumentException("$displayName is not a ZIP archive")
@@ -851,3 +851,14 @@ fun MainViewModel.importZipProject(uri: android.net.Uri) {
     }
 }
 
+/** Reads up to [count] bytes (fewer at end of stream). InputStream.readNBytes needs API 33; the app supports API 31. */
+internal fun readUpTo(input: java.io.InputStream, count: Int): ByteArray {
+    val buf = ByteArray(count)
+    var read = 0
+    while (read < count) {
+        val n = input.read(buf, read, count - read)
+        if (n < 0) break
+        read += n
+    }
+    return if (read == count) buf else buf.copyOf(read)
+}

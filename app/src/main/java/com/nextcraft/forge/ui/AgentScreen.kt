@@ -203,7 +203,8 @@ fun AgentScreen(
     var branchSheetOpen by rememberSaveable { mutableStateOf(false) }
     var repoSheetOpen by rememberSaveable { mutableStateOf(false) }
     var reviewBranchChatId by rememberSaveable { mutableStateOf<String?>(null) }
-    if (drawerState.isOpen) CountAsOpenModal()
+    // No page blur for the drawer: it is drawn inside the same composition as the page, so the root blur would blur the drawer
+    // itself too (the whole screen went out of focus whenever the chat list was open). Its container is opaque in Glass.
     androidx.activity.compose.BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
 
     androidx.compose.material3.ModalNavigationDrawer(

@@ -909,6 +909,13 @@ fun WebPreviewScreen(
                             request: android.webkit.WebResourceRequest,
                         ): Boolean = request.url.scheme?.lowercase() !in setOf("http", "https")
 
+                        // A page that sets no background of its own must look like it does in a browser (white). With the app's dark
+                        // surface behind it, plain HTML (directory listings, quick tests) rendered black text on dark and was unreadable.
+                        // The dark colour stays only until the first paint, so there is no white flash on open.
+                        override fun onPageCommitVisible(view: WebView, url: String) {
+                            view.setBackgroundColor(android.graphics.Color.WHITE)
+                        }
+
                         // Without this the app process is killed when the renderer dies (e.g. low memory).
                         override fun onRenderProcessGone(
                             view: WebView,
@@ -924,7 +931,6 @@ fun WebPreviewScreen(
             },
             update = { view ->
                 (view as? WebView)?.let { webView ->
-                    webView.setBackgroundColor(webViewBgArgb)
                     webViewRef = webView
                 }
             },

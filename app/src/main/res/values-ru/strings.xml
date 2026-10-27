@@ -72,7 +72,7 @@
     <string name="shell_my_awesome_app">Моё приложение</string>
     <string name="shell_description">Описание</string>
     <string name="shell_optional_project_summary">Краткое описание проекта (необязательно)</string>
-    <string name="shell_generate_android_app_template">Создать шаблон Android-приложения (SDK 35)</string>
+    <string name="shell_generate_android_app_template">Создать шаблон Android-приложения (SDK 37)</string>
     <string name="settings_settings">Настройки</string>
     <string name="settings_preferences_configuration">Параметры и конфигурация</string>
     <string name="settings_general">Общие</string>
@@ -524,7 +524,7 @@
     <string name="onb_recheck">Проверить ещё раз</string>
     <string name="np_title">Новый проект</string>
     <string name="np_android_template">Шаблон Android-приложения</string>
-    <string name="np_android_template_sub">Создать проект на Kotlin (SDK 35)</string>
+    <string name="np_android_template_sub">Создать проект на Kotlin (SDK 37)</string>
     <string name="settings_auto_approve_all_tools">Авто-разрешение всех инструментов</string>
     <string name="settings_auto_approve_all_tools_subtitle">Не запрашивать подтверждение при запуске инструментов</string>
     <string name="settings_download_install_update">Скачать и установить v%1$s</string>

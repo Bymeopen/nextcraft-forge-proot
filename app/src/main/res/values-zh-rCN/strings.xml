@@ -72,7 +72,7 @@
     <string name="shell_my_awesome_app">我的超棒应用</string>
     <string name="shell_description">描述</string>
     <string name="shell_optional_project_summary">项目简介（可选）</string>
-    <string name="shell_generate_android_app_template">生成 Android 应用模板（SDK 35）</string>
+    <string name="shell_generate_android_app_template">生成 Android 应用模板（SDK 37）</string>
     <string name="settings_settings">设置</string>
     <string name="settings_preferences_configuration">偏好设置与配置</string>
     <string name="settings_general">通用</string>
@@ -488,7 +488,7 @@
     <string name="onb_recheck">重新检查</string>
     <string name="np_title">新建项目</string>
     <string name="np_android_template">Android 应用模板</string>
-    <string name="np_android_template_sub">生成 Kotlin 项目（SDK 35）</string>
+    <string name="np_android_template_sub">生成 Kotlin 项目（SDK 37）</string>
     <string name="settings_auto_approve_all_tools">自动批准所有工具</string>
     <string name="settings_auto_approve_all_tools_subtitle">所有工具执行均跳过确认提示</string>
     <string name="settings_download_install_update">下载并安装 v%1$s</string>

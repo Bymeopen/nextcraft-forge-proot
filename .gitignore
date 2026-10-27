@@ -40,3 +40,4 @@ __pycache__/
 *.jks
 *.p12
 *.pem
+.kotlin/

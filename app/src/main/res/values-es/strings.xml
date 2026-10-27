@@ -72,7 +72,7 @@
     <string name="shell_my_awesome_app">Mi increíble app</string>
     <string name="shell_description">Descripción</string>
     <string name="shell_optional_project_summary">Resumen opcional del proyecto</string>
-    <string name="shell_generate_android_app_template">Generar plantilla de app Android (SDK 35)</string>
+    <string name="shell_generate_android_app_template">Generar plantilla de app Android (SDK 37)</string>
     <string name="settings_settings">Ajustes</string>
     <string name="settings_preferences_configuration">Preferencias y configuración</string>
     <string name="settings_general">General</string>
@@ -512,7 +512,7 @@
     <string name="onb_recheck">Volver a comprobar</string>
     <string name="np_title">Nuevo proyecto</string>
     <string name="np_android_template">Plantilla de app Android</string>
-    <string name="np_android_template_sub">Genera un proyecto Kotlin (SDK 35)</string>
+    <string name="np_android_template_sub">Genera un proyecto Kotlin (SDK 37)</string>
     <string name="settings_auto_approve_all_tools">Aprobar todas las herramientas automáticamente</string>
     <string name="settings_auto_approve_all_tools_subtitle">Omitir las confirmaciones en todas las ejecuciones de herramientas</string>
     <string name="settings_download_install_update">Descargar e instalar v%1$s</string>

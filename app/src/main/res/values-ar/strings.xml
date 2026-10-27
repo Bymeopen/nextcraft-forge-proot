@@ -72,7 +72,7 @@
     <string name="shell_my_awesome_app">تطبيقي الرائع</string>
     <string name="shell_description">الوصف</string>
     <string name="shell_optional_project_summary">ملخص المشروع (اختياري)</string>
-    <string name="shell_generate_android_app_template">إنشاء قالب تطبيق Android (SDK 35)</string>
+    <string name="shell_generate_android_app_template">إنشاء قالب تطبيق Android (SDK 37)</string>
     <string name="settings_settings">الإعدادات</string>
     <string name="settings_preferences_configuration">التفضيلات والإعداد</string>
     <string name="settings_general">عام</string>
@@ -548,7 +548,7 @@
     <string name="onb_recheck">إعادة الفحص</string>
     <string name="np_title">مشروع جديد</string>
     <string name="np_android_template">قالب تطبيق Android</string>
-    <string name="np_android_template_sub">إنشاء مشروع Kotlin (SDK 35)</string>
+    <string name="np_android_template_sub">إنشاء مشروع Kotlin (SDK 37)</string>
     <string name="settings_auto_approve_all_tools">الموافقة التلقائية على كل الأدوات</string>
     <string name="settings_auto_approve_all_tools_subtitle">تخطي رسائل التأكيد عند تنفيذ كل الأدوات</string>
     <string name="settings_download_install_update">تنزيل v%1$s وتثبيته</string>
