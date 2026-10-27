@@ -73,7 +73,7 @@
     <string name="shell_my_awesome_app">My Awesome App</string>
     <string name="shell_description">Description</string>
     <string name="shell_optional_project_summary">Optional project summary</string>
-    <string name="shell_generate_android_app_template">Generate Android App Template (SDK 35)</string>
+    <string name="shell_generate_android_app_template">Generate Android App Template (SDK 37)</string>
     <string name="settings_settings">Settings</string>
     <string name="settings_preferences_configuration">Preferences &amp; configuration</string>
     <string name="settings_general">General</string>
@@ -501,7 +501,7 @@
     <string name="onb_recheck">Re-check</string>
     <string name="np_title">New project</string>
     <string name="np_android_template">Android app template</string>
-    <string name="np_android_template_sub">Generate a Kotlin project (SDK 35)</string>
+    <string name="np_android_template_sub">Generate a Kotlin project (SDK 37)</string>
     <string name="settings_auto_approve_all_tools">Auto-approve all tools</string>
     <string name="settings_auto_approve_all_tools_subtitle">Skip confirmation prompts for all tool executions</string>
     <string name="settings_download_install_update">Download &amp; Install v%1$s</string>

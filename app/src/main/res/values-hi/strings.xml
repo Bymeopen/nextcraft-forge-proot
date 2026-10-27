@@ -72,7 +72,7 @@
     <string name="shell_my_awesome_app">My Awesome App</string>
     <string name="shell_description">विवरण</string>
     <string name="shell_optional_project_summary">Project का संक्षिप्त विवरण (वैकल्पिक)</string>
-    <string name="shell_generate_android_app_template">Android App Template बनाएँ (SDK 35)</string>
+    <string name="shell_generate_android_app_template">Android App Template बनाएँ (SDK 37)</string>
     <string name="settings_settings">सेटिंग्स</string>
     <string name="settings_preferences_configuration">प्राथमिकताएँ और कॉन्फ़िगरेशन</string>
     <string name="settings_general">सामान्य</string>
@@ -500,7 +500,7 @@
     <string name="onb_recheck">दोबारा जाँचें</string>
     <string name="np_title">नया project</string>
     <string name="np_android_template">Android ऐप टेम्पलेट</string>
-    <string name="np_android_template_sub">Kotlin project बनाएँ (SDK 35)</string>
+    <string name="np_android_template_sub">Kotlin project बनाएँ (SDK 37)</string>
     <string name="settings_auto_approve_all_tools">सभी tools अपने आप मंज़ूर करें</string>
     <string name="settings_auto_approve_all_tools_subtitle">सभी tool निष्पादन के लिए पुष्टि के प्रॉम्प्ट छोड़ें</string>
     <string name="settings_download_install_update">v%1$s डाउनलोड और install करें</string>
