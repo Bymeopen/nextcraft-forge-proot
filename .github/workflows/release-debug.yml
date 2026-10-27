@@ -40,20 +40,37 @@ jobs:
           gradle-version: "9.8.2"
       - name: Compute version
         run: |
-          echo "VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
           echo "VERSION_NAME=1.0.${GITHUB_RUN_NUMBER}-forge" >> "$GITHUB_ENV"
           echo "TAG=dev-latest" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REPOSITORY" == *-proot ]]; then
+            # The PRoot repo mirrors this one but ships its own app (com.nextcraft.forge.proot). Its manifest must name that
+            # package and point at this repo's release, or the updater ignores it. versionCode starts above 1200, the
+            # last build of the earlier PRoot fork (1.0.0-proot.200), so an installed copy still updates in place.
+            echo "PACKAGE=com.nextcraft.forge.proot" >> "$GITHUB_ENV"
+            echo "VERSION_CODE=$((2000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+            echo "ASSET_PREFIX=nextcraft-forge-proot-debug" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=NextCraft Forge PRoot debug" >> "$GITHUB_ENV"
+            echo "EXTRA_GRADLE_ARGS=-Pnextcraft.sideBySideSuffix=proot -PappUpdateManifestUrl=https://github.com/$GITHUB_REPOSITORY/releases/latest/download/update-manifest.json" >> "$GITHUB_ENV"
+          else
+            echo "PACKAGE=com.nextcraft.forge" >> "$GITHUB_ENV"
+            echo "VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+            echo "ASSET_PREFIX=nextcraft-forge-debug" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=NextCraft Forge debug" >> "$GITHUB_ENV"
+            echo "EXTRA_GRADLE_ARGS=" >> "$GITHUB_ENV"
+          fi
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug -PversionCode="$VERSION_CODE" -PversionName="$VERSION_NAME"
+        # EXTRA_GRADLE_ARGS is empty on this repo and carries the PRoot package suffix and manifest URL on the PRoot repo.
+        run: gradle --no-daemon :app:assembleDebug -PversionCode="$VERSION_CODE" -PversionName="$VERSION_NAME" $EXTRA_GRADLE_ARGS
       - name: Prepare assets
         env:
           NOTES: ${{ inputs.notes }}
         run: |
           apk="$(ls app/build/outputs/apk/debug/*.apk | head -1)"
           mkdir -p dist
-          cp "$apk" "dist/nextcraft-forge-debug-$VERSION_NAME.apk"
-          NEXTCRAFT_PACKAGE=com.nextcraft.forge NEXTCRAFT_OUT_DIR=dist scripts/make-update-manifest.sh \
-            "dist/nextcraft-forge-debug-$VERSION_NAME.apk" "$VERSION_CODE" "$VERSION_NAME" "$TAG" debug "$NOTES"
+          cp "$apk" "dist/$ASSET_PREFIX-$VERSION_NAME.apk"
+          # NEXTCRAFT_REPO makes the manifest's download URL point at the repo that published the release.
+          NEXTCRAFT_PACKAGE="$PACKAGE" NEXTCRAFT_REPO="$GITHUB_REPOSITORY" NEXTCRAFT_OUT_DIR=dist scripts/make-update-manifest.sh \
+            "dist/$ASSET_PREFIX-$VERSION_NAME.apk" "$VERSION_CODE" "$VERSION_NAME" "$TAG" debug "$NOTES"
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,7 +82,7 @@ jobs:
           # that race: the late tag deletion turns the new release into a draft, and the app then finds no manifest (404).
           sleep 20
           gh release create "$TAG" dist/*.apk dist/update-manifest.json \
-            --title "NextCraft Forge debug $VERSION_NAME" --notes "${NOTES:-Debug build $VERSION_NAME from $GITHUB_REF_NAME}" --latest=false \
+            --title "$RELEASE_TITLE $VERSION_NAME" --notes "${NOTES:-Debug build $VERSION_NAME from $GITHUB_REF_NAME}" --latest=false \
             --target "$GITHUB_SHA"
           # Verify the release is really published and the manifest is served; publish it again if it became a draft.
           for attempt in 1 2 3 4; do
