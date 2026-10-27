@@ -18,10 +18,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
 
-/**
- * Wraps an action that is hard to undo (uninstalling a runtime component): [trigger] draws the button and gets the
- * click handler that opens a confirmation, and [onConfirm] only runs after the person agrees.
- */
+private val PULL_REQUEST_STRATEGIES = listOf(
+    "squash" to "Squash",
+    "merge" to "Merge",
+    "rebase" to "Rebase",
+)
+
 @Composable
 internal fun ConfirmedAction(
     title: String,
@@ -30,36 +32,30 @@ internal fun ConfirmedAction(
     onConfirm: () -> Unit,
     trigger: @Composable (onClick: () -> Unit) -> Unit,
 ) {
-    var asking by remember { mutableStateOf(false) }
-    trigger { asking = true }
-    if (asking) {
-        val tokens = LocalForgeThemeTokens.current
-        ForgeAlertDialog(
-            modifier = Modifier.forgePopIn(),
-            onDismissRequest = { asking = false },
-            shape = RoundedCornerShape(24.dp),
-            title = { Text(title, fontWeight = FontWeight.SemiBold) },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { asking = false; onConfirm() }) { Text(confirmLabel, color = tokens.dangerText) }
-            },
-            dismissButton = {
-                TextButton(onClick = { asking = false }) { Text(stringResource(R.string.agent_cancel)) }
-            },
-        )
-    }
+    var dialogOpen by remember { mutableStateOf(false) }
+    trigger { dialogOpen = true }
+    if (!dialogOpen) return
+    val themeTokens = LocalForgeThemeTokens.current
+    val closeDialog = { dialogOpen = false }
+    ForgeAlertDialog(
+        modifier = Modifier.forgePopIn(),
+        onDismissRequest = closeDialog,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text(text = title, fontWeight = FontWeight.SemiBold) },
+        text = { Text(text = message) },
+        confirmButton = {
+            TextButton(onClick = { closeDialog(); onConfirm() }) {
+                Text(text = confirmLabel, color = themeTokens.dangerText)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = closeDialog) {
+                Text(text = stringResource(R.string.agent_cancel))
+            }
+        },
+    )
 }
 
-private val PR_MERGE_METHODS = listOf(
-    "squash" to "Squash",
-    "merge" to "Merge",
-    "rebase" to "Rebase",
-)
-
-/**
- * Confirmation dialog for merging a pull request, including a 3-way merge strategy selector
- * (`squash` / `merge` / `rebase`).
- */
 @Composable
 internal fun MergePrConfirmed(
     title: String,
@@ -68,47 +64,53 @@ internal fun MergePrConfirmed(
     onConfirm: (mergeMethod: String) -> Unit,
     trigger: @Composable (onClick: () -> Unit) -> Unit,
 ) {
-    var asking by remember { mutableStateOf(false) }
-    var methodIndex by remember { mutableIntStateOf(0) }
-    trigger { asking = true }
-    if (asking) {
-        val tokens = LocalForgeThemeTokens.current
-        ForgeAlertDialog(
-            modifier = Modifier.forgePopIn(),
-            onDismissRequest = { asking = false },
-            shape = RoundedCornerShape(24.dp),
-            title = { Text(title, fontWeight = FontWeight.SemiBold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    Text(message)
-                    ForgePillTabs(
-                        items = PR_MERGE_METHODS.map { it.second },
-                        selectedIndex = methodIndex,
-                        onSelect = { methodIndex = it },
-                        equalWidth = true,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        asking = false
-                        onConfirm(PR_MERGE_METHODS[methodIndex.coerceIn(0, PR_MERGE_METHODS.lastIndex)].first)
-                    },
-                ) {
-                    Text(confirmLabel, color = tokens.dangerText)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { asking = false }) { Text(stringResource(R.string.agent_cancel)) }
-            },
-        )
-    }
+    var dialogOpen by remember { mutableStateOf(false) }
+    var strategyCursor by remember { mutableIntStateOf(0) }
+    trigger { dialogOpen = true }
+    if (!dialogOpen) return
+    val themeTokens = LocalForgeThemeTokens.current
+    val closeDialog = { dialogOpen = false }
+    ForgeAlertDialog(
+        modifier = Modifier.forgePopIn(),
+        onDismissRequest = closeDialog,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text(text = title, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(text = message)
+                ForgePillTabs(
+                    items = PULL_REQUEST_STRATEGIES.map { (_, label) -> label },
+                    selectedIndex = strategyCursor,
+                    onSelect = { chosen -> strategyCursor = chosen },
+                    equalWidth = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    closeDialog()
+                    val safeIdx = strategyCursor.coerceIn(0, PULL_REQUEST_STRATEGIES.lastIndex)
+                    onConfirm(PULL_REQUEST_STRATEGIES[safeIdx].first)
+                },
+            ) {
+                Text(text = confirmLabel, color = themeTokens.dangerText)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = closeDialog) {
+                Text(text = stringResource(R.string.agent_cancel))
+            }
+        },
+    )
 }
 
-/** The standard wording for uninstalling [name]; the caller supplies what runs on confirmation. */
 @Composable
-internal fun UninstallConfirmed(name: String, onConfirm: () -> Unit, trigger: @Composable (onClick: () -> Unit) -> Unit) {
+internal fun UninstallConfirmed(
+    name: String,
+    onConfirm: () -> Unit,
+    trigger: @Composable (onClick: () -> Unit) -> Unit,
+) {
     ConfirmedAction(
         title = stringResource(R.string.confirm_uninstall_title, name),
         message = stringResource(R.string.confirm_uninstall_message),

@@ -11,30 +11,28 @@ import androidx.annotation.StringRes
 import java.util.Locale
 
 class LocalizedContext(
-    base: Context,
-    private val configContext: Context,
-) : ContextWrapper(base) {
+    hostContext: Context,
+    private val localizedDelegate: Context,
+) : ContextWrapper(hostContext) {
     override fun getResources(): Resources {
-        val baseConfig = baseContext?.resources?.configuration
-        val targetResources = configContext.resources
-        if (baseConfig != null) {
-            val nightMask = baseConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
-            val currentMask = targetResources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
-            if (nightMask != currentMask) {
-                targetResources.configuration.uiMode =
-                    (targetResources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMask
+        val res = localizedDelegate.resources
+        baseContext?.resources?.configuration?.let { parentCfg ->
+            val desiredNightBits = parentCfg.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            val activeNightBits = res.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            if (desiredNightBits != activeNightBits) {
+                res.configuration.uiMode =
+                    (res.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or desiredNightBits
             }
         }
-        return targetResources
+        return res
     }
 
-    override fun getAssets(): AssetManager = configContext.assets
+    override fun getAssets(): AssetManager = localizedDelegate.assets
 }
 
 object LocaleHelper {
-
-    fun getLocale(languageCode: String): Locale? = when (languageCode.lowercase()) {
-        "system", "" -> null
+    fun getLocale(languageCode: String): Locale? = when (languageCode.trim().lowercase(Locale.ROOT)) {
+        "", "system" -> null
         "id", "in" -> Locale.forLanguageTag("id-ID")
         "zh" -> Locale.SIMPLIFIED_CHINESE
         "en" -> Locale.ENGLISH
@@ -45,42 +43,46 @@ object LocaleHelper {
         applyLanguage(context, AppStrings.languageCode(context))
 
     fun applyLanguage(context: Context, languageCode: String): Context {
-        val targetLocale = getLocale(languageCode) ?: run {
-            val systemLocale = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                Resources.getSystem().configuration.locales[0]
+        val resolvedLocale = getLocale(languageCode) ?: resolveSystemDefaultLocale() ?: return context
+        Locale.setDefault(resolvedLocale)
+        val updatedCfg = Configuration(context.resources.configuration).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                setLocales(LocaleList(resolvedLocale))
             } else {
                 @Suppress("DEPRECATION")
-                Resources.getSystem().configuration.locale
+                locale = resolvedLocale
             }
-            systemLocale ?: return context
+            setLayoutDirection(resolvedLocale)
         }
+        return LocalizedContext(context, context.createConfigurationContext(updatedCfg))
+    }
 
-        Locale.setDefault(targetLocale)
-        val config = Configuration(context.resources.configuration)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            config.setLocales(LocaleList(targetLocale))
+    private fun resolveSystemDefaultLocale(): Locale? {
+        val sysCfg = Resources.getSystem().configuration
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            sysCfg.locales[0]
         } else {
             @Suppress("DEPRECATION")
-            config.locale = targetLocale
+            sysCfg.locale
         }
-        config.setLayoutDirection(targetLocale)
-        val configContext = context.createConfigurationContext(config)
-        return LocalizedContext(context, configContext)
     }
 }
 
 object AppStrings {
-    private const val PREFS_NAME = "nextcraft_preferences"
-    private const val KEY_LANGUAGE = "language_code"
+    private const val SHARED_PREFS_FILE = "nextcraft_preferences"
+    private const val PREF_LANG_KEY = "language_code"
 
     fun languageCode(context: Context): String =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_LANGUAGE, "system") ?: "system"
+        context.getSharedPreferences(SHARED_PREFS_FILE, Context.MODE_PRIVATE)
+            .getString(PREF_LANG_KEY, "system")
+            .orEmpty()
+            .ifBlank { "system" }
 
     fun saveLanguageCode(context: Context, code: String) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val normalized = code.trim().ifEmpty { "system" }
+        context.getSharedPreferences(SHARED_PREFS_FILE, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_LANGUAGE, code.trim().ifEmpty { "system" })
+            .putString(PREF_LANG_KEY, normalized)
             .commit()
     }
 

@@ -3,9 +3,8 @@
 package com.nextcraft.forge.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,8 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
@@ -27,9 +24,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,34 +39,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
-import com.nextcraft.forge.model.AgentKind
+import com.nextcraft.forge.model.ProjectType
 
-/**
- * Inside a project: its chats, each with its own title, newest first. One primary New chat action;
- * the header offers Build (Android) and Project tools. Tapping a chat opens the conversation.
- */
 @Composable
 fun ProjectChatsScreen(
     state: ForgeUiState,
     viewModel: MainViewModel,
 ) {
-    val scheme = MaterialTheme.colorScheme
-    val project = state.activeProject
-    val chats = state.chats.sortedByDescending { it.updatedAtMillis }
-    var repoOpen by rememberSaveable { mutableStateOf(false) }
-    var reviewChatId by rememberSaveable { mutableStateOf<String?>(null) }
+    val palette = MaterialTheme.colorScheme
+    val currentProject = state.activeProject
+    val orderedChats = state.chats.sortedByDescending { it.updatedAtMillis }
+    var showRepoModal by rememberSaveable { mutableStateOf(false) }
+    var activeBranchReviewChatId by rememberSaveable { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        val projectKindLabel = currentProject?.let { proj ->
+            stringResource(if (proj.type == ProjectType.ANDROID) R.string.projects_android else R.string.projects_general)
+        }
+        val chatCountSummary = quantityStringResource(R.plurals.chats_subtitle, orderedChats.size, orderedChats.size)
+        val combinedSubtitle = listOfNotNull(projectKindLabel, chatCountSummary).joinToString(" · ")
+
         ForgeProjectHeader(
-            title = project?.name ?: stringResource(R.string.shell_nextcraft_forge),
-            subtitle = listOfNotNull(
-                project?.let { stringResource(if (it.type == com.nextcraft.forge.model.ProjectType.ANDROID) R.string.projects_android else R.string.projects_general) },
-                quantityStringResource(R.plurals.chats_subtitle, chats.size, chats.size),
-            ).joinToString(" · "),
-            onBack = { viewModel.projectBack() },
+            title = currentProject?.name ?: stringResource(R.string.shell_nextcraft_forge),
+            subtitle = combinedSubtitle,
+            onBack = viewModel::projectBack,
             actions = {
-                // Build & install only means something for Android projects.
-                if (project?.type == com.nextcraft.forge.model.ProjectType.ANDROID) {
+                if (currentProject?.type == ProjectType.ANDROID) {
                     ForgePillIcon(
                         icon = Icons.Default.PlayArrow,
                         description = stringResource(R.string.launch_build_and_install_apk),
@@ -83,8 +80,8 @@ fun ProjectChatsScreen(
         )
 
         ForgePrimaryButton(
-            text = "+ " + stringResource(R.string.chats_new_chat),
-            onClick = { viewModel.createChat() },
+            text = "+ ${stringResource(R.string.chats_new_chat)}",
+            onClick = viewModel::createChat,
             enabled = true,
             modifier = Modifier
                 .fillMaxWidth()
@@ -92,22 +89,30 @@ fun ProjectChatsScreen(
         )
 
         ForgeTextButton(
-            onClick = { repoOpen = true },
+            onClick = { showRepoModal = true },
             modifier = Modifier.padding(start = 12.dp),
-        ) { Text(stringResource(R.string.repo_button)) }
-        if (repoOpen) {
+        ) {
+            Text(stringResource(R.string.repo_button))
+        }
+
+        if (showRepoModal) {
             RepoSheet(
                 state = state,
                 viewModel = viewModel,
-                onReview = { chatId -> reviewChatId = chatId },
-                onDismiss = { repoOpen = false },
+                onReview = { targetId -> activeBranchReviewChatId = targetId },
+                onDismiss = { showRepoModal = false },
             )
         }
-        reviewChatId?.let { id ->
-            BranchSheet(state = state, viewModel = viewModel, chatId = id, onDismiss = { reviewChatId = null })
+        activeBranchReviewChatId?.let { targetId ->
+            BranchSheet(
+                state = state,
+                viewModel = viewModel,
+                chatId = targetId,
+                onDismiss = { activeBranchReviewChatId = null },
+            )
         }
 
-        if (chats.isEmpty()) {
+        if (orderedChats.isEmpty()) {
             ForgeEmptyState(
                 glyph = ForgeGlyph.SPARK,
                 title = stringResource(R.string.chats_empty_title),
@@ -117,53 +122,70 @@ fun ProjectChatsScreen(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(chats, key = { it.id }) { chat ->
-                val active = chat.id == state.activeChatId
-                val interaction = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            items(orderedChats, key = { it.id }) { thread ->
+                val isSelectedChat = thread.id == state.activeChatId
+                val isCurrentlyRunning = thread.id in state.runningChatIds
+                val touchSource = remember { MutableInteractionSource() }
                 Row(
                     modifier = Modifier
                         .animateItem(fadeInSpec = null, fadeOutSpec = null)
                         .fillMaxWidth()
-                        .forgePressScale(interaction, pressedScale = 0.985f)
-                        .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.Button) { viewModel.openChat(chat.id) }
+                        .forgePressScale(touchSource, pressedScale = 0.985f)
+                        .clickable(
+                            interactionSource = touchSource,
+                            indication = ripple(),
+                            role = Role.Button,
+                        ) { viewModel.openChat(thread.id) }
                         .heightIn(min = 60.dp)
                         .padding(start = 20.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     ForgeStatusIcon(
-                        status = if (chat.id in state.runningChatIds) ForgeStatus.RUNNING else ForgeStatus.TODO,
+                        status = if (isCurrentlyRunning) ForgeStatus.RUNNING else ForgeStatus.TODO,
                         iconSize = 16.dp,
                     )
                     Spacer(modifier = Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = chat.displayTitle(),
+                            text = thread.displayTitle(),
                             fontSize = ForgeType.rowTitle,
-                            // The open chat is marked by weight and colour, not by a "done" check.
-                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (active) scheme.primary else scheme.onSurface,
+                            fontWeight = if (isSelectedChat) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (isSelectedChat) palette.primary else palette.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = formatRelativeTime(chat.updatedAtMillis),
+                            text = formatRelativeTime(thread.updatedAtMillis),
                             fontSize = ForgeType.secondary,
-                            color = scheme.onSurfaceVariant,
+                            color = palette.onSurfaceVariant,
                         )
                     }
-                    if (chats.size > 1) {
+                    if (orderedChats.size > 1) {
                         ConfirmedAction(
                             title = stringResource(R.string.agent_delete_chat),
-                            message = chat.displayTitle(),
+                            message = thread.displayTitle(),
                             confirmLabel = stringResource(R.string.tool_delete),
-                            onConfirm = { viewModel.deleteChat(chat.id) },
-                        ) { onClick ->
-                            IconButton(onClick = onClick, enabled = chat.id !in state.runningChatIds) {
-                                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.agent_delete_chat), tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            onConfirm = { viewModel.deleteChat(thread.id) },
+                        ) { triggerConfirm ->
+                            IconButton(
+                                onClick = triggerConfirm,
+                                enabled = !isCurrentlyRunning,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.agent_delete_chat),
+                                    tint = palette.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
                             }
                         }
                     }
-                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = palette.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
         }

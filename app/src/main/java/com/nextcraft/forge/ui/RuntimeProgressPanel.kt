@@ -1,5 +1,6 @@
 package com.nextcraft.forge.ui
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -23,61 +26,64 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.runtime.RuntimeSetupSnapshot
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
+import kotlinx.coroutines.delay
 
-private const val MIB = 1_048_576.0
+private const val BYTES_PER_MIB = 1_048_576.0
 
-/** "12.3 / 71.9 MB" when both sizes are known, otherwise null. */
 internal fun formatTransfer(downloadedBytes: Long?, totalBytes: Long?): String? {
     if (downloadedBytes == null || totalBytes == null || totalBytes <= 0L) return null
-    return "%.1f / %.1f MB".format(downloadedBytes / MIB, totalBytes / MIB)
+    return "%.1f / %.1f MB".format(downloadedBytes / BYTES_PER_MIB, totalBytes / BYTES_PER_MIB)
 }
 
-/**
- * Shared presentation for runtime download / install / uninstall progress: current step, percentage,
- * transferred size and the latest terminal lines, so a long install never looks frozen.
- */
 @Composable
-internal fun RuntimeProgressPanel(snapshot: RuntimeSetupSnapshot, modifier: Modifier = Modifier) {
+internal fun RuntimeProgressPanel(
+    snapshot: RuntimeSetupSnapshot,
+    modifier: Modifier = Modifier,
+) {
     if (snapshot.status == RuntimeSetupStatus.IDLE) return
-    val running = snapshot.status == RuntimeSetupStatus.RUNNING
-    val failed = snapshot.status == RuntimeSetupStatus.ERROR
-    val percent = (snapshot.progress.coerceIn(0f, 1f) * 100).toInt()
-    val transfer = formatTransfer(snapshot.downloadedBytes, snapshot.totalBytes)
-    // Smoothed download speed from the byte counter between updates.
-    var lastSample by remember { mutableStateOf<Pair<Long, Long>?>(null) }
-    var bytesPerSecond by remember { mutableStateOf(0.0) }
+    val isRunning = snapshot.status == RuntimeSetupStatus.RUNNING
+    val hasError = snapshot.status == RuntimeSetupStatus.ERROR
+    val clampedProgress = snapshot.progress.coerceIn(0f, 1f)
+    val percentageInt = (clampedProgress * 100f).toInt()
+    val transferSummary = formatTransfer(snapshot.downloadedBytes, snapshot.totalBytes)
+
+    var prevCheckpoint by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var emaBytesPerSec by remember { mutableDoubleStateOf(0.0) }
     LaunchedEffect(snapshot.downloadedBytes) {
-        val bytes = snapshot.downloadedBytes
-        if (bytes == null) {
-            lastSample = null
-            bytesPerSecond = 0.0
+        val currentBytes = snapshot.downloadedBytes
+        if (currentBytes == null) {
+            prevCheckpoint = null
+            emaBytesPerSec = 0.0
             return@LaunchedEffect
         }
-        val now = android.os.SystemClock.elapsedRealtime()
-        val previous = lastSample
-        if (previous == null || bytes < previous.first) {
-            lastSample = bytes to now
-        } else if (now - previous.second >= 500L) {
-            val instant = (bytes - previous.first) / ((now - previous.second) / 1000.0)
-            bytesPerSecond = if (bytesPerSecond == 0.0) instant else bytesPerSecond * 0.7 + instant * 0.3
-            lastSample = bytes to now
+        val timestampMs = SystemClock.elapsedRealtime()
+        val prev = prevCheckpoint
+        if (prev == null || currentBytes < prev.first) {
+            prevCheckpoint = currentBytes to timestampMs
+        } else {
+            val deltaMs = timestampMs - prev.second
+            if (deltaMs >= 500L) {
+                val sampleRate = (currentBytes - prev.first) / (deltaMs / 1000.0)
+                emaBytesPerSec = if (emaBytesPerSec == 0.0) sampleRate else (emaBytesPerSec * 0.7) + (sampleRate * 0.3)
+                prevCheckpoint = currentBytes to timestampMs
+            }
         }
     }
 
-    // Steps without a byte counter (apt/SDK installs inside the chroot) show elapsed time instead of a speed.
-    var elapsedSeconds by remember(snapshot.message) { mutableStateOf(0L) }
-    LaunchedEffect(snapshot.message, running) {
-        val started = android.os.SystemClock.elapsedRealtime()
-        while (running) {
-            elapsedSeconds = (android.os.SystemClock.elapsedRealtime() - started) / 1000
-            kotlinx.coroutines.delay(1000)
+    var stepElapsedSec by remember(snapshot.message) { mutableLongStateOf(0L) }
+    LaunchedEffect(snapshot.message, isRunning) {
+        val t0 = SystemClock.elapsedRealtime()
+        while (isRunning) {
+            stepElapsedSec = (SystemClock.elapsedRealtime() - t0) / 1000L
+            delay(1000L)
         }
     }
 
+    val palette = MaterialTheme.colorScheme
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        color = palette.surfaceVariant.copy(alpha = 0.4f),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -97,37 +103,50 @@ internal fun RuntimeProgressPanel(snapshot: RuntimeSetupSnapshot, modifier: Modi
                     modifier = Modifier.weight(1f),
                 )
             }
-            if (running && snapshot.indeterminate) {
+            if (isRunning && snapshot.indeterminate) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             } else {
-                LinearProgressIndicator(progress = snapshot.progress.coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(progress = clampedProgress, modifier = Modifier.fillMaxWidth())
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(transfer ?: if (running) "%d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60) else "", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!snapshot.indeterminate || !running) {
-                    val speed = if (bytesPerSecond > 0.0 && transfer != null) " · %.1f MB/s".format(bytesPerSecond / MIB) else ""
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                val leftCaption = transferSummary
+                    ?: if (isRunning) "%d:%02d".format(stepElapsedSec / 60L, stepElapsedSec % 60L) else ""
+                Text(
+                    text = leftCaption,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.onSurfaceVariant,
+                )
+                if (!snapshot.indeterminate || !isRunning) {
+                    val rateSuffix = if (emaBytesPerSec > 0.0 && transferSummary != null) {
+                        " · %.1f MB/s".format(emaBytesPerSec / BYTES_PER_MIB)
+                    } else {
+                        ""
+                    }
                     Text(
-                        text = "%d%%".format(percent) + speed,
+                        text = "$percentageInt%$rateSuffix",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
-            if (failed) {
+            if (hasError) {
                 Text(
                     text = runtimeText(snapshot.errorMessage.orEmpty()),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = palette.error,
                     modifier = Modifier.forgeLive(),
                 )
             }
-            val recentLines = snapshot.logs.takeLast(3).filter { it.isNotBlank() }
-            if (recentLines.isNotEmpty()) {
+            val tailLogLines = snapshot.logs.takeLast(3).filter(String::isNotBlank)
+            if (tailLogLines.isNotEmpty()) {
                 Text(
-                    text = recentLines.map { runtimeText(it) }.joinToString("\n"),
+                    text = tailLogLines.joinToString("\n") { runtimeText(it) },
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = palette.onSurfaceVariant,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )

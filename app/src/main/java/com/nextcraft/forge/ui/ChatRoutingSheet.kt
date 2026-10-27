@@ -18,7 +18,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -33,8 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
@@ -42,37 +41,36 @@ import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.RouteMode
 import com.nextcraft.forge.model.RoutingConfig
 
-/** Short label of a routing mode, shown on the composer chip. */
 @Composable
-internal fun routeModeLabel(mode: RouteMode): String = stringResource(
-    when (mode) {
+internal fun routeModeLabel(mode: RouteMode): String {
+    val labelRes = when (mode) {
         RouteMode.SINGLE -> R.string.route_mode_single
         RouteMode.MANUAL -> R.string.route_mode_manual
         RouteMode.FAILOVER -> R.string.route_mode_failover
         RouteMode.BALANCED -> R.string.route_mode_balanced
-    },
-)
+    }
+    return stringResource(labelRes)
+}
 
-private fun routeModeHint(mode: RouteMode): Int = when (mode) {
+private fun resolveModeSubtitleRes(mode: RouteMode): Int = when (mode) {
     RouteMode.SINGLE -> R.string.route_hint_single
     RouteMode.MANUAL -> R.string.route_hint_manual
     RouteMode.FAILOVER -> R.string.route_hint_failover
     RouteMode.BALANCED -> R.string.route_hint_balanced
 }
 
-/**
- * Chat settings for using several agents in one conversation: the mode (single, manual with @agent tags, failover,
- * balanced) and which agents take part, in priority order. Opened from the composer chip next to the model chip.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onDismiss: () -> Unit) {
-    val tokens = LocalForgeThemeTokens.current
-    val scheme = MaterialTheme.colorScheme
-    val routing = state.routing
-    // Ordered list: enabled agents in priority order first, then the ones that are off.
-    val enabled = routing.agents
-    val ordered = enabled + AgentKind.entries.filterNot { it in enabled }
+internal fun ChatRoutingSheet(
+    state: ForgeUiState,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit,
+) {
+    val palette = MaterialTheme.colorScheme
+    val cfg = state.routing
+    val activeProviders = cfg.agents
+    val sortedProviders = activeProviders + AgentKind.entries.filterNot { candidate -> candidate in activeProviders }
+
     ForgeModalSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -85,147 +83,185 @@ internal fun ChatRoutingSheet(state: ForgeUiState, viewModel: MainViewModel, onD
                 .padding(bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(stringResource(R.string.route_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
-            RouteMode.entries.forEach { mode ->
+            Text(text = stringResource(R.string.route_sheet_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
+            RouteMode.entries.forEach { candidateMode ->
                 RadioRow(
-                    title = routeModeLabel(mode),
-                    subtitle = stringResource(routeModeHint(mode)),
-                    selected = routing.mode == mode,
-                    onClick = { viewModel.setRouteMode(mode) },
+                    title = routeModeLabel(candidateMode),
+                    subtitle = stringResource(resolveModeSubtitleRes(candidateMode)),
+                    selected = cfg.mode == candidateMode,
+                    onClick = { viewModel.setRouteMode(candidateMode) },
                     horizontalPadding = 0.dp,
                 )
             }
-            if (routing.mode == RouteMode.SINGLE) {
-                // Single: exactly one provider, chosen here (the same choice as in the model sheet).
-                Text(stringResource(R.string.route_single_pick), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
-                AgentKind.entries.forEach { agent ->
-                    val ready = agent in state.readyAgents || agent == state.agentKind
+            if (cfg.mode == RouteMode.SINGLE) {
+                Text(text = stringResource(R.string.route_single_pick), fontSize = ForgeType.secondary, color = palette.onSurfaceVariant)
+                AgentKind.entries.forEach { provider ->
+                    val isConfigured = provider in state.readyAgents || provider == state.agentKind
+                    val statusRes = if (isConfigured) R.string.route_agent_ready else R.string.route_agent_not_ready
                     RadioRow(
-                        title = agent.displayTitle(),
-                        subtitle = stringResource(if (ready) R.string.route_agent_ready else R.string.route_agent_not_ready),
-                        selected = state.agentKind == agent,
-                        onClick = { viewModel.selectAgent(agent) },
+                        title = provider.displayTitle(),
+                        subtitle = stringResource(statusRes),
+                        selected = state.agentKind == provider,
+                        onClick = { viewModel.selectAgent(provider) },
                         horizontalPadding = 0.dp,
                     )
                 }
                 if (state.activeChatRunning) {
-                    // selectAgent refuses while the open chat's turn runs; other chats and projects can keep running.
-                    Text(stringResource(R.string.route_single_busy), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
+                    Text(text = stringResource(R.string.route_single_busy), fontSize = ForgeType.secondary, color = palette.onSurfaceVariant)
                 }
-            }
-            if (routing.mode != RouteMode.SINGLE) {
+            } else {
+                val sectionHeaderRes = if (cfg.mode == RouteMode.MANUAL) R.string.route_agents_manual else R.string.route_agents_priority
                 Text(
-                    stringResource(if (routing.mode == RouteMode.MANUAL) R.string.route_agents_manual else R.string.route_agents_priority),
+                    text = stringResource(sectionHeaderRes),
                     fontSize = ForgeType.secondary,
-                    color = scheme.onSurfaceVariant,
+                    color = palette.onSurfaceVariant,
                 )
-                ordered.forEachIndexed { index, agent ->
-                    val on = agent in enabled
-                    val ready = agent in state.readyAgents
-                    // Name and switch on one line, the weight/priority controls below, so nothing is squeezed.
+                sortedProviders.forEachIndexed { position, provider ->
+                    val isEnabled = provider in activeProviders
+                    val isConfigured = provider in state.readyAgents
                     Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(agent.displayTitle(), fontWeight = FontWeight.Medium)
-                            Text(
-                                text = stringResource(if (ready) R.string.route_agent_ready else R.string.route_agent_not_ready),
-                                fontSize = ForgeType.secondary,
-                                color = if (ready) scheme.onSurfaceVariant else scheme.error,
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(text = provider.displayTitle(), fontWeight = FontWeight.Medium)
+                                Text(
+                                    text = stringResource(if (isConfigured) R.string.route_agent_ready else R.string.route_agent_not_ready),
+                                    fontSize = ForgeType.secondary,
+                                    color = if (isConfigured) palette.onSurfaceVariant else palette.error,
+                                )
+                            }
+                            Switch(
+                                checked = isEnabled,
+                                onCheckedChange = { toggledOn ->
+                                    val updatedPool = if (toggledOn) activeProviders + provider else activeProviders - provider
+                                    if (updatedPool.isNotEmpty()) viewModel.setRouteAgents(updatedPool)
+                                },
                             )
                         }
-                        Switch(
-                            checked = on,
-                            onCheckedChange = { checked ->
-                                // At least one agent stays on, otherwise Failover and Balanced would have nobody to use.
-                                val next = if (checked) enabled + agent else enabled - agent
-                                if (next.isNotEmpty()) viewModel.setRouteAgents(next)
-                            },
-                        )
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-                        if (on && routing.mode == RouteMode.BALANCED) {
-                            val weight = routing.weightOf(agent)
-                            // The share is among the agents that can actually answer; the others get nothing until they are set up.
-                            val pool = enabled.filter { it in state.readyAgents }.ifEmpty { enabled }
-                            val total = pool.sumOf { routing.weightOf(it) }.takeIf { it > 0 } ?: 1
-                            val lessLabel = stringResource(R.string.route_weight_less, agent.displayTitle())
-                            IconButton(onClick = { viewModel.setRouteWeight(agent, weight - 1) }, enabled = weight > 0) {
-                                Text("−", fontSize = ForgeType.screenTitle, modifier = Modifier.semantics { contentDescription = lessLabel })
-                            }
-                            Text(
-                                text = stringResource(R.string.route_share_percent, if (agent in pool) weight * 100 / total else 0),
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.widthIn(min = 44.dp),
-                                textAlign = TextAlign.Center,
-                            )
-                            IconButton(onClick = { viewModel.setRouteWeight(agent, weight + 1) }, enabled = weight < RoutingConfig.MAX_WEIGHT) {
-                                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.route_weight_more, agent.displayTitle()))
-                            }
-                        }
-                        if (on && index > 0) {
-                            IconButton(onClick = {
-                                val moved = enabled.toMutableList()
-                                val at = moved.indexOf(agent)
-                                if (at > 0) {
-                                    moved.removeAt(at)
-                                    moved.add(at - 1, agent)
-                                    viewModel.setRouteAgents(moved)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            if (isEnabled && cfg.mode == RouteMode.BALANCED) {
+                                val currentWeight = cfg.weightOf(provider)
+                                val eligiblePool = activeProviders.filter { it in state.readyAgents }.ifEmpty { activeProviders }
+                                val totalWeight = eligiblePool.sumOf { cfg.weightOf(it) }.coerceAtLeast(1)
+                                val decreaseDesc = stringResource(R.string.route_weight_less, provider.displayTitle())
+                                IconButton(
+                                    onClick = { viewModel.setRouteWeight(provider, currentWeight - 1) },
+                                    enabled = currentWeight > 0,
+                                ) {
+                                    Text(
+                                        text = "−",
+                                        fontSize = ForgeType.screenTitle,
+                                        modifier = Modifier.semantics { contentDescription = decreaseDesc },
+                                    )
                                 }
-                            }) {
-                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.route_move_up, agent.displayTitle()))
+                                val sharePct = if (provider in eligiblePool) (currentWeight * 100) / totalWeight else 0
+                                Text(
+                                    text = stringResource(R.string.route_share_percent, sharePct),
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.widthIn(min = 44.dp),
+                                    textAlign = TextAlign.Center,
+                                )
+                                IconButton(
+                                    onClick = { viewModel.setRouteWeight(provider, currentWeight + 1) },
+                                    enabled = currentWeight < RoutingConfig.MAX_WEIGHT,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = stringResource(R.string.route_weight_more, provider.displayTitle()),
+                                    )
+                                }
+                            }
+                            if (isEnabled && position > 0) {
+                                IconButton(
+                                    onClick = {
+                                        val mutablePool = activeProviders.toMutableList()
+                                        val currentPos = mutablePool.indexOf(provider)
+                                        if (currentPos > 0) {
+                                            mutablePool.removeAt(currentPos)
+                                            mutablePool.add(currentPos - 1, provider)
+                                            viewModel.setRouteAgents(mutablePool)
+                                        }
+                                    },
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowUp,
+                                        contentDescription = stringResource(R.string.route_move_up, provider.displayTitle()),
+                                    )
+                                }
                             }
                         }
                     }
-                    }
                 }
-                if (routing.mode == RouteMode.BALANCED) {
+                if (cfg.mode == RouteMode.BALANCED) {
                     OutlinedButton(onClick = viewModel::resetRouteWeights, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.route_equal_split))
+                        Text(text = stringResource(R.string.route_equal_split))
                     }
                 }
-                RouteRulesSection(routing = routing, viewModel = viewModel)
+                KeywordRoutingRulesEditor(routing = cfg, viewModel = viewModel)
             }
         }
     }
 }
 
-/** Rules on the content of the prompt: "these words go to this agent". Checked after an @agent tag, before the mode. */
 @Composable
-private fun RouteRulesSection(routing: RoutingConfig, viewModel: MainViewModel) {
-    val scheme = MaterialTheme.colorScheme
-    var words by rememberSaveable { mutableStateOf("") }
-    var agentIndex by rememberSaveable { mutableIntStateOf(0) }
-    val agents = AgentKind.entries
-    Text(stringResource(R.string.route_rules_title), fontSize = ForgeType.cardTitle, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-    Text(stringResource(R.string.route_rules_hint), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
-    routing.rules.forEachIndexed { index, rule ->
+private fun KeywordRoutingRulesEditor(
+    routing: RoutingConfig,
+    viewModel: MainViewModel,
+) {
+    val palette = MaterialTheme.colorScheme
+    var keywordDraft by rememberSaveable { mutableStateOf("") }
+    var targetAgentIdx by rememberSaveable { mutableIntStateOf(0) }
+    val providerList = AgentKind.entries
+
+    Text(
+        text = stringResource(R.string.route_rules_title),
+        fontSize = ForgeType.cardTitle,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    Text(text = stringResource(R.string.route_rules_hint), fontSize = ForgeType.secondary, color = palette.onSurfaceVariant)
+
+    routing.rules.forEachIndexed { ruleIdx, rule ->
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(rule.keywords.joinToString(", "), fontWeight = FontWeight.Medium)
-                Text(stringResource(R.string.route_rule_goes_to, rule.agent.displayTitle()), fontSize = ForgeType.secondary, color = scheme.primary)
+                Text(text = rule.keywords.joinToString(", "), fontWeight = FontWeight.Medium)
+                Text(
+                    text = stringResource(R.string.route_rule_goes_to, rule.agent.displayTitle()),
+                    fontSize = ForgeType.secondary,
+                    color = palette.primary,
+                )
             }
-            IconButton(onClick = { viewModel.removeRouteRule(index) }) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.route_rule_delete))
+            IconButton(onClick = { viewModel.removeRouteRule(ruleIdx) }) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.route_rule_delete))
             }
         }
     }
+
     ForgeTextField(
-        kind = ForgeFieldKind.TEXT, imeAction = ImeAction.Done,
-        value = words,
-        onValueChange = { words = it },
-        label = { Text(stringResource(R.string.route_rule_keywords)) },
+        kind = ForgeFieldKind.TEXT,
+        imeAction = ImeAction.Done,
+        value = keywordDraft,
+        onValueChange = { typed -> keywordDraft = typed },
+        label = { Text(text = stringResource(R.string.route_rule_keywords)) },
         modifier = Modifier.fillMaxWidth(),
     )
     ForgePillTabs(
-        items = agents.map { it.shortTitle() },
-        selectedIndex = agentIndex,
-        onSelect = { agentIndex = it },
-        equalWidth = true, // 3 providers fit side by side; scrolling cut "Antigravity" at the edge
+        items = providerList.map { provider -> provider.shortTitle() },
+        selectedIndex = targetAgentIdx,
+        onSelect = { chosen -> targetAgentIdx = chosen },
+        equalWidth = true,
     )
     ForgePrimaryButton(
         text = stringResource(R.string.route_rule_add),
-        onClick = { if (viewModel.addRouteRule(words, agents[agentIndex])) words = "" },
-        enabled = words.isNotBlank(),
+        onClick = {
+            if (viewModel.addRouteRule(keywordDraft, providerList[targetAgentIdx])) {
+                keywordDraft = ""
+            }
+        },
+        enabled = keywordDraft.isNotBlank(),
         modifier = Modifier.fillMaxWidth(),
     )
 }
