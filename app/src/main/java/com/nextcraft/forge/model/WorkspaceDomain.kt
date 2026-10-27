@@ -1,5 +1,6 @@
 package com.nextcraft.forge.model
 
+import com.nextcraft.forge.runtime.AndroidToolchain
 import java.text.Normalizer
 import java.time.Instant
 import java.time.ZoneId
@@ -19,9 +20,9 @@ enum class ProjectType {
 }
 
 enum class StarterTemplate(val label: String) {
-    EMPTY("Empty"),
-    GO("Go (Windows/Linux)"),
-    GAME_LIBGDX("Game (libGDX)"),
+    EMPTY(label = "Empty"),
+    GO(label = "Go (Windows/Linux)"),
+    GAME_LIBGDX(label = "Game (libGDX)"),
 }
 
 enum class AndroidTemplate(val label: String) {
@@ -29,7 +30,7 @@ enum class AndroidTemplate(val label: String) {
     XML(label = "Kotlin + XML"),
 }
 
-private val DATE_BADGE_FMT: DateTimeFormatter =
+private val RELATIVE_DATE_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
 
 data class Project(
@@ -46,37 +47,37 @@ data class Project(
 ) {
     val formattedUpdatedAt: String
         get() {
-            val deltaMs = System.currentTimeMillis() - updatedAtMillis
-            val sec = deltaMs / 1_000L
-            if (deltaMs < 0L || sec < 60L) return "Just now"
-            val min = sec / 60L
-            if (min < 60L) return "${min}m ago"
-            val hr = min / 60L
-            if (hr < 24L) return "${hr}h ago"
-            val days = hr / 24L
+            val elapsedMs = System.currentTimeMillis() - updatedAtMillis
+            val elapsedSec = elapsedMs / 1_000L
+            if (elapsedMs < 0L || elapsedSec < 60L) return "Just now"
+            val elapsedMin = elapsedSec / 60L
+            if (elapsedMin < 60L) return "${elapsedMin}m ago"
+            val elapsedHours = elapsedMin / 60L
+            if (elapsedHours < 24L) return "${elapsedHours}h ago"
+            val elapsedDays = elapsedHours / 24L
             return when {
-                days == 1L -> "Yesterday"
-                days < 7L -> "${days}d ago"
+                elapsedDays == 1L -> "Yesterday"
+                elapsedDays < 7L -> "${elapsedDays}d ago"
                 else -> Instant.ofEpochMilli(updatedAtMillis)
                     .atZone(ZoneId.systemDefault())
-                    .format(DATE_BADGE_FMT)
+                    .format(RELATIVE_DATE_FORMATTER)
             }
         }
 }
 
-private val DIACRITICS_PATTERN = Regex("\\p{M}+")
-private val SLUG_SEPARATOR_PATTERN = Regex("[^a-z0-9]+")
+private val COMBINING_MARKS_REGEX = Regex("\\p{M}+")
+private val NON_ALPHANUM_REGEX = Regex("[^a-z0-9]+")
 
 fun projectSlug(rawTitle: String): String {
-    val ascii = Normalizer.normalize(rawTitle, Normalizer.Form.NFKD)
-        .replace(DIACRITICS_PATTERN, "")
+    val decomposed = Normalizer.normalize(rawTitle, Normalizer.Form.NFKD)
+        .replace(COMBINING_MARKS_REGEX, "")
         .lowercase(Locale.US)
-    val sanitized = ascii
-        .replace(SLUG_SEPARATOR_PATTERN, "-")
+    val slugified = decomposed
+        .replace(NON_ALPHANUM_REGEX, "-")
         .trim('-')
         .take(48)
         .trimEnd('-')
-    return sanitized.ifEmpty { "nextcraft" }
+    return slugified.ifEmpty { "nextcraft" }
 }
 
 data class QuickChatIdentity(
@@ -84,21 +85,27 @@ data class QuickChatIdentity(
     val slug: String,
 )
 
-private const val QUICK_PREFIX = "quick-project-"
+private const val QUICK_PROJECT_SLUG_PREFIX = "quick-project-"
 
-fun generateQuickChatIdentity(existingSlugs: Set<String>, prefixLabel: String): QuickChatIdentity {
-    var maxSeen = 0
-    for (item in existingSlugs) {
-        if (item.startsWith(QUICK_PREFIX)) {
-            val idx = item.removePrefix(QUICK_PREFIX).toIntOrNull()
-            if (idx != null) maxSeen = max(maxSeen, idx)
+fun generateQuickChatIdentity(
+    existingSlugs: Set<String>,
+    prefixLabel: String,
+): QuickChatIdentity {
+    var highestIndex = 0
+    for (candidate in existingSlugs) {
+        if (candidate.startsWith(QUICK_PROJECT_SLUG_PREFIX)) {
+            val parsedNum = candidate.removePrefix(QUICK_PROJECT_SLUG_PREFIX).toIntOrNull()
+            if (parsedNum != null) highestIndex = max(highestIndex, parsedNum)
         }
     }
-    var nextNumber = maxSeen + 1
-    while (existingSlugs.contains("$QUICK_PREFIX$nextNumber")) {
-        nextNumber++
+    var candidateNum = highestIndex + 1
+    while (existingSlugs.contains("$QUICK_PROJECT_SLUG_PREFIX$candidateNum")) {
+        candidateNum++
     }
-    return QuickChatIdentity("$prefixLabel $nextNumber", "$QUICK_PREFIX$nextNumber")
+    return QuickChatIdentity(
+        displayName = "$prefixLabel $candidateNum",
+        slug = "$QUICK_PROJECT_SLUG_PREFIX$candidateNum",
+    )
 }
 
 data class WorkspaceEntry(
@@ -122,28 +129,28 @@ enum class DevStack(
     val installsSummary: String,
 ) {
     WEB(
-        "Web (JavaScript / TypeScript)",
-        "Websites and web apps with HTML, CSS, and JS frameworks.",
-        "Node.js and npm (already included)",
+        label = "Web (JavaScript / TypeScript)",
+        description = "Modern frontend and fullstack web applications powered by HTML, CSS, and TypeScript.",
+        installsSummary = "Node.js and npm (pre-bundled in base image)",
     ),
     PYTHON(
-        "Python",
-        "Scripts, automation, data work, and Python backends.",
-        "python3, pip, venv, and build tools",
+        label = "Python",
+        description = "Backend services, CLI automation, and data engineering scripts.",
+        installsSummary = "python3, pip, venv, and native build essentials",
     ),
     ANDROID(
-        "Android (Java / Kotlin)",
-        "Build Android app projects at native Chroot speed and install them directly on this phone.",
-        com.nextcraft.forge.runtime.AndroidToolchain.SUMMARY,
+        label = "Android (Java / Kotlin)",
+        description = "Compile Android APK packages locally in Ubuntu 24.04 and install directly onto this device.",
+        installsSummary = AndroidToolchain.SUMMARY,
     ),
     CPP(
-        "C / C++",
-        "Fast compiled programs, algorithms, and systems code.",
-        "gcc, g++, make, cmake, gdb",
+        label = "C / C++",
+        description = "High-performance native binaries, systems programming, and CMake projects.",
+        installsSummary = "gcc, g++, make, cmake, and gdb",
     ),
     PHP(
-        "PHP",
-        "Websites and apps with PHP — classic sites and Laravel projects.",
-        "php-cli, common extensions, and Composer",
+        label = "PHP",
+        description = "Server-side web applications and Laravel ecosystems.",
+        installsSummary = "php-cli, standard extensions, and Composer",
     ),
 }

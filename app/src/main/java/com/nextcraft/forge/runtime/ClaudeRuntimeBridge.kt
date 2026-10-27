@@ -235,7 +235,7 @@ class ClaudeRuntimeBridge(
             val proxyActive = openAiBridge != null || openRouterBridge != null
             val tokenForGuest = openAiBridge?.sessionToken ?: openRouterBridge?.sessionToken ?: resolvedSecret
             val launchCfg = RuntimeLaunchConfigBuilder.build(
-                provider = provider,
+                profile = provider,
                 authToken = tokenForGuest,
                 localGatewayUrl = openAiBridge?.url ?: openRouterBridge?.url,
                 useStoredLogin = hasGuestOauthLogin && !proxyActive,
@@ -396,7 +396,7 @@ class ClaudeRuntimeBridge(
         val probeWorkspace = File(context.filesDir, "runtime-probes/claude-check").apply { mkdirs() }
         val logOut = File(context.cacheDir, "claude-hello-${System.nanoTime()}.log")
         val launchCfg = RuntimeLaunchConfigBuilder.build(
-            provider = provider,
+            profile = provider,
             authToken = resolvedSecret,
             useStoredLogin = guestOauth,
             claudeEffort = claudeEffort(),

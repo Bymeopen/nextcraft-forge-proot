@@ -178,12 +178,13 @@ private fun RenderOrderedItemNode(
     fgTint: Color,
     themeTokens: ForgeThemeTokens,
 ) {
+    val ordinalLabel = "${node.ordinalPrefix}."
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
     ) {
         Text(
-            text = "${node.ordinalPrefix}.",
+            text = ordinalLabel,
             color = themeTokens.accentText,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(end = 8.dp),

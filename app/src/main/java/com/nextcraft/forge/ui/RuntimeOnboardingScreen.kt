@@ -179,8 +179,9 @@ internal fun RuntimeOnboardingScreen(
                                         modifier = if (hasErr) Modifier.forgeLive() else Modifier,
                                     )
                                 }
+                                val pctBadgeText = pctValue.toString() + "%"
                                 Text(
-                                    text = "$pctValue%",
+                                    text = pctBadgeText,
                                     fontSize = ForgeType.body,
                                     fontWeight = FontWeight.SemiBold,
                                     color = palette.onSurfaceVariant,

@@ -76,7 +76,7 @@ enum class AgentKind(
 
     companion object {
         private val indexByToken: Map<String, AgentKind> = buildMap {
-            for (agent in entries) {
+            for (agent in AgentKind.entries) {
                 put(agent.stableId, agent)
                 put(agent.name, agent)
             }

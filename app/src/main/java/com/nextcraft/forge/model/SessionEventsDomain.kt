@@ -22,9 +22,20 @@ data class ToolRequest(
 sealed interface RuntimeEvent {
     val sessionId: String
 
-    data class SessionStarted(override val sessionId: String) : RuntimeEvent
-    data class AssistantDelta(override val sessionId: String, val text: String) : RuntimeEvent
-    data class ReasoningProgress(override val sessionId: String, val estimatedTokens: Int) : RuntimeEvent
+    data class SessionStarted(
+        override val sessionId: String,
+    ) : RuntimeEvent
+
+    data class AssistantDelta(
+        override val sessionId: String,
+        val text: String,
+    ) : RuntimeEvent
+
+    data class ReasoningProgress(
+        override val sessionId: String,
+        val estimatedTokens: Int,
+    ) : RuntimeEvent
+
     data class ReasoningSummary(
         override val sessionId: String,
         val summary: String,
@@ -32,20 +43,73 @@ sealed interface RuntimeEvent {
         val startsNewBlock: Boolean = false,
         val isFinal: Boolean = false,
     ) : RuntimeEvent
-    data class ToolStarted(override val sessionId: String, val toolName: String, val detail: String) : RuntimeEvent
-    data class ToolProgress(override val sessionId: String, val toolName: String, val detail: String) : RuntimeEvent
-    data class RuntimeLog(override val sessionId: String, val title: String, val detail: String) : RuntimeEvent
-    data class ToolRequested(override val sessionId: String, val request: ToolRequest) : RuntimeEvent
-    data class ToolApproved(override val sessionId: String, val approvalId: String) : RuntimeEvent
-    data class ToolRejected(override val sessionId: String, val approvalId: String) : RuntimeEvent
-    data class PermissionDenied(override val sessionId: String, val toolName: String, val reason: String) : RuntimeEvent
-    data class ToolCompleted(override val sessionId: String, val toolName: String, val summary: String) : RuntimeEvent
-    data class FilesChanged(override val sessionId: String, val changes: List<ChangeItem>) : RuntimeEvent {
-        val paths: List<String> get() = changes.map(ChangeItem::path)
+
+    data class ToolStarted(
+        override val sessionId: String,
+        val toolName: String,
+        val detail: String,
+    ) : RuntimeEvent
+
+    data class ToolProgress(
+        override val sessionId: String,
+        val toolName: String,
+        val detail: String,
+    ) : RuntimeEvent
+
+    data class RuntimeLog(
+        override val sessionId: String,
+        val title: String,
+        val detail: String,
+    ) : RuntimeEvent
+
+    data class ToolRequested(
+        override val sessionId: String,
+        val request: ToolRequest,
+    ) : RuntimeEvent
+
+    data class ToolApproved(
+        override val sessionId: String,
+        val approvalId: String,
+    ) : RuntimeEvent
+
+    data class ToolRejected(
+        override val sessionId: String,
+        val approvalId: String,
+    ) : RuntimeEvent
+
+    data class PermissionDenied(
+        override val sessionId: String,
+        val toolName: String,
+        val reason: String,
+    ) : RuntimeEvent
+
+    data class ToolCompleted(
+        override val sessionId: String,
+        val toolName: String,
+        val summary: String,
+    ) : RuntimeEvent
+
+    data class FilesChanged(
+        override val sessionId: String,
+        val changes: List<ChangeItem>,
+    ) : RuntimeEvent {
+        val paths: List<String>
+            get() = changes.map { item -> item.path }
     }
-    data class PreviewStarted(override val sessionId: String, val url: String) : RuntimeEvent
-    data class SessionCompleted(override val sessionId: String) : RuntimeEvent
-    data class SessionFailed(override val sessionId: String, val reason: String) : RuntimeEvent
+
+    data class PreviewStarted(
+        override val sessionId: String,
+        val url: String,
+    ) : RuntimeEvent
+
+    data class SessionCompleted(
+        override val sessionId: String,
+    ) : RuntimeEvent
+
+    data class SessionFailed(
+        override val sessionId: String,
+        val reason: String,
+    ) : RuntimeEvent
 }
 
 data class ChatMessage(

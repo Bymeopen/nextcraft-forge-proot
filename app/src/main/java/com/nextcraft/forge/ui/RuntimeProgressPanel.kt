@@ -125,8 +125,9 @@ internal fun RuntimeProgressPanel(
                     } else {
                         ""
                     }
+                    val rightCaption = percentageInt.toString() + "%" + rateSuffix
                     Text(
-                        text = "$percentageInt%$rateSuffix",
+                        text = rightCaption,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -142,8 +143,14 @@ internal fun RuntimeProgressPanel(
             }
             val tailLogLines = snapshot.logs.takeLast(3).filter(String::isNotBlank)
             if (tailLogLines.isNotEmpty()) {
+                val localizedTail = buildString {
+                    tailLogLines.forEachIndexed { idx, line ->
+                        if (idx > 0) append('\n')
+                        append(runtimeText(line))
+                    }
+                }
                 Text(
-                    text = tailLogLines.joinToString("\n") { runtimeText(it) },
+                    text = localizedTail,
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
                     color = palette.onSurfaceVariant,

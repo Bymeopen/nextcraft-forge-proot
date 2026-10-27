@@ -280,8 +280,9 @@ internal fun RepoSheet(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val prHeaderTitle = stringResource(R.string.github_pr_manager_title) + " · " + pipelineState.repository
                             Text(
-                                text = "${stringResource(R.string.github_pr_manager_title)} · ${pipelineState.repository}",
+                                text = prHeaderTitle,
                                 fontSize = ForgeType.rowTitle,
                                 fontWeight = FontWeight.SemiBold,
                             )
