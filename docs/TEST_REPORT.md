@@ -28,6 +28,7 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - **Hapus proyek (UI `.x`)**: dialog konfirmasi jelas; jendela urungkan 6 dtk; setelah perbaikan `72bb7c2` folder berisi `build/` dan `.gradle/` milik root terhapus penuh (diverifikasi di disk).
 - **Rotasi (UI `.x`)**: landscape pada daftar proyek tampil rapi, navigasi bawah utuh; rotasi dikembalikan ke semula.
 - **Ctrl+C di terminal (UI `.x`)**: chip `^C` menghentikan `sleep 300` dan prompt kembali. Catatan desain: Ctrl (sticky) hanya berlaku untuk tombol di baris chip; mengetik `c` di kolom perintah mengirim teks biasa, bukan Ctrl+C.
+- **Chat → agen → tab Perubahan (UI `.x` di layar overlay)**: perintah "buat file catatan.txt" dijalankan agen (file ada di disk). Dengan "Simpan perubahan otomatis" aktif, Perubahan kosong (sesuai desain). Dengan mati: Perubahan (1) dengan Terima semua / Batalkan semua; "Batalkan semua" meminta konfirmasi lalu menghapus file dari disk. Perubahan bersumber dari checkpoint agen, bukan `git status` (edit manual lewat terminal tidak muncul).
 - **Chat + agen + tab Perubahan (UI `.x`, layar overlay)**: perintah "buat file" dijalankan agen (file benar-benar tertulis di disk). Dengan "Simpan perubahan otomatis" aktif, tab Perubahan kosong (perubahan langsung diterima). Dengan setelan itu mati, kartu proyek menampilkan lencana "1 berkas diubah", tab Perubahan menampilkan 1 item dengan tombol Batalkan semua/Terima semua; "Batalkan semua" meminta konfirmasi lalu menghapus berkas dari disk. Catatan desain: tab Perubahan bersumber dari checkpoint giliran agen, bukan `git status`, jadi edit manual lewat terminal tidak muncul di sana.
 
 ## Bug yang ditemukan dan perbaikannya (branch lokal, belum di GitHub)
@@ -51,4 +52,4 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - Penyebab kegagalan sesi berulang ("Claude Code reported an error") belum terbukti. Aplikasi sehat (0 crash/ANR); transkrip sesi 51 MB berisi 63 screenshot, dugaan: ukuran data sesi.
 
 ## Belum diuji
-Kirim pesan tanpa login (akun sedang masuk, tidak dikeluarkan), cabang chat terisolasi lewat UI, ukuran font 2.0 (mengubah font_scale seluruh sistem, termasuk aplikasi utama), toggle Glass solid.
+Kirim pesan tanpa login, cabang chat terisolasi + `.forge/chats` lewat UI, ukuran font 2.0, Glass solid hidup/mati.
