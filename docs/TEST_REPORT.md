@@ -34,5 +34,9 @@ Status: sedang berjalan. Hasil di bawah sudah dijalankan dan diperiksa, bukan pe
 - Server MCP tidak memvalidasi argumen wajib (mis. `items` kosong menghasilkan diagram kosong), dan `platform` tak dikenal diam-diam jatuh ke `tailwind`.
 - 4 error lint Compose (`NonObservableLocale`, `LocalContextGetResourceValueCall` x3): teks bisa basi sampai restart setelah ganti bahasa.
 
+## Belum terverifikasi (butuh pengujian ulang)
+- **Bersihkan terminal**: dua percobaan via layar overlay tidak menghasilkan perubahan layar (menu tertutup, isi terminal tetap). Belum bisa dipastikan apakah ini bug nyata (keluhan awal pengguna "ga bisa bersihkan terminal" konsisten) atau karena injeksi sentuh ke jendela popup di layar sekunder tidak sampai. Perlu dicoba dengan tap langsung di layar utama.
+- Penyebab kegagalan sesi berulang ("Claude Code reported an error") belum terbukti. Aplikasi sehat (0 crash/ANR); transkrip sesi 51 MB berisi 63 screenshot, dugaan: ukuran data sesi.
+
 ## Belum diuji
-Bersihkan terminal, Ctrl+C, buat/edit/hapus file di tab File dan tab Perubahan, kirim pesan tanpa login, cabang chat terisolasi, tab Alat (manajer toolchain, diagnostik), Setelan (tema, bahasa, Glass solid), Atur AI, dialog Proyek baru, rotasi, ukuran font 2.0.
+Ctrl+C, buat/edit/hapus file di tab File dan tab Perubahan, kirim pesan tanpa login, cabang chat terisolasi, tab Alat (manajer toolchain, diagnostik), Setelan (tema, bahasa, Glass solid), Atur AI, dialog Proyek baru, rotasi, ukuran font 2.0.
