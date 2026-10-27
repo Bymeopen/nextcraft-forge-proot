@@ -56,7 +56,7 @@ fun BuildMatrixScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val matrix by viewModel.buildMatrix.state.collectAsState()
     var showAdd by remember { mutableStateOf(false) }
     LaunchedEffect(state.activeProjectId) { viewModel.buildMatrix.load() }
-    val blocked = state.sessionRunning || state.terminalRunning || !state.runtimeInstalled
+    val blocked = state.runningChatIds.isNotEmpty() || state.activeProjectId in state.buildingProjectIds || !state.runtimeInstalled
     ToolScaffold(
         title = stringResource(R.string.tools_build_matrix),
         subtitle = matrix.projectName.ifBlank { stringResource(R.string.tools_build_matrix_desc) },

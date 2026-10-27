@@ -122,6 +122,7 @@ fun FilesAndDiffScreen(
     }
     val inProject = state.activeTab == ForgeTab.PROJECTS
     val workspaceName = state.activeProject?.name ?: stringResource(R.string.files_files)
+    val projectBusy = state.runningChatIds.isNotEmpty() || state.activeProjectId in state.buildingProjectIds
 
     // The folder being browsed, relative to the workspace root ("" is the workspace folder itself). Reset per project.
     var browseDir by rememberSaveable(state.activeProjectId) { mutableStateOf("") }
@@ -183,7 +184,7 @@ fun FilesAndDiffScreen(
             title = pluralStringResource(R.plurals.fm_items_count, shownEntries.size, shownEntries.size),
             selecting = selecting,
             selectedCount = selectedPaths.size,
-            enabled = !state.sessionRunning,
+            enabled = !projectBusy,
             sort = sort,
             showHidden = showHidden,
             onSort = { sortName = it.name },
@@ -256,7 +257,7 @@ fun FilesAndDiffScreen(
                     selectedPath = state.selectedFilePath,
                     selecting = selecting,
                     selectedPaths = selectedPaths,
-                    enabled = !state.sessionRunning,
+                    enabled = !projectBusy,
                     onOpenFolder = { dir ->
                         // Opening a folder from a search result leaves the search and goes there.
                         searching = false
@@ -293,7 +294,7 @@ fun FilesAndDiffScreen(
                 content = state.selectedFileContent,
                 editable = state.selectedFileEditable,
                 dirty = state.selectedFileDirty,
-                sessionRunning = state.sessionRunning,
+                sessionRunning = projectBusy,
                 savedBanner = state.fileSavedBanner,
                 onContentChange = viewModel::updateSelectedFileContent,
                 onSave = viewModel::saveSelectedFile,
@@ -303,7 +304,7 @@ fun FilesAndDiffScreen(
             )
             else -> WorkspaceDiffReviewList(
                 changes = state.changedItems,
-                sessionRunning = state.sessionRunning,
+                sessionRunning = projectBusy,
                 onOpenFile = { path ->
                     viewModel.openWorkspaceFile(path)
                     mode = "editor"
@@ -694,7 +695,7 @@ internal fun WorkspaceFolderList(
                     )
                 }
                 Box {
-                    IconButton(onClick = { menuOpen = true }, enabled = enabled && !selecting) {
+                    IconButton(onClick = { menuOpen = true }, enabled = !selecting) {
                         Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.files_row_menu), tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                     }
                     DropdownMenu(
@@ -704,23 +705,24 @@ internal fun WorkspaceFolderList(
                         offset = androidx.compose.ui.unit.DpOffset((-12).dp, 0.dp),
                     ) {
                         if (entry.isDirectory) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_file)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FILE, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onNewFileIn(entry.path) })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_folder)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FOLDER, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onNewFolderIn(entry.path) })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_upload_here)) }, leadingIcon = { ForgeIcon(ForgeGlyph.UPLOAD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onUploadIn(entry.path) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_file)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FILE, scheme.onSurfaceVariant) }, enabled = enabled, onClick = { menuOpen = false; onNewFileIn(entry.path) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_new_folder)) }, leadingIcon = { ForgeIcon(ForgeGlyph.FOLDER, scheme.onSurfaceVariant) }, enabled = enabled, onClick = { menuOpen = false; onNewFolderIn(entry.path) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_upload_here)) }, leadingIcon = { ForgeIcon(ForgeGlyph.UPLOAD, scheme.onSurfaceVariant) }, enabled = enabled, onClick = { menuOpen = false; onUploadIn(entry.path) })
                             Divider(color = scheme.outlineVariant, thickness = 0.5.dp)
                         }
                         if (!entry.isDirectory && entry.name.endsWith(".apk", ignoreCase = true)) {
                             DropdownMenuItem(text = { Text(stringResource(R.string.files_install_apk)) }, leadingIcon = { ForgeIcon(ForgeGlyph.BUILD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onInstallApk(entry.path) })
                         }
                         if (!entry.isDirectory) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.files_edit_in_terminal)) }, leadingIcon = { ForgeIcon(ForgeGlyph.TERMINAL, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onEditInTerminal(entry.path) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.files_edit_in_terminal)) }, leadingIcon = { ForgeIcon(ForgeGlyph.TERMINAL, scheme.onSurfaceVariant) }, enabled = enabled, onClick = { menuOpen = false; onEditInTerminal(entry.path) })
                             DropdownMenuItem(text = { Text(stringResource(R.string.files_analyze_rea)) }, leadingIcon = { ForgeIcon(ForgeGlyph.SEARCH, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onAnalyzeWithRea(entry.path) })
                             DropdownMenuItem(text = { Text(stringResource(R.string.files_save_copy)) }, leadingIcon = { ForgeIcon(ForgeGlyph.DOWNLOAD, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onSaveCopy(entry.path) })
                         }
-                        DropdownMenuItem(text = { Text(stringResource(R.string.files_rename)) }, leadingIcon = { ForgeIcon(ForgeGlyph.EDIT, scheme.onSurfaceVariant) }, onClick = { menuOpen = false; onRename(entry.path) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.files_rename)) }, leadingIcon = { ForgeIcon(ForgeGlyph.EDIT, scheme.onSurfaceVariant) }, enabled = enabled, onClick = { menuOpen = false; onRename(entry.path) })
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.files_delete), color = tokens.dangerText) },
                             leadingIcon = { ForgeIcon(ForgeGlyph.TRASH, tokens.dangerText) },
+                            enabled = enabled,
                             onClick = { menuOpen = false; onDelete(entry.path) },
                         )
                     }

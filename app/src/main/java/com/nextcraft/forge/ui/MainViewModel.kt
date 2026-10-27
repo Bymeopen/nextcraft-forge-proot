@@ -893,9 +893,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (existingProjectBuild == null || existingProjectBuild.phase != AndroidBuildPhase.BUILDING) {
             viewModelScope.launch {
                 val buildRecord = withContext(Dispatchers.IO) {
-                    val ws = checkpoints.ensureWorkspace(project.id)
-                    val androidRoot = findAndroidProjectRoot(ws)
-                    val existingApk = androidRoot?.let { findDebugApk(it) }
+                    val existingApk = findExistingProjectApk(project, chatId)
                     if (existingApk != null) {
                         AndroidBuildRecord(
                             phase = AndroidBuildPhase.SUCCEEDED,
@@ -1168,6 +1166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // A long chat's JSON is megabytes: parse it off the main thread, then show it if the chat is still open.
         if (run == null) loadChatMessagesAsync(project.id, chatId)
         if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated == true) refreshBranchStatus(chatId)
+        refreshWorkspaceFilesAndChanges(project.id)
     }
 
     /** Chat whose saved messages are still being read; until then the state holds no messages for it. */
@@ -1214,21 +1213,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteChat(chatId: String) {
-        val project = _state.value.activeProject ?: return
-        if (runs.containsKey(runKey(project.id, chatId))) return
-        if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated != true) {
-            deleteChatNow(chatId)
-            return
-        }
-        // Deleting the chat discards its branch clone; never do that over commits that were not merged.
-        viewModelScope.launch {
-            if (branchHoldsUnmergedWork(project, chatId)) {
-                _state.update { it.copy(bannerMessage = UiText.res(R.string.branch_unmerged)) }
-            } else if (_state.value.activeProjectId == project.id) {
-                // The user may have opened another project during the check; "main" exists in every project.
-                deleteChatNow(chatId)
-            }
-        }
+        deleteChatNow(chatId)
     }
 
     /** True when the chat's clone exists and either has work not in the project or its state cannot be read. */
@@ -2741,6 +2726,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chatBranches.ensure(project, chatId) {
                             setRunStatus(run, UiText.res(R.string.msg_git_waiting_queue))
                             notifyGitWaitingInQueue()
+                        }.also { ensured ->
+                            if (attachments.isNotEmpty()) {
+                                withContext(Dispatchers.IO) {
+                                    val mainWs = checkpoints.ensureWorkspace(project.id)
+                                    attachments.forEach { att ->
+                                        runCatching {
+                                            val src = checkpoints.safeWorkspaceFile(mainWs, att.relativePath)
+                                            val dst = checkpoints.safeWorkspaceFile(ensured.cloneDir, att.relativePath)
+                                            if (src.isFile && (!dst.exists() || dst.length() != src.length())) {
+                                                dst.parentFile?.mkdirs()
+                                                src.copyTo(dst, overwrite = true)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -3264,6 +3265,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return below.isEmpty() || (below.size <= 3 && below[0] == "outputs" && (below.size == 1 || below[1] == "apk"))
     }
 
+    /**
+     * Returns the active chat's isolated branch directory when that chat is isolated and its clone exists on disk,
+     * otherwise the project's main workspace directory.
+     */
+    private fun activeWorkspaceRoot(project: Project, chatId: String = _state.value.activeChatId): File {
+        val chat = if (_state.value.activeProjectId == project.id) {
+            _state.value.chats.firstOrNull { it.id == chatId }
+        } else {
+            preferences.loadProjectChats(project.id).firstOrNull { it.id == chatId }
+        }
+        if (chat?.isolated == true) {
+            val cloneDir = chatBranches.branchFor(project, chatId).cloneDir
+            if (cloneDir.isDirectory) return cloneDir
+        }
+        return checkpoints.ensureWorkspace(project.id)
+    }
+
+    /**
+     * Resolves [relativePath] inside the active chat's isolated branch first (if it exists there), falling back
+     * to the project's main workspace directory.
+     */
+    private fun resolveWorkspaceFile(project: Project, relativePath: String, chatId: String = _state.value.activeChatId): File {
+        val clean = relativePath.trim().trimStart('/')
+        val primaryRoot = activeWorkspaceRoot(project, chatId)
+        val primary = checkpoints.safeWorkspaceFile(primaryRoot, clean)
+        if (primary.exists()) return primary
+        val fallbackRoot = checkpoints.ensureWorkspace(project.id)
+        if (fallbackRoot != primaryRoot) {
+            val fallback = checkpoints.safeWorkspaceFile(fallbackRoot, clean)
+            if (fallback.exists()) return fallback
+        }
+        return primary
+    }
+
+    /** Finds a built debug APK in the active chat's isolated branch or in the main project workspace. */
+    private fun findExistingProjectApk(project: Project, chatId: String = _state.value.activeChatId): File? {
+        val primaryRoot = activeWorkspaceRoot(project, chatId)
+        findAndroidProjectRoot(primaryRoot)?.let(::findDebugApk)?.let { return it }
+        val mainWs = checkpoints.ensureWorkspace(project.id)
+        if (mainWs != primaryRoot) {
+            findAndroidProjectRoot(mainWs)?.let(::findDebugApk)?.let { return it }
+        }
+        // Also scan any isolated chat branches of this project in case the APK was built in another chat tab.
+        val chats = if (_state.value.activeProjectId == project.id) _state.value.chats else preferences.loadProjectChats(project.id)
+        for (chat in chats) {
+            if (chat.isolated && chat.id != chatId) {
+                val cloneDir = chatBranches.branchFor(project, chat.id).cloneDir
+                if (cloneDir.isDirectory) {
+                    findAndroidProjectRoot(cloneDir)?.let(::findDebugApk)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
     /** Refreshes the file list of the open project (the REA file picker reads it). */
     fun refreshWorkspaceFiles() {
         _state.value.activeProject?.let { refreshWorkspaceFilesAndChanges(it.id) }
@@ -3273,7 +3329,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requestId = ++workspaceRefreshRequest
         viewModelScope.launch {
             val (entries, changes) = workspaceIo(str(R.string.err_ws_read)) {
-                val ws = checkpoints.ensureWorkspace(projectId)
+                val proj = _state.value.projects.firstOrNull { it.id == projectId }
+                val ws = if (proj != null) activeWorkspaceRoot(proj) else checkpoints.ensureWorkspace(projectId)
                 val rootCanonical = runCatching { ws.canonicalFile.toPath() }.getOrNull()
                 val ignored = setOf(".git", ".gradle", "build", "node_modules", "__pycache__")
                 val files = if (rootCanonical == null) {
@@ -3360,7 +3417,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return null
         return withContext(Dispatchers.IO) {
             runCatching {
-                val root = checkpoints.ensureWorkspace(project.id).canonicalFile
+                val root = activeWorkspaceRoot(project).canonicalFile
                 val clean = relativeDir.trim('/')
                 if (clean.split('/').any { it == ".." }) return@runCatching null
                 val dir = if (clean.isEmpty()) root else File(root, clean).canonicalFile
@@ -3518,8 +3575,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Saving a truncated, binary or unreadable file back as text would destroy it, so those open read-only.
             val (content, editable) = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
-                    val target = checkpoints.safeWorkspaceFile(ws, relativePath)
+                    val target = resolveWorkspaceFile(project, relativePath)
                     if (!target.isFile) {
                         "" to true
                     } else {
@@ -3805,7 +3861,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val count = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val ignored = setOf(".git", ".gradle", "build", "node_modules", "__pycache__")
                     val roots = if (paths.isEmpty()) listOf(ws) else paths.map { checkpoints.safeWorkspaceFile(ws, it) }
                     var written = 0
@@ -3843,8 +3899,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
-                    val source = checkpoints.safeWorkspaceFile(ws, relativePath.trim().trimStart('/'))
+                    val source = resolveWorkspaceFile(project, relativePath)
                     check(source.isFile && !Files.isSymbolicLink(source.toPath())) { "Not a regular file" }
                     getApplication<Application>().contentResolver.openOutputStream(target)?.use { os ->
                         source.inputStream().use { it.copyTo(os) }
@@ -4710,9 +4765,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
             val apk = withContext(Dispatchers.IO) {
-                runCatching { checkpoints.safeWorkspaceFile(checkpoints.ensureWorkspace(project.id), relativePath) }.getOrNull()
+                runCatching { resolveWorkspaceFile(project, relativePath) }.getOrNull()
             }
             if (apk != null && apk.isFile) installBuiltApk(apk.absolutePath, project.id)
+        }
+    }
+
+    /** Copies the built (or existing debug) APK of the active project to a document URI chosen by the user. */
+    fun exportBuiltApk(target: android.net.Uri) {
+        val project = _state.value.activeProject ?: return
+        val currentApkPath = _state.value.androidBuild.apkPath
+        viewModelScope.launch {
+            val savedName = withContext(Dispatchers.IO) {
+                runCatching {
+                    val apkFile = currentApkPath?.let(::File)?.takeIf { it.isFile }
+                        ?: findExistingProjectApk(project)
+                        ?: error("APK not found")
+                    check(apkFile.isFile && !Files.isSymbolicLink(apkFile.toPath())) { "Not a regular APK file" }
+                    getApplication<Application>().contentResolver.openOutputStream(target)?.use { os ->
+                        apkFile.inputStream().use { it.copyTo(os) }
+                    } ?: error("Cannot open $target")
+                    apkFile.name
+                }.onFailure { Log.w("MainViewModel", "APK export failed", it) }.getOrNull()
+            }
+            val app = getApplication<Application>()
+            val msg = if (savedName != null) app.getString(R.string.msg_file_saved, savedName) else app.getString(R.string.msg_file_failed)
+            _state.update {
+                it.copy(
+                    fileSavedBanner = msg,
+                    bannerMessage = UiText.Raw(msg),
+                )
+            }
         }
     }
 

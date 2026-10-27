@@ -152,6 +152,11 @@ fun AndroidBuildScreen(
     var activeTab by rememberSaveable { mutableStateOf(0) } // 0 stages, 1 issues, 2 log, 3 logcat
     var menuOpen by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+    val apkSaver = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/vnd.android.package-archive"),
+    ) { uri ->
+        if (uri != null) viewModel.exportBuiltApk(uri)
+    }
 
     // Stage events carry only the active stage, so remember the last real one to place success/failure.
     var lastRow by remember(state.activeProjectId) { mutableStateOf(-1) }
@@ -204,10 +209,16 @@ fun AndroidBuildScreen(
                     if (build.apkPath != null) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.launch_install_last_apk)) },
-                            enabled = !busy,
                             onClick = {
                                 menuOpen = false
                                 viewModel.installBuiltApk()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.files_save_copy)) },
+                            onClick = {
+                                menuOpen = false
+                                apkSaver.launch("${state.activeProject?.slug ?: "app"}-debug.apk")
                             },
                         )
                     }
@@ -343,13 +354,31 @@ fun AndroidBuildScreen(
                 }
             }
         } else if (build.phase == AndroidBuildPhase.SUCCEEDED && build.apkPath != null) {
-            ForgePrimaryButton(
-                text = stringResource(R.string.launch_install_apk),
-                onClick = viewModel::installBuiltApk,
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ForgePrimaryButton(
+                    text = stringResource(R.string.launch_install_apk),
+                    onClick = viewModel::installBuiltApk,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(
+                    onClick = { apkSaver.launch("${state.activeProject?.slug ?: "app"}-debug.apk") },
+                    shape = RoundedCornerShape(100),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.files_save_copy),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
 
         var lastActiveTab by remember { mutableStateOf(activeTab) }

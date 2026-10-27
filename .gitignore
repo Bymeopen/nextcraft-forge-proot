@@ -19,6 +19,7 @@ Thumbs.db
 attachments/
 .agents/.agents/
 .agents/memory/history.db*
+.agents/memory/forge_reference_index.db*
 .git/forge_github_device.json
 
 # Runtime bundles produced by scripts/runtime-bundles (published as release assets, not committed)

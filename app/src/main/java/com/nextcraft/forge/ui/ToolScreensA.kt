@@ -216,7 +216,7 @@ fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
     var label by rememberSaveable { mutableStateOf("") }
     var pendingRestore by remember { mutableStateOf<WorkspaceSnapshot?>(null) }
     LaunchedEffect(state.activeProjectId) { viewModel.snapshots.refresh() }
-    val busy = state.sessionRunning || state.terminalRunning || state.buildingProjectIds.isNotEmpty()
+    val busy = state.runningChatIds.isNotEmpty() || state.activeProjectId in state.buildingProjectIds
     val pendingChangesCount = state.changedItems.count { it.accepted == null }
     ToolScaffold(
         title = stringResource(R.string.tools_checkpoints),
