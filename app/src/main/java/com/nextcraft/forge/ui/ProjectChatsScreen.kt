@@ -3,9 +3,13 @@
 package com.nextcraft.forge.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -23,6 +28,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
@@ -33,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +69,7 @@ fun ProjectChatsScreen(
         ForgeProjectHeader(
             title = currentProject?.name ?: stringResource(R.string.shell_nextcraft_forge),
             subtitle = combinedSubtitle,
+            accentSeed = currentProject?.name,
             onBack = viewModel::projectBack,
             actions = {
                 if (currentProject?.type == ProjectType.ANDROID) {
@@ -79,20 +87,28 @@ fun ProjectChatsScreen(
             },
         )
 
-        ForgePrimaryButton(
-            text = "+ ${stringResource(R.string.chats_new_chat)}",
-            onClick = viewModel::createChat,
-            enabled = true,
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 6.dp),
-        )
-
-        ForgeTextButton(
-            onClick = { showRepoModal = true },
-            modifier = Modifier.padding(start = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.repo_button))
+            ForgePrimaryButton(
+                text = "+ ${stringResource(R.string.chats_new_chat)}",
+                onClick = viewModel::createChat,
+                enabled = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = { showRepoModal = true },
+                shape = RoundedCornerShape(100),
+                modifier = Modifier.heightIn(min = 44.dp),
+            ) {
+                ForgeIcon(glyph = ForgeGlyph.HISTORY, tint = palette.primary, size = 16.dp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.repo_button), fontWeight = FontWeight.SemiBold)
+            }
         }
 
         if (showRepoModal) {
@@ -121,28 +137,42 @@ fun ProjectChatsScreen(
             return
         }
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             items(orderedChats, key = { it.id }) { thread ->
                 val isSelectedChat = thread.id == state.activeChatId
                 val isCurrentlyRunning = thread.id in state.runningChatIds
                 val touchSource = remember { MutableInteractionSource() }
+                val rowShape = RoundedCornerShape(16.dp)
+                val rowBg = if (isSelectedChat) palette.primary.copy(alpha = 0.12f) else LocalForgeThemeTokens.current.cardContainerColor
+                val rowBorder = if (isSelectedChat) palette.primary.copy(alpha = 0.35f) else palette.outlineVariant.copy(alpha = 0.5f)
                 Row(
                     modifier = Modifier
                         .animateItem(fadeInSpec = null, fadeOutSpec = null)
                         .fillMaxWidth()
                         .forgePressScale(touchSource, pressedScale = 0.985f)
+                        .clip(rowShape)
+                        .background(rowBg, rowShape)
+                        .border(1.dp, rowBorder, rowShape)
                         .clickable(
                             interactionSource = touchSource,
                             indication = ripple(),
                             role = Role.Button,
                         ) { viewModel.openChat(thread.id) }
                         .heightIn(min = 60.dp)
-                        .padding(start = 20.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                        .padding(start = 16.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     ForgeStatusIcon(
-                        status = if (isCurrentlyRunning) ForgeStatus.RUNNING else ForgeStatus.TODO,
-                        iconSize = 16.dp,
+                        status = when {
+                            isCurrentlyRunning -> ForgeStatus.RUNNING
+                            isSelectedChat -> ForgeStatus.DONE
+                            else -> ForgeStatus.TODO
+                        },
+                        iconSize = 18.dp,
                     )
                     Spacer(modifier = Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -154,10 +184,17 @@ fun ProjectChatsScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        val metaText = if (thread.isolated) {
+                            "${formatRelativeTime(thread.updatedAtMillis)} · ${stringResource(R.string.branch_title)}"
+                        } else {
+                            formatRelativeTime(thread.updatedAtMillis)
+                        }
                         Text(
-                            text = formatRelativeTime(thread.updatedAtMillis),
+                            text = metaText,
                             fontSize = ForgeType.secondary,
                             color = palette.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                     if (orderedChats.size > 1) {

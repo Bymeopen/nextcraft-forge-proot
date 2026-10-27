@@ -137,7 +137,7 @@ internal fun ForgeModalSheet(
 
 /** Counts an open modal in [LocalForgeSheetDepth] so the root blurs the page behind it (Glass), like a sheet does. */
 @Composable
-private fun CountAsOpenModal() {
+internal fun CountAsOpenModal() {
     val depth = LocalForgeSheetDepth.current
     DisposableEffect(depth) {
         depth?.let { it.intValue += 1 }

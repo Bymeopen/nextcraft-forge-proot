@@ -201,13 +201,35 @@ fun AgentScreen(
     androidx.compose.runtime.LaunchedEffect(state.routing) { viewModel.refreshAgentProfiles(); viewModel.refreshReadyAgents() }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.loadConnectors() }
     var branchSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var repoSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var reviewBranchChatId by rememberSaveable { mutableStateOf<String?>(null) }
+    if (drawerState.isOpen) CountAsOpenModal()
     androidx.activity.compose.BackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
 
     androidx.compose.material3.ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            androidx.compose.material3.ModalDrawerSheet {
-                ChatDrawerContent(state = state, viewModel = viewModel, onClose = { scope.launch { drawerState.close() } })
+            androidx.compose.material3.ModalDrawerSheet(
+                drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                drawerContainerColor = forgeSheetColor(),
+                drawerContentColor = MaterialTheme.colorScheme.onSurface,
+                drawerTonalElevation = 0.dp,
+                windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
+                modifier = Modifier.border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    shape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                ),
+            ) {
+                ChatDrawerContent(
+                    state = state,
+                    viewModel = viewModel,
+                    onClose = { scope.launch { drawerState.close() } },
+                    onOpenRepo = {
+                        scope.launch { drawerState.close() }
+                        repoSheetOpen = true
+                    },
+                )
             }
         },
     ) {
@@ -252,39 +274,39 @@ fun AgentScreen(
             exit = ForgeMotion.shrinkExit(reduceMotion),
         ) {
             val activeText = statusText ?: lastStatusText
-            // A slim status line: no sliding bar (the spinner by the chat title shows that it is working), small text,
-            // and a compact Stop (the composer's round button also stops).
+            // A slim status pill: rounded card container with accent text and compact Stop button.
             Surface(
+                shape = RoundedCornerShape(14.dp),
                 color = tokens.cardElevatedColor,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth(),
+                border = tokens.cardBorderStroke,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp, end = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = activeText,
-                            fontSize = ForgeType.caption,
-                            color = tokens.accentText,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(vertical = 4.dp),
-                        )
-                        if (state.activeChatRunning) {
-                            ForgeTextButton(
-                                onClick = viewModel::stopActiveTask,
-                                modifier = Modifier.heightIn(min = 32.dp),
-                            ) {
-                                Text(stringResource(R.string.agent_stop), fontSize = ForgeType.caption)
-                            }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = activeText,
+                        fontSize = ForgeType.caption,
+                        color = tokens.accentText,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(vertical = 4.dp),
+                    )
+                    if (state.activeChatRunning) {
+                        ForgeTextButton(
+                            onClick = viewModel::stopActiveTask,
+                            modifier = Modifier.heightIn(min = 32.dp),
+                        ) {
+                            Text(stringResource(R.string.agent_stop), fontSize = ForgeType.caption, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
@@ -424,11 +446,12 @@ fun AgentScreen(
                 title = { Text(stringResource(R.string.capture_confirm_title)) },
                 text = { Text(stringResource(R.string.capture_confirm_message)) },
                 confirmButton = {
-                    TextButton(onClick = { confirmCapture = false; captureTarget?.let(viewModel::captureAppScreens) }) {
-                        Text(stringResource(R.string.capture_start))
-                    }
+                    ForgePrimaryButton(
+                        text = stringResource(R.string.capture_start),
+                        onClick = { confirmCapture = false; captureTarget?.let(viewModel::captureAppScreens) },
+                    )
                 },
-                dismissButton = { TextButton(onClick = { confirmCapture = false }) { Text(stringResource(R.string.agent_cancel)) } },
+                dismissButton = { ForgeTextButton(onClick = { confirmCapture = false }) { Text(stringResource(R.string.agent_cancel)) } },
             )
         }
         val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
@@ -624,6 +647,22 @@ fun AgentScreen(
     if (usageOpen) ChatUsageSheet(state = state, onDismiss = { usageOpen = false })
     if (scheduleOpen) ScheduleDialog(state = state, viewModel = viewModel, onDismiss = { scheduleOpen = false })
     if (branchSheetOpen) BranchSheet(state = state, viewModel = viewModel, chatId = state.activeChatId, onDismiss = { branchSheetOpen = false })
+    if (repoSheetOpen) {
+        RepoSheet(
+            state = state,
+            viewModel = viewModel,
+            onReview = { targetId -> reviewBranchChatId = targetId },
+            onDismiss = { repoSheetOpen = false },
+        )
+    }
+    reviewBranchChatId?.let { targetId ->
+        BranchSheet(
+            state = state,
+            viewModel = viewModel,
+            chatId = targetId,
+            onDismiss = { reviewBranchChatId = null },
+        )
+    }
     if (routeSheetOpen) {
         androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshReadyAgents() }
         ChatRoutingSheet(state = state, viewModel = viewModel, onDismiss = { routeSheetOpen = false })

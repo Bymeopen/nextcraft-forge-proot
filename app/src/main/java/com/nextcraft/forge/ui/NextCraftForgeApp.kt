@@ -134,7 +134,10 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
             title = { Text(stringResource(R.string.files_unsaved_title)) },
             text = { Text(stringResource(R.string.files_unsaved_message, path)) },
             confirmButton = {
-                Button(onClick = viewModel::saveAndContinue) { Text(stringResource(R.string.files_unsaved_save)) }
+                ForgePrimaryButton(
+                    text = stringResource(R.string.files_unsaved_save),
+                    onClick = viewModel::saveAndContinue,
+                )
             },
             dismissButton = {
                 Row {
@@ -305,60 +308,65 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
                 exit = ForgeMotion.shrinkExit(reduceMotion),
             ) {
                 val banner = bannerText ?: lastBannerText
+                val tokens = LocalForgeThemeTokens.current
+                val scheme = MaterialTheme.colorScheme
                 Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.fillMaxWidth().forgeLive(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = tokens.cardElevatedColor,
+                    contentColor = scheme.onSurface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, scheme.primary.copy(alpha = 0.45f)),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .forgeLive(),
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = banner,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.weight(1f).padding(vertical = 6.dp),
-                            )
-                            val bannerAction = state.bannerAction?.takeIf { it.forMessage == state.bannerMessage }
-                            if (bannerAction != null) {
-                                TextButton(
-                                    onClick = {
-                                        if (bannerAction.kind == BannerActionKind.SET_UP_RUNTIME) {
-                                            bypassSetupGate = false
-                                            viewModel.dismissBanner()
-                                        } else {
-                                            viewModel.runBannerAction(bannerAction.kind)
-                                        }
-                                    },
-                                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
-                                ) {
-                                    Text(stringResource(bannerAction.kind.label), fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-                            IconButton(
-                                onClick = viewModel::dismissBanner,
-                                modifier = Modifier.size(ForgeSpace.minTouch),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = scheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = banner,
+                            fontSize = ForgeType.secondary,
+                            fontWeight = FontWeight.Medium,
+                            color = scheme.onSurface,
+                            modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+                        )
+                        val bannerAction = state.bannerAction?.takeIf { it.forMessage == state.bannerMessage }
+                        if (bannerAction != null) {
+                            ForgeTextButton(
+                                onClick = {
+                                    if (bannerAction.kind == BannerActionKind.SET_UP_RUNTIME) {
+                                        bypassSetupGate = false
+                                        viewModel.dismissBanner()
+                                    } else {
+                                        viewModel.runBannerAction(bannerAction.kind)
+                                    }
+                                },
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = stringResource(R.string.shell_dismiss),
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.size(16.dp),
-                                )
+                                Text(stringResource(bannerAction.kind.label), fontWeight = FontWeight.SemiBold)
                             }
                         }
-                        Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                        IconButton(
+                            onClick = viewModel::dismissBanner,
+                            modifier = Modifier.size(ForgeSpace.minTouch),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = stringResource(R.string.shell_dismiss),
+                                tint = scheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
                 }
             }

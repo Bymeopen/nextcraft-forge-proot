@@ -360,18 +360,17 @@ fun FilesAndDiffScreen(
         ForgeAlertDialog(
             modifier = Modifier.forgePopIn(),
             onDismissRequest = { pendingDeletePath = null },
-            title = { Text(stringResource(R.string.files_delete_file_confirm_title)) },
+            title = { Text(stringResource(R.string.files_delete_file_confirm_title), fontWeight = FontWeight.SemiBold) },
             text = { Text(stringResource(R.string.files_delete_file_confirm_message, targetPath)) },
             confirmButton = {
-                Button(
+                ForgePrimaryButton(
+                    text = stringResource(R.string.shell_confirm_delete),
                     onClick = {
                         viewModel.deleteWorkspaceFile(targetPath)
                         pendingDeletePath = null
                         mode = "files"
                     },
-                ) {
-                    Text(stringResource(R.string.shell_confirm_delete))
-                }
+                )
             },
             dismissButton = {
                 ForgeTextButton(onClick = { pendingDeletePath = null }) {
@@ -932,53 +931,84 @@ private fun WorkspaceDiffReviewList(
     modifier: Modifier = Modifier,
 ) {
     val tokens = LocalForgeThemeTokens.current
+    val scheme = MaterialTheme.colorScheme
     if (changes.isEmpty()) {
         Box(
             modifier = modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = stringResource(R.string.files_no_unreviewed_checkpoint_changes),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            ForgeEmptyState(
+                glyph = ForgeGlyph.CODE,
+                title = stringResource(R.string.files_no_unreviewed_checkpoint_changes),
             )
         }
         return
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = tokens.cardContainerColor,
+            contentColor = scheme.onSurface,
+            border = tokens.cardBorderStroke,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp),
         ) {
-            Text(
-                text = stringResource(R.string.files_modified_file_s_since, changes.size),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onKeepAll, enabled = !sessionRunning) { Text(stringResource(R.string.files_keep_all)) }
-                OutlinedButton(onClick = onRevertAll, enabled = !sessionRunning) {
-                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.files_undo_all))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.files_modified_file_s_since, changes.size),
+                    fontSize = ForgeType.rowTitle,
+                    color = scheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                ConfirmedAction(
+                    title = stringResource(R.string.files_undo_all),
+                    message = stringResource(R.string.files_modified_file_s_since, changes.size),
+                    confirmLabel = stringResource(R.string.files_undo_all),
+                    onConfirm = onRevertAll,
+                ) { onClick ->
+                    OutlinedButton(
+                        onClick = onClick,
+                        enabled = !sessionRunning,
+                        shape = RoundedCornerShape(100),
+                        modifier = Modifier.heightIn(min = 40.dp),
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.files_undo_all), fontWeight = FontWeight.SemiBold)
+                    }
                 }
+                ForgePrimaryButton(
+                    text = stringResource(R.string.files_keep_all),
+                    onClick = onKeepAll,
+                    enabled = !sessionRunning,
+                )
             }
         }
 
         LazyColumn(
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(changes, key = { it.path }) { item ->
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = tokens.cardContainerColor,
+                    contentColor = scheme.onSurface,
+                    border = tokens.cardBorderStroke,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Column(
-                        modifier = Modifier.padding(vertical = 4.dp),
+                        modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Row(
@@ -1013,26 +1043,33 @@ private fun WorkspaceDiffReviewList(
                             IconButton(
                                 onClick = { onKeepFile(item.path) },
                                 enabled = !sessionRunning,
-                                modifier = Modifier.size(48.dp),
+                                modifier = Modifier.size(44.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = stringResource(R.string.files_keep_file),
                                     tint = tokens.successText,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(18.dp),
                                 )
                             }
-                            IconButton(
-                                onClick = { onRevertFile(item.path) },
-                                enabled = !sessionRunning,
-                                modifier = Modifier.size(48.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = stringResource(R.string.files_revert_file),
-                                    tint = tokens.dangerText,
-                                    modifier = Modifier.size(16.dp),
-                                )
+                            ConfirmedAction(
+                                title = stringResource(R.string.files_revert_file),
+                                message = item.path,
+                                confirmLabel = stringResource(R.string.files_revert_file),
+                                onConfirm = { onRevertFile(item.path) },
+                            ) { onClick ->
+                                IconButton(
+                                    onClick = onClick,
+                                    enabled = !sessionRunning,
+                                    modifier = Modifier.size(44.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = stringResource(R.string.files_revert_file),
+                                        tint = tokens.dangerText,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
                             }
                         }
 

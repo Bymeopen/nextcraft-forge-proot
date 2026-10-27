@@ -62,7 +62,7 @@ internal fun ForgeCommandPalette(
     ForgeAlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            ForgeTextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.agent_close))
             }
         },

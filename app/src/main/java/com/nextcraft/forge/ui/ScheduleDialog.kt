@@ -75,8 +75,8 @@ internal fun ScheduleDialog(
                             checked = item.enabled,
                             onCheckedChange = { active -> viewModel.setScheduledTaskEnabled(item.id, active) },
                         )
-                        TextButton(onClick = { viewModel.removeScheduledTask(item.id) }) {
-                            Text(stringResource(R.string.schedule_delete))
+                        ForgeTextButton(onClick = { viewModel.removeScheduledTask(item.id) }) {
+                            Text(stringResource(R.string.schedule_delete), color = LocalForgeThemeTokens.current.dangerText)
                         }
                     }
                 }
@@ -105,18 +105,17 @@ internal fun ScheduleDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            ForgePrimaryButton(
+                text = stringResource(R.string.schedule_add),
                 enabled = draftPrompt.isNotBlank(),
                 onClick = {
                     viewModel.addScheduledTask(draftPrompt, chosenMinutes)
                     draftPrompt = ""
                 },
-            ) {
-                Text(stringResource(R.string.schedule_add))
-            }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            ForgeTextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.schedule_close))
             }
         },

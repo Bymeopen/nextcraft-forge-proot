@@ -533,9 +533,11 @@ private fun CloneUrlDialog(onDismiss: () -> Unit, onClone: (String) -> Unit) {
             )
         },
         confirmButton = {
-            Button(onClick = { onClone(url) }, enabled = FieldValidation.isHttpUrl(url)) {
-                Text(stringResource(R.string.projects_clone))
-            }
+            ForgePrimaryButton(
+                text = stringResource(R.string.projects_clone),
+                onClick = { onClone(url) },
+                enabled = FieldValidation.isHttpUrl(url),
+            )
         },
         dismissButton = {
             ForgeTextButton(onClick = onDismiss) { Text(stringResource(R.string.projects_cancel)) }

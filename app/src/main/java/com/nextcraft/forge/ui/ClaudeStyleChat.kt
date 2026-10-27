@@ -4,6 +4,7 @@ package com.nextcraft.forge.ui
 
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -36,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -47,16 +50,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.nextcraft.forge.R
 import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.ChatMessage
 import com.nextcraft.forge.model.ProjectChat
+import com.nextcraft.forge.model.ProjectType
 import com.nextcraft.forge.runtime.BranchStatus
 import com.nextcraft.forge.runtime.CLAUDE_EFFORT_LEVELS
 
@@ -82,17 +88,31 @@ internal fun ChatTopBar(
     onOpenMemory: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
+    val isCompactLayout = rememberCompactHeight()
+    val minRowHeight = if (isCompactLayout) 48.dp else ForgeSpace.header
     var menuOpen by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
     val activeChat = state.chats.firstOrNull { it.id == state.activeChatId }
     val pending = state.changedItems.count { it.accepted == null }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = minRowHeight)
+            .padding(start = 4.dp, end = 14.dp, top = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onOpenDrawer) {
             Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.agent_project_chats), tint = scheme.onSurface)
+        }
+        state.activeProject?.name?.let { seed ->
+            val isDarkBg = scheme.background.luminance() < 0.5f
+            Box(
+                modifier = Modifier
+                    .padding(end = 10.dp)
+                    .size(10.dp)
+                    .background(projectAccent(seed, dark = isDarkBg), CircleShape),
+            )
         }
         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
             // The spinner sits right after the title while this chat works (it replaces the sliding bar under the header).
@@ -102,6 +122,7 @@ internal fun ChatTopBar(
                     modifier = Modifier.weight(1f, fill = false).forgeHeading(),
                     fontSize = ForgeType.cardTitle,
                     fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.2).sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -122,12 +143,20 @@ internal fun ChatTopBar(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // Changes made by the agent: opens the workspace diff.
-        IconButton(onClick = onOpenChanges) {
+        ForgeActionPill {
+            // Changes made by the agent: opens the workspace diff.
             Box(contentAlignment = Alignment.TopEnd) {
-                ForgeIcon(glyph = ForgeGlyph.CODE, tint = scheme.onSurface, size = 22.dp, description = stringResource(R.string.chat_menu_changes))
+                ForgeGlyphPillIcon(
+                    glyph = ForgeGlyph.CODE,
+                    description = stringResource(R.string.chat_menu_changes),
+                    onClick = onOpenChanges,
+                )
                 if (pending > 0) {
-                    Surface(shape = RoundedCornerShape(50), color = scheme.primary, modifier = Modifier.offset(x = 10.dp, y = (-8).dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = scheme.primary,
+                        modifier = Modifier.padding(top = 6.dp, end = 6.dp),
+                    ) {
                         Text(
                             text = pending.toString(),
                             fontSize = ForgeType.caption,
@@ -137,36 +166,38 @@ internal fun ChatTopBar(
                     }
                 }
             }
-        }
-        Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.chat_menu_more), tint = scheme.onSurface)
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rename)) }, onClick = { menuOpen = false; onRename() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_memory)) }, onClick = { menuOpen = false; onOpenMemory() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_usage)) }, onClick = { menuOpen = false; onUsage() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_schedule)) }, onClick = { menuOpen = false; onSchedule() })
-                if (activeChat?.isolated == true) {
-                    DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
-                } else {
+            Box {
+                ForgePillIcon(
+                    icon = Icons.Default.MoreVert,
+                    description = stringResource(R.string.chat_menu_more),
+                    onClick = { menuOpen = true },
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rename)) }, onClick = { menuOpen = false; onRename() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_memory)) }, onClick = { menuOpen = false; onOpenMemory() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_usage)) }, onClick = { menuOpen = false; onUsage() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_schedule)) }, onClick = { menuOpen = false; onSchedule() })
+                    if (activeChat?.isolated == true) {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.branch_menu_open)) }, onClick = { menuOpen = false; onBranch() })
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.branch_menu_enable)) },
+                            enabled = !state.activeChatRunning,
+                            onClick = { menuOpen = false; onEnableBranch() },
+                        )
+                    }
+                    DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rea)) }, onClick = { menuOpen = false; onOpenRea() })
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.branch_menu_enable)) },
+                        text = { Text(stringResource(R.string.chat_menu_clear)) },
                         enabled = !state.activeChatRunning,
-                        onClick = { menuOpen = false; onEnableBranch() },
+                        onClick = { menuOpen = false; confirmClear = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_delete_chat)) },
+                        enabled = state.chats.size > 1 && !state.activeChatRunning,
+                        onClick = { menuOpen = false; confirmDelete = true },
                     )
                 }
-                DropdownMenuItem(text = { Text(stringResource(R.string.chat_menu_rea)) }, onClick = { menuOpen = false; onOpenRea() })
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.chat_menu_clear)) },
-                    enabled = !state.activeChatRunning,
-                    onClick = { menuOpen = false; confirmClear = true },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.agent_delete_chat)) },
-                    enabled = state.chats.size > 1 && !state.activeChatRunning,
-                    onClick = { menuOpen = false; confirmDelete = true },
-                )
             }
         }
     }
@@ -210,27 +241,103 @@ internal fun ChatDrawerContent(
     state: ForgeUiState,
     viewModel: MainViewModel,
     onClose: () -> Unit,
+    onOpenRepo: () -> Unit = {},
 ) {
-    Column(modifier = Modifier.fillMaxHeight().padding(horizontal = 12.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            text = state.activeProject?.name ?: stringResource(R.string.agent_title),
-            fontSize = ForgeType.screenTitle,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            // 12 (column) + 8 here = 20dp, the same left edge as the status slot in every row below.
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        ForgePrimaryButton(
-            text = stringResource(R.string.agent_new_chat),
-            onClick = {
-                viewModel.createChat()
-                onClose()
-            },
+    val scheme = MaterialTheme.colorScheme
+    val currentProject = state.activeProject
+    val sortedChats = remember(state.chats) { state.chats.sortedByDescending { it.updatedAtMillis } }
+    val projectKindLabel = currentProject?.let { proj ->
+        stringResource(if (proj.type == ProjectType.ANDROID) R.string.projects_android else R.string.projects_general)
+    }
+    val chatCountSummary = quantityStringResource(R.plurals.chats_subtitle, sortedChats.size, sortedChats.size)
+    val combinedSubtitle = listOfNotNull(projectKindLabel, chatCountSummary).joinToString(" · ")
+
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
             modifier = Modifier.fillMaxWidth(),
-        )
-        val sortedChats = remember(state.chats) { state.chats.sortedByDescending { it.updatedAtMillis } }
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = {
+                    onClose()
+                    viewModel.projectBack()
+                },
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = stringResource(R.string.a11y_back),
+                    tint = scheme.onSurface,
+                )
+            }
+            currentProject?.name?.let { seed ->
+                val isDarkBg = scheme.background.luminance() < 0.5f
+                Box(
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(10.dp)
+                        .background(projectAccent(seed, dark = isDarkBg), CircleShape),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = currentProject?.name ?: stringResource(R.string.agent_title),
+                    fontSize = ForgeType.cardTitle,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (combinedSubtitle.isNotBlank()) {
+                    Text(
+                        text = combinedSubtitle,
+                        fontSize = ForgeType.secondary,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onClose) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.agent_close),
+                    tint = scheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ForgePrimaryButton(
+                text = "+ ${stringResource(R.string.agent_new_chat)}",
+                onClick = {
+                    viewModel.createChat()
+                    onClose()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = onOpenRepo,
+                shape = RoundedCornerShape(100),
+                modifier = Modifier.heightIn(min = 44.dp),
+            ) {
+                ForgeIcon(glyph = ForgeGlyph.HISTORY, tint = scheme.primary, size = 16.dp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.repo_button), fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             items(sortedChats, key = { it.id }) { chat ->
                 ChatDrawerRow(
                     chat = chat,
@@ -258,11 +365,18 @@ internal fun ChatDrawerRow(
     onDelete: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val rowShape = RoundedCornerShape(14.dp)
+    val rowBg = if (current) scheme.primary.copy(alpha = 0.12f) else scheme.onSurface.copy(alpha = 0.03f)
+    val rowBorder = if (current) scheme.primary.copy(alpha = 0.35f) else scheme.outlineVariant.copy(alpha = 0.45f)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(rowShape)
+            .background(rowBg, rowShape)
+            .border(1.dp, rowBorder, rowShape)
             .clickable(role = Role.Button, onClick = onOpen)
-            .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            .heightIn(min = 56.dp)
+            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Spinner while working, a dot otherwise (accent for the open chat), so the slot is never an unexplained blank.
@@ -285,7 +399,12 @@ internal fun ChatDrawerRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(text = formatRelativeTime(chat.updatedAtMillis), fontSize = ForgeType.caption, color = scheme.onSurfaceVariant)
+            val metaText = if (chat.isolated) {
+                "${formatRelativeTime(chat.updatedAtMillis)} · ${stringResource(R.string.branch_title)}"
+            } else {
+                formatRelativeTime(chat.updatedAtMillis)
+            }
+            Text(text = metaText, fontSize = ForgeType.caption, color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (canDelete) {
             ConfirmedAction(
@@ -317,7 +436,11 @@ internal fun RenameChatDialog(initial: String, onDismiss: () -> Unit, onSave: (S
             )
         },
         confirmButton = {
-            ForgeTextButton(onClick = { onSave(text) }, enabled = text.isNotBlank()) { Text(stringResource(R.string.chat_rename_save)) }
+            ForgePrimaryButton(
+                text = stringResource(R.string.chat_rename_save),
+                onClick = { onSave(text) },
+                enabled = text.isNotBlank(),
+            )
         },
         dismissButton = { ForgeTextButton(onClick = onDismiss) { Text(stringResource(R.string.projects_cancel)) } },
     )
