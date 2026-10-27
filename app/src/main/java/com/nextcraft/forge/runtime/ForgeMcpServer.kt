@@ -24,19 +24,71 @@ internal object ForgeMcpServer {
     const val FORGE_MCP_GUEST_PATH = "/$GUEST_BIN_DIR/$FORGE_MCP_SCRIPT_NAME"
     const val PLAYWRIGHT_WRAPPER_NAME = "forge-playwright-mcp"
     const val PLAYWRIGHT_WRAPPER_GUEST_PATH = "/$GUEST_BIN_DIR/$PLAYWRIGHT_WRAPPER_NAME"
+    const val UVX_WRAPPER_NAME = "uvx"
+    const val UVX_WRAPPER_GUEST_PATH = "/$GUEST_BIN_DIR/$UVX_WRAPPER_NAME"
 
     private val VALID_DSH_SERVER_NAME = Regex("^[A-Za-z0-9_-]{1,32}$")
+
+    val UVX_WRAPPER_SH: String = """#!/bin/sh
+# ARM64 Android Chroot/PRoot wrapper for uvx (Python MCP package runner):
+# Delegates to native uvx when installed, or auto-installs/runs via pip/venv inside /root/.cache/forge-uvx.
+for bin in /root/.local/bin/uvx /usr/local/bin/uvx /usr/bin/uvx; do
+    if [ -x "${'$'}bin" ]; then
+        exec "${'$'}bin" "${'$'}@"
+    fi
+done
+pkg=""
+entry=""
+if [ "${'$'}1" = "--from" ] && [ -n "${'$'}2" ] && [ -n "${'$'}3" ]; then
+    pkg="${'$'}2"
+    entry="${'$'}3"
+    shift 3
+elif [ -n "${'$'}1" ]; then
+    pkg="${'$'}1"
+    entry="${'$'}1"
+    shift 1
+else
+    echo "Usage: uvx [--from <pkg>] <tool> [args...]" >&2
+    exit 2
+fi
+venv_dir="/root/.cache/forge-uvx/${'$'}(printf '%s' "${'$'}pkg" | tr -c 'A-Za-z0-9_.-' '_')"
+if [ ! -x "${'$'}venv_dir/bin/${'$'}entry" ]; then
+    python3 -m venv "${'$'}venv_dir" >/dev/null 2>&1 || {
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get install -y -qq python3-venv python3-pip >/dev/null 2>&1 || true
+        python3 -m venv "${'$'}venv_dir" >/dev/null 2>&1
+    }
+    "${'$'}venv_dir/bin/pip" install --quiet --disable-pip-version-check "${'$'}pkg" >/dev/null 2>&1
+fi
+if [ -x "${'$'}venv_dir/bin/${'$'}entry" ]; then
+    exec "${'$'}venv_dir/bin/${'$'}entry" "${'$'}@"
+fi
+exec python3 -m "${'$'}(printf '%s' "${'$'}entry" | tr '-' '_')" "${'$'}@"
+"""
 
     val PLAYWRIGHT_WRAPPER_SH: String = """#!/bin/sh
 # ARM64 Android Chroot/PRoot wrapper for @playwright/mcp:
 # Enforces --headless and --no-sandbox (required inside Android chroot/proot namespaces)
-# and binds system Chromium if available on ARM64.
-for bin in /usr/bin/chromium /usr/bin/chromium-browser /usr/bin/google-chrome; do
-    if [ -x "${'$'}bin" ]; then
-        export PLAYWRIGHT_MCP_EXECUTABLE_PATH="${'$'}bin"
-        break
-    fi
-done
+# and binds system Chromium if available on ARM64 (auto-installing chromium if missing).
+find_chromium() {
+    for bin in /usr/bin/chromium /usr/bin/chromium-browser /usr/bin/google-chrome; do
+        if [ -x "${'$'}bin" ]; then
+            printf '%s' "${'$'}bin"
+            return 0
+        fi
+    done
+    return 1
+}
+chrome_bin="${'$'}(find_chromium || true)"
+if [ -z "${'$'}chrome_bin" ] && [ "${'$'}(id -u 2>/dev/null)" = "0" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq chromium >/dev/null 2>&1 || apt-get install -y -qq chromium-browser >/dev/null 2>&1 || true
+    chrome_bin="${'$'}(find_chromium || true)"
+fi
+if [ -n "${'$'}chrome_bin" ]; then
+    export PLAYWRIGHT_MCP_EXECUTABLE_PATH="${'$'}chrome_bin"
+fi
 exec npx -y @playwright/mcp@latest --headless --no-sandbox "${'$'}@"
 """
 
@@ -460,6 +512,32 @@ def handle_design_mermaid_blueprint(args):
                 lines.append(f"    {left} --> {right}")
             else:
                 lines.append(f"    [*] --> {s}")
+    elif dtype == "er":
+        lines.append("erDiagram")
+        for item in items:
+            s = str(item).strip()
+            if "->" in s:
+                left, right = [p.strip() for p in s.split("->", 1)]
+                e1 = re.sub(r"[^A-Za-z0-9_]", "_", left).strip("_") or "EntityA"
+                e2 = re.sub(r"[^A-Za-z0-9_]", "_", right).strip("_") or "EntityB"
+                lines.append(f'    {e1} ||--o{{ {e2} : "relates"')
+            else:
+                e1 = re.sub(r"[^A-Za-z0-9_]", "_", s).strip("_") or "Entity"
+                lines.append(f"    {e1} {{")
+                lines.append("        string id PK")
+                lines.append("    }")
+    elif dtype == "class":
+        lines.append("classDiagram")
+        for item in items:
+            s = str(item).strip()
+            if "->" in s:
+                left, right = [p.strip() for p in s.split("->", 1)]
+                c1 = re.sub(r"[^A-Za-z0-9_]", "_", left).strip("_") or "ClassA"
+                c2 = re.sub(r"[^A-Za-z0-9_]", "_", right).strip("_") or "ClassB"
+                lines.append(f"    {c1} --> {c2}")
+            else:
+                c1 = re.sub(r"[^A-Za-z0-9_]", "_", s).strip("_") or "Component"
+                lines.append(f"    class {c1}")
     else:
         lines.append("flowchart TD")
         for idx, item in enumerate(items):
@@ -504,7 +582,7 @@ def handle_android_ui_inspect(args):
             parts.append(f"Screenshot failed: {(res.stderr or res.stdout).strip()}")
 
     if args.get("includeUiHierarchy", True):
-        cmd = "uiautomator dump /sdcard/forge_ui_dump.xml >/dev/null 2>&1 && cat /sdcard/forge_ui_dump.xml && rm -f /sdcard/forge_ui_dump.xml"
+        cmd = "uiautomator dump /data/local/tmp/forge_ui_dump.xml >/dev/null 2>&1 && cat /data/local/tmp/forge_ui_dump.xml && rm -f /data/local/tmp/forge_ui_dump.xml"
         res = subprocess.run([shell_bin, cmd], capture_output=True, text=True, timeout=20)
         xml_text = res.stdout.strip()
         if "<hierarchy" in xml_text:
@@ -776,12 +854,13 @@ if __name__ == "__main__":
     main()
 """
 
-    /** Provisions the built-in MCP server and Playwright ARM64 wrapper inside [rootfs]. */
+    /** Provisions the built-in MCP server, Playwright ARM64 wrapper, and uvx wrapper inside [rootfs]. */
     fun apply(rootfs: File, writeExecutable: (File, String) -> Unit) {
         if (!rootfs.isDirectory) return
         val binDir = File(rootfs, GUEST_BIN_DIR)
         writeExecutable(File(binDir, FORGE_MCP_SCRIPT_NAME), FORGE_MCP_SERVER_PY)
         writeExecutable(File(binDir, PLAYWRIGHT_WRAPPER_NAME), PLAYWRIGHT_WRAPPER_SH)
+        writeExecutable(File(binDir, UVX_WRAPPER_NAME), UVX_WRAPPER_SH)
     }
 
     /**
