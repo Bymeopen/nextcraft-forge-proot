@@ -87,6 +87,11 @@ class AntigravityErrorTest {
         val ev = AntigravityEventParser.parse(scheduleStep) as AntigravityParsedEvent.ScheduledWakeup
         assertEquals(15, ev.intervalMinutes)
         assertEquals("Check CI status and merge PR #157", ev.prompt)
+
+        val nonToolStepKind = """{"event":"step_update","step_update":{"step_index":21,"state":"ACTIVE","step_type":"schedule","tool_name":"schedule","tool_info":{"name":"schedule","parameters":{"duration_seconds":900,"prompt":"\"Check PR #165\""}}}}"""
+        val ev2 = AntigravityEventParser.parse(nonToolStepKind) as AntigravityParsedEvent.ScheduledWakeup
+        assertEquals(15, ev2.intervalMinutes)
+        assertEquals("Check PR #165", ev2.prompt)
     }
 
     @Test

@@ -109,9 +109,10 @@ object ScheduleLogic {
     }
 
     /**
-     * Applies the agent's directives for one chat; returns the new list. A directive comes from model output, so a
-     * timer it creates starts disabled (pending the user's approval via the schedule list's switch) and a re-issued
-     * directive never re-enables a timer the user switched off. `[[unschedule]]` only removes, so it applies at once.
+     * Applies the agent's directives for one chat; returns the new list. A new timer created by `[[schedule: …]]`
+     * starts enabled so background wakeups (such as 15m CI/PR checks) run automatically while the foreground chat
+     * stays idle, and a re-issued directive preserves whatever enabled state the user has set on the switch.
+     * `[[unschedule]]` removes all agent-created timers in that chat immediately.
      */
     fun applyDirectives(
         tasks: List<ScheduledTask>,
@@ -137,7 +138,7 @@ object ScheduleLogic {
                         else -> result + ScheduledTask(
                             projectId = projectId, chatId = chatId, prompt = d.prompt,
                             intervalMinutes = d.intervalMinutes, nextRunAtMillis = now + d.intervalMinutes * 60_000L, byAgent = true,
-                            enabled = false,
+                            enabled = true,
                         )
                     }
                 }

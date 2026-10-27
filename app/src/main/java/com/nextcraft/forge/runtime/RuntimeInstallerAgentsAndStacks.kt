@@ -1120,11 +1120,24 @@ internal suspend fun RuntimeInstaller.obtainRuntimeBundle(
 
 internal fun RuntimeInstaller.makeAndroidToolsExecutable(runtimeRootfs: File) {
     val buildTools = File(runtimeRootfs, AndroidToolchain.BUILD_TOOLS_HOST_DIR)
+    val gradleLauncher = File(runtimeRootfs, AndroidToolchain.GRADLE_LAUNCHER_HOST_PATH)
     listOf("aapt", "aapt2", "aidl", "apksigner", "d8", "dexdump", "split-select", "zipalign")
         .map { File(buildTools, it) }
-        .plus(File(runtimeRootfs, AndroidToolchain.GRADLE_LAUNCHER_HOST_PATH))
+        .plus(gradleLauncher)
         .filter(File::isFile)
         .forEach { Os.chmod(it.absolutePath, 0b111101101) }
+    patchGradleLauncherStdin(gradleLauncher)
+}
+
+internal fun RuntimeInstaller.patchGradleLauncherStdin(gradleLauncher: File) {
+    if (!gradleLauncher.isFile) return
+    runCatching {
+        val original = gradleLauncher.readText()
+        if (!original.contains("exec \"\$JAVACMD\" \"\$@\" < /dev/null") && original.contains("exec \"\$JAVACMD\" \"\$@\"")) {
+            gradleLauncher.writeText(original.replace("exec \"\$JAVACMD\" \"\$@\"", "exec \"\$JAVACMD\" \"\$@\" < /dev/null"))
+            Os.chmod(gradleLauncher.absolutePath, 0b111101101)
+        }
+    }.onFailure { ErrorLog.swallowed("RuntimeInstaller", it) }
 }
 
 internal fun RuntimeInstaller.writeAndroidGradleInitScript(runtimeRootfs: File) {
@@ -1132,6 +1145,7 @@ internal fun RuntimeInstaller.writeAndroidGradleInitScript(runtimeRootfs: File) 
     script.parentFile?.mkdirs()
     script.writeText(RuntimeInstaller.ANDROID_GRADLE_INIT_SCRIPT)
     File(runtimeRootfs, RuntimeMarkers.LEGACY_GRADLE_INIT_SCRIPT).delete()
+    patchGradleLauncherStdin(File(runtimeRootfs, AndroidToolchain.GRADLE_LAUNCHER_HOST_PATH))
 }
 
 internal fun RuntimeInstaller.deviceTotalMemoryMb(): Long {
