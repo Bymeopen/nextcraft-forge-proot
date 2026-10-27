@@ -29,6 +29,7 @@ internal object AndroidToolchain {
     const val BUILD_TOOLS_GUEST_DIR = "$SDK_GUEST_DIR/build-tools/$BUILD_TOOLS_VERSION"
     const val AAPT2_GUEST_PATH = "$BUILD_TOOLS_GUEST_DIR/aapt2"
     const val ANDROID_JAR_GUEST_PATH = "$SDK_GUEST_DIR/platforms/$PLATFORM/android.jar"
+    const val ROBOLECTRIC_GUEST_DIR = "$SDK_GUEST_DIR/robolectric"
     const val MAVEN_GUEST_DIR = "/root/maven/localMvnRepository"
     const val GRADLE_INIT_SCRIPT_GUEST_PATH = "/root/.gradle/init.d/nextcraft-android.gradle"
     const val GUEST_PATH_PREFIX = "$GRADLE_HOME_GUEST_DIR/bin:$BUILD_TOOLS_GUEST_DIR:$SDK_GUEST_DIR/cmdline-tools/latest/bin"

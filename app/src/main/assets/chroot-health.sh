@@ -100,6 +100,7 @@ check "aapt2"             "$BUILD_TOOLS/aapt2 version"
 check "zipalign"          "out=\$($BUILD_TOOLS/zipalign 2>&1); echo \"\$out\" | head -1; echo \"\$out\" | grep -qi usage"
 check "d8"                "$BUILD_TOOLS/d8 --version"
 check "gradle init"       'grep -q "android.aapt2FromMavenOverride" /root/.gradle/init.d/nextcraft-android.gradle && echo ok'
+check_optional "robolectric" 'ls /root/android-sdk/robolectric/android-all-instrumented-*.jar'
 
 echo "== C/C++"
 for c in gcc g++ make cmake gdb; do check "$c" "$c --version"; done

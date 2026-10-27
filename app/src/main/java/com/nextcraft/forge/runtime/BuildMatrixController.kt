@@ -43,7 +43,7 @@ data class BuildMatrixState(
 )
 
 /** The slowest, most memory-hungry Gradle targets: off until the user switches them on. */
-private val OPT_IN_TARGETS = setOf("gradle:assembleRelease", "gradle:lint", "gradle:clean")
+private val OPT_IN_TARGETS = setOf("gradle:assembleRelease", "gradle:lint", "gradle:clean", "gradle:screenshots")
 
 /** A build target found in a project folder: stable id, label and the shell command that builds it. */
 internal data class DetectedTarget(val id: String, val name: String, val command: String)
@@ -58,6 +58,15 @@ internal fun detectBuildTargets(workspace: File): List<DetectedTarget> {
             val gradle = androidGradleCommand(androidRoot, task)
             val command = if (relative.isEmpty()) gradle else "cd ${ChrootRunner.quote(relative)} && $gradle"
             found += DetectedTarget("gradle:$task", label, command)
+        }
+        if (File(androidRoot, "app/src/screenshotTest").isDirectory || File(androidRoot, "src/screenshotTest").isDirectory) {
+            val gradle = androidGradleCommand(
+                androidRoot,
+                ":app:testDebugUnitTest",
+                "-PforgeScreenshots -PforgeRoboDir=${AndroidToolchain.ROBOLECTRIC_GUEST_DIR}",
+            )
+            val command = if (relative.isEmpty()) gradle else "cd ${ChrootRunner.quote(relative)} && $gradle"
+            found += DetectedTarget("gradle:screenshots", "Android Robolectric UI screenshots", command)
         }
     }
     val packageJson = File(workspace, "package.json")
