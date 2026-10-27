@@ -61,4 +61,26 @@ class BashClassifierTest {
         assertEquals(RiskLevel.HIGH, risk("tree -o out.txt"))
         assertEquals(RiskLevel.HIGH, risk("git diff --output=out.patch"))
     }
+
+    @Test
+    fun agentHomesAndTokenFilesAreCredentialPaths() {
+        assertEquals(RiskLevel.HIGH, risk("cat ~/.dsh/cordis.patch.yml"))
+        assertEquals(RiskLevel.HIGH, risk("cat /root/.gemini/oauth_creds.json"))
+        assertEquals(RiskLevel.HIGH, risk("cat ~/.npmrc"))
+        assertEquals(RiskLevel.HIGH, risk("cat ~/.netrc"))
+        assertEquals(RiskLevel.HIGH, classifyToolRisk("Read", null, listOf("/root/.dsh/cordis.patch.yml")))
+        assertEquals(RiskLevel.HIGH, classifyToolRisk("Read", null, listOf("/root/.gemini/settings.json")))
+        assertEquals(RiskLevel.HIGH, classifyToolRisk("Read", null, listOf("/root/.npmrc")))
+        assertEquals(RiskLevel.HIGH, classifyToolRisk("Read", null, listOf("/root/.netrc")))
+        assertEquals(RiskLevel.HIGH, classifyToolRisk("Read", null, listOf("/root/.config/gh/hosts.yml")))
+    }
+
+    @Test
+    fun targetDirectoryOptionsOutsideWorkspaceAreHigh() {
+        assertEquals(RiskLevel.HIGH, risk("cp a.txt --target-directory=/etc/cron.d"))
+        assertEquals(RiskLevel.HIGH, risk("mv a.txt -t/etc/cron.d"))
+        assertEquals(RiskLevel.HIGH, risk("cp a.txt -t /etc/cron.d"))
+        assertEquals(RiskLevel.HIGH, risk("cp a.txt --target-directory=~/bin"))
+        assertEquals(RiskLevel.REVIEW, risk("cp a.txt --target-directory=/workspace/p/out"))
+    }
 }

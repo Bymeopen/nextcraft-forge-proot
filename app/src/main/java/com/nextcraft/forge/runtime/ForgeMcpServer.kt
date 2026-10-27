@@ -42,13 +42,16 @@ exec npx -y @playwright/mcp@latest --headless --no-sandbox "${'$'}@"
 
     val FORGE_MCP_SERVER_PY: String = """#!/usr/bin/env python3
 import html.parser
+import ipaddress
 import json
 import os
+import socket
 import re
 import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -469,10 +472,42 @@ class _PreviewHTMLParser(html.parser.HTMLParser):
             self._curr_heading.append(data)
 
 
+def _preview_url_allowed(url):
+    # http/https only; loopback is allowed (the preview is local by design) but no other private, link-local,
+    # multicast or reserved range, so the tool cannot be pointed at the LAN or cloud metadata endpoints.
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    host = parts.hostname
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
+    except (socket.gaierror, OSError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if ip.is_loopback:
+            continue
+        if ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return False
+    return True
+
+
 def handle_web_preview_inspect(args):
     url = str(args.get("url") or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
         return "Invalid URL: must start with http:// or https://"
+    if not _preview_url_allowed(url):
+        return "Invalid URL: only http(s) to localhost or public hosts is allowed"
     req = urllib.request.Request(url, headers={"User-Agent": "NextCraft-Forge-Inspector/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:

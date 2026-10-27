@@ -455,7 +455,9 @@ class DshRuntimeBridge(
             val defaultHome = File(rootfs, DSH_HOME_GUEST_PATH.removePrefix("/")).apply { mkdirs() }
             runCatching {
                 File(defaultHome, "settings.yaml").writeText(body)
-                File(defaultHome, "cordis.patch.yml").writeText(mcpPatchYaml)
+                // The MCP patch carries bearer tokens: it lives only in the per-session home, which is deleted when
+                // the session ends. A copy left behind by an older build is removed.
+                File(defaultHome, "cordis.patch.yml").delete()
             }
         }
         return home

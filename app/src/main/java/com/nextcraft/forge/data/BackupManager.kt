@@ -181,23 +181,21 @@ class BackupManager(private val context: Context) {
             }
             File(staging, "prefs").takeIf { it.isDirectory }?.let { prefsDir ->
                 onProgress("settings")
-                val destDir = File(context.applicationInfo.dataDir, "shared_prefs").apply { mkdirs() }
                 SETTINGS_PREFS_FILES.forEach { fileName ->
                     // Unencrypted backups cannot overwrite schedule or custom build-matrix shell commands.
                     if (!encrypted && fileName != "$PREFS_NAME.xml") return@forEach
                     val stagedFile = File(prefsDir, fileName)
-                    if (stagedFile.isFile) {
-                        stagedFile.copyTo(File(destDir, fileName), overwrite = true)
-                    }
+                    if (!stagedFile.isFile) return@forEach
+                    // Hazard: copying the XML over shared_prefs/ would leave the SharedPreferences instance already
+                    // loaded in this process (AppPreferences, ScheduleStore, ...) stale, and its next edit().apply()
+                    // would write the old map back over the restore. So the restored values are loaded through the
+                    // live instance instead, which is also where the privileged flags are reset.
+                    val values = PrefsXml.parse(stagedFile.readText())
+                    val editor = context.getSharedPreferences(fileName.removeSuffix(".xml"), Context.MODE_PRIVATE).edit().clear()
+                    PrefsXml.putAll(editor, values)
+                    if (fileName == "$PREFS_NAME.xml") PrefsXml.resetPrivilegedFlags(editor)
+                    editor.commit()
                 }
-                // Always reset privileged host/approval flags after restoring a backup so an untrusted archive
-                // cannot silently enable root host-bridge execution or unprompted high-risk tool runs.
-                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .edit()
-                    .putBoolean("android_host_tools", false)
-                    .putBoolean("auto_approve_all_tools", false)
-                    .putBoolean("interactive_high_risk_approvals", true)
-                    .apply()
             }
             File(staging, SECRETS).takeIf { it.isFile }?.let { secrets ->
                 onProgress("keys")
@@ -265,4 +263,71 @@ class BackupManager(private val context: Context) {
         /** Rebuilt by the next build or install; skipping them keeps a backup small. */
         val SKIPPED_DIRS = setOf("build", ".gradle", "node_modules", ".cxx", ".kotlin", "__pycache__", ".venv", "venv", ".next")
     }
+}
+
+/**
+ * The `shared_prefs/*.xml` format (`<map>` of `string`, `boolean`, `int`, `long`, `float` and `set` entries) as
+ * written by Android, parsed back into values that can be loaded into a live [android.content.SharedPreferences].
+ */
+internal object PrefsXml {
+    /** Keys whose restored values are always overridden so an untrusted archive cannot silently enable them. */
+    val PRIVILEGED_RESETS: Map<String, Boolean> = mapOf(
+        "android_host_tools" to false,
+        "auto_approve_all_tools" to false,
+        "interactive_high_risk_approvals" to true,
+    )
+
+    fun parse(xml: String): Map<String, Any> {
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = false
+            isExpandEntityReferences = false
+            runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+            runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        }
+        val document = factory.newDocumentBuilder().parse(xml.byteInputStream())
+        val root = document.documentElement ?: return emptyMap()
+        require(root.tagName == "map") { "Not a shared_prefs file" }
+        val result = LinkedHashMap<String, Any>()
+        val children = root.childNodes
+        for (i in 0 until children.length) {
+            val node = children.item(i) as? org.w3c.dom.Element ?: continue
+            val name = node.getAttribute("name").takeIf { it.isNotEmpty() } ?: continue
+            val value: Any = when (node.tagName) {
+                "string" -> node.textContent
+                "boolean" -> node.getAttribute("value").toBooleanStrictOrNull() ?: continue
+                "int" -> node.getAttribute("value").toIntOrNull() ?: continue
+                "long" -> node.getAttribute("value").toLongOrNull() ?: continue
+                "float" -> node.getAttribute("value").toFloatOrNull() ?: continue
+                "set" -> {
+                    val items = node.childNodes
+                    (0 until items.length).mapNotNull { j -> (items.item(j) as? org.w3c.dom.Element)?.takeIf { it.tagName == "string" }?.textContent }.toSet()
+                }
+                else -> continue
+            }
+            result[name] = value
+        }
+        return result
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun putAll(editor: android.content.SharedPreferences.Editor, values: Map<String, Any>) {
+        for ((key, value) in values) {
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+                is Set<*> -> editor.putStringSet(key, value as Set<String>)
+            }
+        }
+    }
+
+    /** Restoring a backup never enables root host-bridge execution or unprompted high-risk tool runs. */
+    fun resetPrivilegedFlags(editor: android.content.SharedPreferences.Editor) {
+        PRIVILEGED_RESETS.forEach { (key, value) -> editor.putBoolean(key, value) }
+    }
+
+    /** [values] with the privileged flags reset; what a restore ends up with. Pure, for tests. */
+    fun withPrivilegedReset(values: Map<String, Any>): Map<String, Any> = values + PRIVILEGED_RESETS
 }

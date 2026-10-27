@@ -104,12 +104,12 @@ fun ProjectsScreen(
     onOpenUpdate: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val regular = state.projects
-        .filter { it.kind == ProjectKind.PROJECT }
-        .sortedByDescending { it.updatedAtMillis }
-    val quick = state.projects
-        .filter { it.kind == ProjectKind.QUICK_PROJECT }
-        .sortedByDescending { it.updatedAtMillis }
+    val regular = remember(state.projects) {
+        state.projects.filter { it.kind == ProjectKind.PROJECT }.sortedByDescending { it.updatedAtMillis }
+    }
+    val quick = remember(state.projects) {
+        state.projects.filter { it.kind == ProjectKind.QUICK_PROJECT }.sortedByDescending { it.updatedAtMillis }
+    }
     var pendingDeleteProject by remember { mutableStateOf<Project?>(null) }
     var pendingRenameProject by remember { mutableStateOf<Project?>(null) }
     var showCloneDialog by rememberSaveable { mutableStateOf(false) }
@@ -695,6 +695,9 @@ private fun ProjectsEmptyState() {
     }
 }
 
+private val IMPORTED_DESCRIPTION = Regex("^Imported from (.+)$")
+private val ANDROID_DESCRIPTION = Regex("^Android \\((.+)\\) project$")
+
 private val GENERIC_PROJECT_DESCRIPTIONS = setOf(
     "Default workspace inside Ubuntu ARM64 Root Chroot",
     "General coding workspace",
@@ -718,8 +721,8 @@ private fun Project.localizedDescription(): String = when {
     description == "General coding workspace" -> stringResource(R.string.project_general_desc)
     description == "Quick project" -> stringResource(R.string.project_quick_desc)
     else -> {
-        val imported = Regex("^Imported from (.+)$").matchEntire(description)
-        val android = Regex("^Android \\((.+)\\) project$").matchEntire(description)
+        val imported = IMPORTED_DESCRIPTION.matchEntire(description)
+        val android = ANDROID_DESCRIPTION.matchEntire(description)
         when {
             imported != null -> stringResource(R.string.project_imported_desc, imported.groupValues[1])
             android != null -> stringResource(R.string.project_android_desc, android.groupValues[1])

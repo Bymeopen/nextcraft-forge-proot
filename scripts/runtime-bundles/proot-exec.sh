@@ -50,12 +50,17 @@ HOST_RESP="$HOST_BRIDGE-responses"
 SHM_DIR="$ROOTFS/tmp/.nextcraft-shm"
 
 mkdir -p "$ROOTFS$GUEST_WORKSPACE" "$HOST_WORKSPACE" "$HOST_BRIDGE" "$HOST_RESP" "$PROOT_TMP_DIR" "$SHM_DIR" \
-    "$ROOTFS/nextcraft-bridge" "$ROOTFS/pocketdev-bridge" "$ROOTFS/pocket-bridge" "$ROOTFS/pocketdev-bridge-responses" \
+    "$ROOTFS/nextcraft-bridge" "$ROOTFS/pocketdev-bridge" "$ROOTFS/pocket-bridge" \
+    "$ROOTFS/nextcraft-bridge-responses" "$ROOTFS/pocketdev-bridge-responses" \
     "$ROOTFS/tmp" "$ROOTFS/dev" "$ROOTFS/proc" "$ROOTFS/sys"
 
+# Resolvers for a guest without /etc/resolv.conf; override with NEXTCRAFT_DNS="ip ip ..." (space-separated).
 if [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
     mkdir -p "$ROOTFS/etc"
-    printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "$ROOTFS/etc/resolv.conf"
+    : > "$ROOTFS/etc/resolv.conf"
+    for ns in ${NEXTCRAFT_DNS:-8.8.8.8 1.1.1.1}; do
+        printf "nameserver %s\n" "$ns" >> "$ROOTFS/etc/resolv.conf"
+    done
 fi
 
 unset ANDROID_ROOT ANDROID_DATA ANDROID_ART_ROOT ANDROID_I18N_ROOT ANDROID_TZDATA_ROOT
@@ -70,6 +75,10 @@ export TERM="${TERM:-xterm-256color}"
 export LANG="${LANG:-C.UTF-8}"
 export TMPDIR="/tmp"
 export GLIBC_TUNABLES="glibc.pthread.rseq=0"
+# Same bridge variables as chroot-exec.sh; the pocket* names are kept for scripts from older builds.
+export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
+export POCKETDEV_BRIDGE_DIR="/nextcraft-bridge"
+export NEXTCRAFT_RESPONSE_DIR="/nextcraft-bridge-responses"
 
 BASE_PATH="/opt/nextcraft/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 if [ -d "$ROOTFS/root/android-sdk" ]; then
@@ -90,8 +99,16 @@ BIONIC_BINDS=""
 for bionic_dir in /system /apex /vendor /product; do
     [ -d "$bionic_dir" ] && BIONIC_BINDS="$BIONIC_BINDS -b $bionic_dir"
 done
+# $WORKSPACE_BIND is expanded unquoted below (an optional "-b src:dst" pair), so a host path with whitespace or a
+# colon would be split into separate arguments; refuse it instead of binding the wrong directory.
 WORKSPACE_BIND=""
 if [ "$HOST_WORKSPACE" != "$ROOTFS$GUEST_WORKSPACE" ]; then
+    case "$HOST_WORKSPACE" in
+        *[[:space:]:]*)
+            echo "Host workspace path must not contain whitespace or ':': $HOST_WORKSPACE" >&2
+            exit 65
+            ;;
+    esac
     WORKSPACE_BIND="-b $HOST_WORKSPACE:$GUEST_WORKSPACE"
 fi
 
@@ -103,6 +120,6 @@ exec "$PROOT" --kill-on-exit --link2symlink -0 -r "$ROOTFS" \
     $BIONIC_BINDS \
     $WORKSPACE_BIND \
     -b "$HOST_BRIDGE:/nextcraft-bridge" -b "$HOST_BRIDGE:/pocketdev-bridge" -b "$HOST_BRIDGE:/pocket-bridge" \
-    -b "$HOST_RESP:/pocketdev-bridge-responses" \
+    -b "$HOST_RESP:/nextcraft-bridge-responses" -b "$HOST_RESP:/pocketdev-bridge-responses" \
     -w "$GUEST_WORKSPACE" \
     /usr/bin/env GUEST_WORKSPACE="$GUEST_WORKSPACE" /bin/sh -c 'cd "$GUEST_WORKSPACE" && exec "$@"' -- "$@"

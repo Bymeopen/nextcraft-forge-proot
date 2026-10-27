@@ -808,17 +808,9 @@ internal class LocalFormatGateway(
     }
 
     /**
-     * Only forward requests that present the ephemeral loopback session token or active provider key.
+     * Only forward requests that present the ephemeral loopback session token.
      */
-    private fun isAuthorized(headers: Map<String, String>): Boolean {
-        val presented = headers["x-api-key"]
-            ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
-            ?: return false
-        val presentedBytes = presented.toByteArray()
-        return MessageDigest.isEqual(presentedBytes, sessionToken.toByteArray()) ||
-            MessageDigest.isEqual(presentedBytes, activeApiKey.toByteArray()) ||
-            MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
-    }
+    private fun isAuthorized(headers: Map<String, String>): Boolean = presentsSessionToken(headers, sessionToken)
 
     /** Reads an HTTP/1.1 chunked body, or returns null when it is malformed or larger than [MAX_REQUEST_BYTES]. */
     private fun readChunkedBody(input: BufferedInputStream): String? {
@@ -984,3 +976,15 @@ private fun logSafe(text: String): String = text
     .replace(Regex("\\s+"), " ")
     .trim()
     .take(200)
+
+/**
+ * True when the request carries the loopback session token as `x-api-key` or bearer `authorization`. Only that token
+ * is accepted: the real provider key never has to be present in the guest, so presenting it proves nothing.
+ */
+internal fun presentsSessionToken(headers: Map<String, String>, sessionToken: String): Boolean {
+    val presented = headers["x-api-key"]
+        ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
+        ?: return false
+    if (presented.isEmpty()) return false
+    return MessageDigest.isEqual(presented.toByteArray(), sessionToken.toByteArray())
+}

@@ -54,10 +54,17 @@ class ScheduleTest {
             tasks = ScheduleLogic.applyDirectives(tasks, listOf(ScheduleDirective.Schedule(10, "p$i")), "p", "c", 0)
         }
         assertEquals(ScheduleRules.MAX_AGENT_TASKS_PER_CHAT, tasks.size)
+        // Model output never activates a timer by itself: the user approves it with the switch.
+        assertTrue(tasks.none { it.enabled })
         // Same prompt replaces its timer.
         tasks = ScheduleLogic.applyDirectives(tasks, listOf(ScheduleDirective.Schedule(60, "p0")), "p", "c", 0)
         assertEquals(60, tasks.first { it.prompt == "p0" }.intervalMinutes)
+        assertFalse(tasks.first { it.prompt == "p0" }.enabled)
         assertEquals(ScheduleRules.MAX_AGENT_TASKS_PER_CHAT, tasks.size)
+        // A timer the user approved keeps running when the agent re-issues it.
+        val approved = tasks.map { if (it.prompt == "p1") it.copy(enabled = true) else it }
+        val reissued = ScheduleLogic.applyDirectives(approved, listOf(ScheduleDirective.Schedule(15, "p1")), "p", "c", 0)
+        assertTrue(reissued.first { it.prompt == "p1" }.enabled)
         // Unschedule removes only the agent's tasks in that chat and project (even when another project shares chatId="main").
         val user = ScheduledTask(projectId = "p", chatId = "c", prompt = "mine", intervalMinutes = 10, nextRunAtMillis = 0)
         val other = ScheduledTask(projectId = "p", chatId = "d", prompt = "other", intervalMinutes = 10, nextRunAtMillis = 0, byAgent = true)

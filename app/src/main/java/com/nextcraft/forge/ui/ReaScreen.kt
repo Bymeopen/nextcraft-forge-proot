@@ -26,7 +26,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,6 +45,7 @@ import com.nextcraft.forge.runtime.ReaState
 import com.nextcraft.forge.runtime.ReaController
 import com.nextcraft.forge.runtime.ReaAnalysis
 import com.nextcraft.forge.runtime.ReaCheck
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private const val MAX_FUNCTION_ROWS = 100
 private const val MAX_STRING_ROWS = 200
@@ -55,7 +55,7 @@ private const val MAX_STRING_ROWS = 200
 fun ReaScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
-    val rea by viewModel.rea.state.collectAsState()
+    val rea by viewModel.rea.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.rea.refresh() }
     val installed = rea.installedVersion != null
     val project = state.activeProject

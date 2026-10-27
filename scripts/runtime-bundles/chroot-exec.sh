@@ -37,6 +37,14 @@ case "$APP_UID" in
         ;;
 esac
 
+# The rootfs is bind-mounted, remounted suid/exec and populated with mounts; never do that to "/" or a relative path.
+case "${ROOTFS%/}" in
+    ''|[!/]*|*/..|*/../*)
+        echo "Invalid rootfs path (must be absolute and not /): $ROOTFS" >&2
+        exit 2
+        ;;
+esac
+
 # Opt-in (create the file $ROOTFS/.nextcraft-private-mounts): run this session in its own mount namespace, so its
 # bind mounts disappear with its last process instead of piling up in the shared namespace. Skipped when unshare is
 # missing or already applied.
@@ -255,9 +263,13 @@ for resp_dir in nextcraft-bridge-responses pocketdev-bridge-responses; do
     mount -o remount,bind,ro "$ROOTFS/$resp_dir" 2>/dev/null || true
 done
 
+# Resolvers for a guest without /etc/resolv.conf; override with NEXTCRAFT_DNS="ip ip ..." (space-separated).
 if [ ! -s "$ROOTFS/etc/resolv.conf" ]; then
     mkdir -p "$ROOTFS/etc"
-    printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > "$ROOTFS/etc/resolv.conf"
+    : > "$ROOTFS/etc/resolv.conf"
+    for ns in ${NEXTCRAFT_DNS:-8.8.8.8 1.1.1.1}; do
+        printf "nameserver %s\n" "$ns" >> "$ROOTFS/etc/resolv.conf"
+    done
 fi
 
 fix_workspace_ownership() {

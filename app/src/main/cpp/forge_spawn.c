@@ -25,6 +25,9 @@ static void close_pair(int pair[2]) {
  * and sibling PTY master FDs never leak into child processes.
  */
 static void close_extra_fds(void) {
+    // opendir/readdir are not async-signal-safe, but this runs in the single-threaded forked child of a
+    // multi-threaded JVM with no signal handlers of its own; the loop below covers an opendir failure.
+    // close_range(2) would be the clean alternative, but it needs API 34 / kernel 5.9 on every target.
     DIR *dir = opendir("/proc/self/fd");
     if (dir != NULL) {
         int dir_fd = dirfd(dir);
@@ -224,7 +227,10 @@ Java_com_nextcraft_forge_runtime_NativeSpawn_spawn(JNIEnv *env, jobject self, jo
         _exit(127);
     }
 
-    if (pid > 0 && !use_pty) setpgid(pid, pid);
+    if (pid > 0 && !use_pty && setpgid(pid, pid) != 0 && errno != EACCES) {
+        // EACCES means the child already exec'd (the race with its own setpgid is benign); anything else is logged.
+        perror("NextCraft setpgid");
+    }
     free_spawn_allocations(argv, argc, envp, envc, cwd, output_path);
 
     if (pid < 0) {

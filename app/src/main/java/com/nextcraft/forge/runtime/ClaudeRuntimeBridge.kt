@@ -999,8 +999,8 @@ private val DANGEROUS_PATTERNS = listOf(
     "/opt/pocket", "/opt/nextcraft", ".claude", ".git-credentials",
     // Root shell on Android itself (Settings → Android system access).
     "android-shell", "android-screencap", "android-dumpsys", "nsenter",
-    // Credential stores the Bash route could cat: the SSH keys and the GitHub CLI token.
-    ".ssh/", "/.ssh", ".config/gh",
+    // Credential stores the Bash route could cat: the SSH keys, the GitHub CLI token, agent homes and token files.
+    ".ssh/", "/.ssh", ".config/gh", "/.dsh/", "/.gemini/", "/.npmrc", "/.netrc",
 )
 
 private val SAFE_STREAM_REDIRECT_REGEX =
@@ -1044,7 +1044,14 @@ private fun mutatesFiles(first: String, words: List<String>): Boolean =
         (first == "sed" && words.any { it.startsWith("--in-place") || it.trim('\'', '"').shortFlagCluster().contains('i') })
 
 private fun isOutsideWorkspacePath(word: String): Boolean {
-    val arg = word.trim('\'', '"')
+    var arg = word.trim('\'', '"')
+    // cp/mv/install take the destination as an option too: --target-directory=DIR or -tDIR (a separate `-t DIR`
+    // value is already checked as its own word).
+    arg = when {
+        arg.startsWith("--target-directory=") -> arg.removePrefix("--target-directory=")
+        arg.startsWith("-t") && arg.length > 2 && !arg.startsWith("--") -> arg.removePrefix("-t")
+        else -> arg
+    }
     if (arg.startsWith("-") || arg.isEmpty()) return false
     // ~/.bashrc and friends: the tilde expands to the home of root, which is outside the project.
     if (arg == "~" || arg.startsWith("~/")) return true
@@ -1104,6 +1111,7 @@ private fun commandTargetsProtectedFile(command: String): Boolean {
 private val CREDENTIAL_PATH_PARTS = listOf(
     "/proc/", "/.claude", "/.ssh", ".git-credentials", "/.config/gh", "permission-hook",
     "/pocketdev-bridge", "/nextcraft-bridge", "/pocket-bridge", "/.gradle/gradle.properties",
+    "/.dsh/", "/.gemini/", "/.npmrc", "/.netrc",
 )
 
 private fun isCredentialPath(path: String): Boolean = CREDENTIAL_PATH_PARTS.any(path::contains)

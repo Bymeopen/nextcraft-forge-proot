@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
@@ -505,23 +506,26 @@ fun LiveResourceMiniBar(
     val stats = remember { mutableStateOf("") }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
-            val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context, forceRefresh = true)
-            val mem = android.app.ActivityManager.MemoryInfo()
-            context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mem)
-            val freeGb = String.format(java.util.Locale.US, "%.1f", mem.availMem / (1024.0 * 1024.0 * 1024.0))
-            val totalGb = String.format(java.util.Locale.US, "%.1f GB", mem.totalMem / (1024.0 * 1024.0 * 1024.0))
-            val swapStr = if (hw.swap.hasActiveSwap) {
-                val swapUsedGb = String.format(java.util.Locale.US, "%.1f", hw.swap.swapUsedMb / 1024.0)
-                val swapTotalGb = String.format(java.util.Locale.US, "%.1f GB", hw.swap.swapTotalMb / 1024.0)
-                " · Swap $swapUsedGb/$swapTotalGb"
-            } else {
-                ""
+            // /proc reads, ActivityManager IPC and the sticky battery broadcast all block; keep them off the main thread.
+            stats.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val hw = com.nextcraft.forge.runtime.DeviceHardwareOptimizer.inspect(context)
+                val mem = android.app.ActivityManager.MemoryInfo()
+                context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mem)
+                val freeGb = String.format(java.util.Locale.US, "%.1f", mem.availMem / (1024.0 * 1024.0 * 1024.0))
+                val totalGb = String.format(java.util.Locale.US, "%.1f GB", mem.totalMem / (1024.0 * 1024.0 * 1024.0))
+                val swapStr = if (hw.swap.hasActiveSwap) {
+                    val swapUsedGb = String.format(java.util.Locale.US, "%.1f", hw.swap.swapUsedMb / 1024.0)
+                    val swapTotalGb = String.format(java.util.Locale.US, "%.1f GB", hw.swap.swapTotalMb / 1024.0)
+                    " · ${context.getString(R.string.resource_swap_label)} $swapUsedGb/$swapTotalGb"
+                } else {
+                    ""
+                }
+                val bat = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                val level = bat?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                val scale = bat?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+                val batStr = if (level >= 0 && scale > 0) " · ${level * 100 / scale}%" else ""
+                "${hw.socVendor.shortBadge} · ${context.getString(R.string.resource_ram_label)} $freeGb/$totalGb$swapStr$batStr"
             }
-            val bat = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
-            val level = bat?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = bat?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
-            val batStr = if (level >= 0 && scale > 0) " · ${level * 100 / scale}%" else ""
-            stats.value = "${hw.socVendor.shortBadge} · RAM $freeGb/$totalGb$swapStr$batStr"
             kotlinx.coroutines.delay(5_000)
         }
     }
@@ -549,9 +553,12 @@ fun LiveResourceMiniBar(
             fontWeight = FontWeight.SemiBold,
             color = tokens.accentText,
             modifier = Modifier
+                // 48dp hit area around a visually small pill.
+                .heightIn(min = ForgeSpace.minTouch)
+                .clickable(role = Role.Button, onClick = onCleanIdleDaemons)
+                .wrapContentHeight()
                 .clip(RoundedCornerShape(50))
                 .background(scheme.primary.copy(alpha = 0.12f))
-                .clickable(role = Role.Button, onClick = onCleanIdleDaemons)
                 .padding(horizontal = 10.dp, vertical = 3.dp),
         )
     }

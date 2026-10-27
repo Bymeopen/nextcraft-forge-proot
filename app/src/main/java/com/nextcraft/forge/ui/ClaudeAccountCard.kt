@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -42,6 +41,7 @@ import com.nextcraft.forge.R
 import com.nextcraft.forge.runtime.ClaudeAuthStatus
 import com.nextcraft.forge.runtime.ClaudeLoginMode
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Sign-in for the Claude subscription: the browser (account or SSO) opens through Claude Code's own login, and the
@@ -53,7 +53,7 @@ fun ClaudeAccountCard(viewModel: MainViewModel, extra: @Composable ColumnScope.(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val auth by viewModel.claudeAuth.state.collectAsState()
+    val auth by viewModel.claudeAuth.state.collectAsStateWithLifecycle()
     // A login left on disk by an earlier session (or from the terminal) counts as signed in.
     val hasCredential by produceState(initialValue = false, auth.status) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { viewModel.claudeAuth.hasCredential() }

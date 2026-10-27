@@ -96,6 +96,11 @@ class ChrootRunner(context: Context) {
         }
     }
 
+    /** Forgets a process started with [start] once it has exited, removing its pid file. */
+    fun release(process: Process) {
+        guestPidFiles.remove(process)?.delete()
+    }
+
     /** Ends the su client and, through its pid file, chroot-exec and the command's process group on the root side. */
     fun stop(process: Process) {
         GuestProcess.signal(guestPidFiles[process], 15, forceAfterSeconds = 3)

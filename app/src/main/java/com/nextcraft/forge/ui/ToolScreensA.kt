@@ -20,7 +20,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import com.nextcraft.forge.runtime.RuntimeSetupStatus
 import com.nextcraft.forge.runtime.WorkspaceSnapshot
 import java.text.DateFormat
 import java.util.Date
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** Toolchains Manager: install, update and remove dev stacks and coding agents in one place. */
 @Composable
@@ -128,7 +130,7 @@ fun ToolchainsScreen(state: ForgeUiState, viewModel: MainViewModel) {
 @Composable
 fun DiagnosticsScreen(viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val diag by viewModel.diagnostics.state.collectAsState()
+    val diag by viewModel.diagnostics.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.diagnostics.refresh() }
     ToolScaffold(
         title = stringResource(R.string.tools_diagnostics),
@@ -180,7 +182,8 @@ fun DiagnosticsScreen(viewModel: MainViewModel) {
         // The full stack trace of the last crash, readable and copyable without adb.
         val context = LocalContext.current
         val clipboard = LocalClipboardManager.current
-        var crash by remember { mutableStateOf(CrashReporter.read(context)) }
+        var crash by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(context) { crash = withContext(Dispatchers.IO) { CrashReporter.read(context) } }
         ToolSectionLabel(stringResource(R.string.tool_last_crash))
         LogBox(text = crash.orEmpty(), placeholder = stringResource(R.string.tool_no_crash))
         if (crash != null) {
@@ -212,7 +215,7 @@ fun DiagnosticsScreen(viewModel: MainViewModel) {
 @Composable
 fun CheckpointsScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val snaps by viewModel.snapshots.state.collectAsState()
+    val snaps by viewModel.snapshots.state.collectAsStateWithLifecycle()
     var label by rememberSaveable { mutableStateOf("") }
     var pendingRestore by remember { mutableStateOf<WorkspaceSnapshot?>(null) }
     LaunchedEffect(state.activeProjectId) { viewModel.snapshots.refresh() }

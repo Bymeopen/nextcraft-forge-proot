@@ -21,7 +21,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
 import com.nextcraft.forge.runtime.SshHost
 import com.nextcraft.forge.runtime.TargetStatus
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private fun TargetStatus?.mark(): String = when (this) {
     TargetStatus.RUNNING -> "▶"
@@ -53,7 +53,7 @@ private fun TargetStatus?.mark(): String = when (this) {
 @Composable
 fun BuildMatrixScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val matrix by viewModel.buildMatrix.state.collectAsState()
+    val matrix by viewModel.buildMatrix.state.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
     LaunchedEffect(state.activeProjectId) { viewModel.buildMatrix.load() }
     val blocked = state.sessionRunning || state.terminalRunning || !state.runtimeInstalled
@@ -151,7 +151,7 @@ fun BuildMatrixScreen(state: ForgeUiState, viewModel: MainViewModel) {
 @Composable
 fun SshScreen(viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val ssh by viewModel.ssh.state.collectAsState()
+    val ssh by viewModel.ssh.state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     var showAdd by remember { mutableStateOf(false) }
     var remoteFor by remember { mutableStateOf<SshHost?>(null) }
@@ -275,8 +275,8 @@ fun SshScreen(viewModel: MainViewModel) {
 @Composable
 fun CiCdScreen(viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val ci by viewModel.cicd.state.collectAsState()
-    val uiState by viewModel.state.collectAsState()
+    val ci by viewModel.cicd.state.collectAsStateWithLifecycle()
+    val uiState by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activeBranch = uiState.projectRepo?.branch.orEmpty()
     var prTitle by rememberSaveable { mutableStateOf("") }
@@ -428,7 +428,7 @@ fun CiCdScreen(viewModel: MainViewModel) {
 @Composable
 fun RomStudioScreen(viewModel: MainViewModel) {
     val scheme = MaterialTheme.colorScheme
-    val rom by viewModel.rom.state.collectAsState()
+    val rom by viewModel.rom.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.rom.refreshStorage() }
     ToolScaffold(
         title = stringResource(R.string.tools_rom),

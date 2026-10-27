@@ -441,17 +441,53 @@ def carve(path: str, offset: int, size: int | None, out_path: str, cap: int = MA
 
 
 def _run_tool(command: list[str], cwd: str | None = None, stdin_path: str | None = None) -> tuple[bool, str]:
-    stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
+    stdin = subprocess.DEVNULL
     try:
+        if stdin_path:
+            stdin = open(stdin_path, "rb")
         done = subprocess.run(command, cwd=cwd, stdin=stdin, capture_output=True, text=True, timeout=TOOL_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
         return False, f"melewati batas waktu {TOOL_TIMEOUT} detik"
     except OSError as error:
         return False, str(error)
     finally:
-        if stdin_path:
+        if stdin is not subprocess.DEVNULL:
             stdin.close()
     return done.returncode == 0, (done.stderr or done.stdout).strip()[-300:]
+
+
+def _purge_escapes(folder: str) -> list[str]:
+    """Menghapus entri hasil ekstraksi alat eksternal yang keluar dari ``folder`` (symlink/hardlink ke luar, ``..``).
+
+    Alat seperti cpio/unsquashfs/jefferson dipercaya menolak path absolut, tetapi symlink yang menunjuk ke luar folder
+    tetap ditulis; entri semacam itu dihapus di sini supaya pembacaan hasil tidak pernah mengikuti ke sistem host.
+    """
+    root = os.path.realpath(folder)
+    removed: list[str] = []
+
+    def inside(path: str) -> bool:
+        real = os.path.realpath(path)
+        return real == root or real.startswith(root + os.sep)
+
+    for current, dirs, files in os.walk(folder, topdown=True):
+        if not inside(current):
+            dirs[:] = []
+            continue
+        keep_dirs = []
+        for name in dirs:
+            full = os.path.join(current, name)
+            if os.path.islink(full) and not inside(full):
+                removed.append(os.path.relpath(full, folder))
+                os.unlink(full)
+            else:
+                keep_dirs.append(name)
+        dirs[:] = keep_dirs
+        for name in files:
+            full = os.path.join(current, name)
+            if os.path.islink(full) and not inside(full):
+                removed.append(os.path.relpath(full, folder))
+                os.unlink(full)
+    return removed
 
 
 def _tool_missing(binary: str, package: str) -> dict[str, Any]:
@@ -483,18 +519,54 @@ def _extract_tree(kind: str, carved: str, folder: str) -> dict[str, Any]:
         ok, message = _run_tool([tool, "-d", folder, carved])
     else:
         return {"status": "skipped", "output": None, "detail": f"{kind} belum didukung untuk ekstraksi", "hint": ""}
-    return {"status": "ok" if ok else "failed", "output": folder, "detail": "" if ok else message, "hint": ""}
+    removed = _purge_escapes(folder) if os.path.isdir(folder) else []
+    detail = "" if ok else message
+    if removed:
+        detail = (detail + "; " if detail else "") + f"{len(removed)} entri keluar dari folder dihapus: " + ", ".join(r[:60] for r in removed[:5])
+    return {"status": "ok" if ok else "failed", "output": folder, "detail": detail, "hint": "", "removed": removed}
+
+
+def _decompressor(kind: str):
+    if kind == "gzip":
+        return zlib.decompressobj(31)
+    if kind == "bzip2":
+        return bz2.BZ2Decompressor()
+    if kind == "xz":
+        return lzma.LZMADecompressor(format=lzma.FORMAT_XZ)
+    return lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
 
 
 def _extract_compressed(kind: str, carved: str, target: str) -> dict[str, Any]:
-    with open(carved, "rb") as handle:
-        data = handle.read(MAX_DECOMPRESS + 1)
-    out = _decompress_bytes(kind, data, MAX_DECOMPRESS)
-    if not out:
+    """Dekompresi streaming: input dibaca per blok dan output ditulis per ``max_length`` sehingga RAM tetap kecil."""
+    engine = _decompressor(kind)
+    written = 0
+    output_full = False
+    try:
+        with open(carved, "rb") as source, open(target, "wb") as sink:
+            while written < MAX_DECOMPRESS and not getattr(engine, "eof", False):
+                # zlib menyimpan sisa input di unconsumed_tail; bz2/lzma menyimpannya sendiri (needs_input False).
+                chunk = getattr(engine, "unconsumed_tail", b"")
+                if not chunk and getattr(engine, "needs_input", True) and not output_full:
+                    chunk = source.read(1 << 20)
+                    if not chunk:
+                        break
+                want = min(1 << 20, MAX_DECOMPRESS - written)
+                piece = engine.decompress(chunk, max_length=want)
+                output_full = len(piece) == want
+                if piece:
+                    sink.write(piece)
+                    written += len(piece)
+                elif not chunk:
+                    break
+    except (zlib.error, lzma.LZMAError, OSError, ValueError, EOFError):
+        pass  # aliran terpotong atau rusak: simpan yang sudah terbaca
+    if not written:
+        try:
+            os.remove(target)
+        except OSError:
+            pass
         return {"status": "failed", "output": None, "detail": "dekompresi tidak menghasilkan data", "hint": ""}
-    with open(target, "wb") as handle:
-        handle.write(out)
-    note = f"{len(out)} byte" + (" (dipotong di batas)" if len(out) >= MAX_DECOMPRESS else "")
+    note = f"{written} byte" + (" (dipotong di batas)" if written >= MAX_DECOMPRESS else "")
     return {"status": "ok", "output": target, "detail": note, "hint": ""}
 
 
@@ -511,7 +583,23 @@ def _extract_zip(carved: str, folder: str) -> dict[str, Any]:
                 total += info.file_size
                 if total > MAX_DECOMPRESS:
                     return {"status": "failed", "output": None, "detail": "ukuran terekstrak melewati batas", "hint": ""}
-            archive.extractall(folder)
+            # Ekstraksi manual per entri: ukuran dari header zip bisa bohong, jadi aliran nyata yang dibatasi.
+            for info in archive.infolist():
+                destination = os.path.join(folder, info.filename)
+                if info.is_dir():
+                    os.makedirs(destination, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(destination) or folder, exist_ok=True)
+                copied = 0
+                with archive.open(info) as source, open(destination, "wb") as sink:
+                    while True:
+                        block = source.read(1 << 20)
+                        if not block:
+                            break
+                        copied += len(block)
+                        if copied > MAX_DECOMPRESS:
+                            return {"status": "failed", "output": None, "detail": f"entri melewati batas saat dibaca: {info.filename[:80]}", "hint": ""}
+                        sink.write(block)
     except (zipfile.BadZipFile, OSError, RuntimeError, zlib.error, lzma.LZMAError, EOFError, NotImplementedError) as error:
         return {"status": "failed", "output": None, "detail": str(error)[:200], "hint": ""}
     return {"status": "ok", "output": folder, "detail": "", "hint": ""}

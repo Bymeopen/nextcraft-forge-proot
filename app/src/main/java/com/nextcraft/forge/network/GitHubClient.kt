@@ -173,6 +173,7 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
         }.toByteArray(Charsets.UTF_8)
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
+            instanceFollowRedirects = false
             connectTimeout = 15_000
             readTimeout = 20_000
             doOutput = true
@@ -192,6 +193,7 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
         val body = payload.toString().toByteArray(Charsets.UTF_8)
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
+            instanceFollowRedirects = false
             connectTimeout = 15_000
             readTimeout = 30_000
             doOutput = true
@@ -212,6 +214,7 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
     private fun getJson(endpoint: String, token: String): Any {
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
+            instanceFollowRedirects = false
             connectTimeout = 15_000
             readTimeout = 30_000
             setRequestProperty("Accept", "application/vnd.github+json")
@@ -360,6 +363,7 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
         val body = payload.toString().toByteArray(Charsets.UTF_8)
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "PUT"
+            instanceFollowRedirects = false
             connectTimeout = 15_000
             readTimeout = 30_000
             doOutput = true
@@ -385,7 +389,11 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
     companion object {
         /** Default GitHub OAuth Device Flow client ID; overridable per caller. */
         const val DEFAULT_CLIENT_ID = "178c6fc778ccc68e1d6a"
-        const val DEFAULT_SCOPES = "repo read:user user:email workflow"
+        /**
+         * Minimum the client uses: `repo` (private repos, PR merge) and `workflow` (workflow dispatch and pushing
+         * `.github/workflows`). The profile call only reads the public login/avatar, so no user scopes.
+         */
+        const val DEFAULT_SCOPES = "repo workflow"
         const val USER_AGENT = "NextCraft-Forge-Android/1.0"
         private const val MAX_GITHUB_RESPONSE_CHARS = 4 * 1024 * 1024
     }

@@ -46,32 +46,14 @@ class AppUpdater(
             val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
                 buildString {
                     val buffer = CharArray(4 * 1024)
-                    while (length < MAX_MANIFEST_CHARS) {
-                        val count = reader.read(buffer, 0, minOf(buffer.size, MAX_MANIFEST_CHARS - length))
+                    while (length < Limits.MAX_MANIFEST_CHARS) {
+                        val count = reader.read(buffer, 0, minOf(buffer.size, Limits.MAX_MANIFEST_CHARS - length))
                         if (count <= 0) break
                         append(buffer, 0, count)
                     }
                 }
             }
-            val root = JSONObject(body)
-            // A manifest for another package is not an update for this app (older side-by-side builds used com.nextcraft.forge.x).
-            root.stringOrEmpty("packageName").takeIf { it.isNotBlank() }?.let { if (it != context.packageName) return null }
-            val versionCode = root.optLong("versionCode")
-            if (versionCode <= currentVersionCode()) return null
-            val variant = appVariant()
-            val artifact = root.optJSONObject("artifacts")?.optJSONObject(variant)
-                ?: root.optJSONObject(variant)
-                ?: root
-            val url = artifact.stringOrEmpty("url").ifBlank { artifact.stringOrEmpty("apkUrl") }.trim()
-            if (!url.startsWith("https://")) return null
-            AppUpdateInfo(
-                versionCode = versionCode,
-                versionName = root.stringOrEmpty("versionName", versionCode.toString()),
-                apkUrl = url,
-                sha256 = artifact.stringOrEmpty("sha256").trim().lowercase(),
-                sizeBytes = artifact.optLong("sizeBytes", -1L),
-                notes = root.stringOrEmpty("notes"),
-            )
+            parseManifest(JSONObject(body), context.packageName, currentVersionCode(), appVariant())
         } finally {
             connection.disconnect()
         }
@@ -92,7 +74,7 @@ class AppUpdater(
                 val code = connection.responseCode
                 check(code in 200..299) { "Update download failed (HTTP $code)." }
                 val total = connection.contentLengthLong.takeIf { it > 0 } ?: info.sizeBytes
-                val maxBytes = if (info.sizeBytes in 1..MAX_APK_BYTES) info.sizeBytes else MAX_APK_BYTES
+                val maxBytes = if (info.sizeBytes in 1..Limits.MAX_APK_BYTES) info.sizeBytes else Limits.MAX_APK_BYTES
                 check(total <= maxBytes) { "Update download exceeds the allowed size." }
                 connection.inputStream.use { input ->
                     partial.outputStream().use { output ->
@@ -171,6 +153,33 @@ class AppUpdater(
         }
     }
 
+    companion object {
+        /**
+         * Reads the update for [variant] out of a manifest, or null when there is none for this package/version/
+         * variant. The artifact must be listed under `artifacts.<variant>` (or a top-level `<variant>` object);
+         * an unknown variant never falls back to the root entry, which could hand a debug build a release APK.
+         */
+        internal fun parseManifest(root: JSONObject, packageName: String, currentVersionCode: Long, variant: String): AppUpdateInfo? {
+            // A manifest for another package is not an update for this app (older side-by-side builds used com.nextcraft.forge.x).
+            root.stringOrEmpty("packageName").takeIf { it.isNotBlank() }?.let { if (it != packageName) return null }
+            val versionCode = root.optLong("versionCode")
+            if (versionCode <= currentVersionCode) return null
+            val artifact = root.optJSONObject("artifacts")?.optJSONObject(variant)
+                ?: root.optJSONObject(variant)
+                ?: return null
+            val url = artifact.stringOrEmpty("url").ifBlank { artifact.stringOrEmpty("apkUrl") }.trim()
+            if (!url.startsWith("https://")) return null
+            return AppUpdateInfo(
+                versionCode = versionCode,
+                versionName = root.stringOrEmpty("versionName", versionCode.toString()),
+                apkUrl = url,
+                sha256 = artifact.stringOrEmpty("sha256").trim().lowercase(),
+                sizeBytes = artifact.optLong("sizeBytes", -1L),
+                notes = root.stringOrEmpty("notes"),
+            )
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun currentVersionCode(): Long {
         buildConfigLong("VERSION_CODE")?.let { return it }
@@ -219,7 +228,7 @@ class AppUpdater(
         .digest(bytes)
         .joinToString("") { "%02x".format(it) }
 
-    private companion object {
+    private object Limits {
         const val MAX_MANIFEST_CHARS = 256 * 1024
         const val MAX_APK_BYTES = 512L * 1024 * 1024
     }

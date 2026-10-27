@@ -2,6 +2,7 @@ package com.nextcraft.forge.runtime
 
 import android.content.Context
 import android.os.StatFs
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,9 +73,21 @@ class RomStudioController(
         "Install the repo tool",
         "command -v git >/dev/null && command -v python3 >/dev/null || { echo 'git and python3 are required: install the Web and Python stacks in Toolchains first.'; exit 1; }; " +
             "curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /tmp/repo.tmp && " +
-            "head -n 1 /tmp/repo.tmp | grep -q '^#!/usr/bin/env python' && " +
+            repoLauncherCheck() +
             "install -m 0755 /tmp/repo.tmp /usr/local/bin/repo && rm -f /tmp/repo.tmp && /usr/local/bin/repo --version",
     )
+
+    /**
+     * Shell fragment that verifies the downloaded launcher. With [REPO_LAUNCHER_SHA256] pinned the file must match the
+     * digest; an empty pin falls back to the shebang check and logs a warning so maintainers notice the missing pin.
+     */
+    private fun repoLauncherCheck(): String {
+        if (REPO_LAUNCHER_SHA256.isNotBlank()) {
+            return "echo '${REPO_LAUNCHER_SHA256}  /tmp/repo.tmp' | sha256sum -c --status - || { echo 'repo launcher checksum mismatch'; rm -f /tmp/repo.tmp; exit 1; }; "
+        }
+        Log.w(TAG, "REPO_LAUNCHER_SHA256 is not pinned; falling back to the shebang check for the repo launcher")
+        return "head -n 1 /tmp/repo.tmp | grep -q '^#!/usr/bin/env python' && "
+    }
 
     fun init() {
         val s = mutable.value
@@ -128,7 +141,15 @@ class RomStudioController(
     }
 
     private companion object {
+        const val TAG = "RomStudio"
         const val SLUG = "rom"
         const val MAX_LOG_CHARS = 80_000
+
+        /**
+         * SHA-256 (lowercase hex) of the `repo` launcher at https://storage.googleapis.com/git-repo-downloads/repo.
+         * Maintainers must fill this with the digest of the release they ship against (`sha256sum repo`) and bump it
+         * when the launcher is updated; while empty only the shebang is checked.
+         */
+        const val REPO_LAUNCHER_SHA256 = ""
     }
 }

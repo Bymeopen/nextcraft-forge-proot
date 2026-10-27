@@ -6,6 +6,15 @@ if [ -z "$ROOTFS" ]; then
 fi
 ROOTFS_REAL=$(realpath "$ROOTFS" 2>/dev/null || printf '%s' "$ROOTFS")
 ROOTFS_CLEAN="${ROOTFS_REAL%/}"
+# Refuse "/", relative paths and top-level directories: with such a value the loop below would lazily unmount
+# every mount of the device.
+case "$ROOTFS_CLEAN" in
+    /*/*) ;;
+    *)
+        echo "Refusing to unmount under '$ROOTFS': rootfs must be an absolute path with at least two components" >&2
+        exit 2
+        ;;
+esac
 mounts_at_or_under() {
     while read -r _ mp _; do
         case "$mp" in "$1"|"$1"/*) printf '%s\n' "$mp" ;; esac

@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 
 class RuntimeExecutionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var lastWakeLockArmAt = 0L
     private var projectNameOverride: String? = null
     private var notificationTitleOverride: String? = null
     /** Resources in the language chosen inside the app; the service's own context follows the system language. */
@@ -91,6 +92,7 @@ class RuntimeExecutionService : Service() {
                     RUNNING_NOTIFICATION_ID,
                     runningNotification(detail, includeStop = canStop),
                 )
+                acquireWakeLock()
             }
             ACTION_COMPLETE, LEGACY_ACTION_COMPLETE -> finishTask(
                 title = t(com.nextcraft.forge.R.string.notif_task_completed),
@@ -201,10 +203,20 @@ class RuntimeExecutionService : Service() {
         )
     }
 
+    /** Acquires the lock, or on progress re-arms its [MAX_WAKE_LOCK_MS] timeout (throttled) so a long task stays awake. */
     private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == true) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        wakeLock?.takeIf { it.isHeld }?.let { lock ->
+            if (now - lastWakeLockArmAt < WAKE_LOCK_REARM_INTERVAL_MS) return
+            lastWakeLockArmAt = now
+            // Not reference counted: acquire() only restarts the timeout, no extra release is owed.
+            runCatching { lock.acquire(MAX_WAKE_LOCK_MS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeExecutionService", it) }
+            return
+        }
+        lastWakeLockArmAt = now
         wakeLock = getSystemService(PowerManager::class.java)
             ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "com.nextcraft.forge:active-coding-task")
+            ?.apply { setReferenceCounted(false) }
             ?.apply { acquire(MAX_WAKE_LOCK_MS) }
     }
 
@@ -266,6 +278,7 @@ class RuntimeExecutionService : Service() {
         private const val RUNNING_NOTIFICATION_ID = 41
         private const val RESULT_NOTIFICATION_ID = 42
         private const val MAX_WAKE_LOCK_MS = 35 * 60 * 1_000L
+        private const val WAKE_LOCK_REARM_INTERVAL_MS = 60 * 1_000L
 
         fun ensureNotificationChannels(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return

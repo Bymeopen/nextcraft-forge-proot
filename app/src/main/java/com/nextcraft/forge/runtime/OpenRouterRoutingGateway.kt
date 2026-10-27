@@ -10,7 +10,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.net.URL
-import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -221,15 +220,7 @@ internal class OpenRouterRoutingGateway(
     /** Open upstream calls; close() disconnects them so a stopped session stops spending the user's quota. */
     private val upstreamConnections: MutableSet<HttpURLConnection> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-    private fun isAuthorized(headers: Map<String, String>): Boolean {
-        val presented = headers["x-api-key"]
-            ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
-            ?: return false
-        val presentedBytes = presented.toByteArray()
-        return MessageDigest.isEqual(presentedBytes, sessionToken.toByteArray()) ||
-            MessageDigest.isEqual(presentedBytes, activeApiKey.toByteArray()) ||
-            MessageDigest.isEqual(presentedBytes, apiKey.toByteArray())
-    }
+    private fun isAuthorized(headers: Map<String, String>): Boolean = presentsSessionToken(headers, sessionToken)
 
     /**
      * Reports a failure on a response that may already be under way: once the status line is out, a second HTTP

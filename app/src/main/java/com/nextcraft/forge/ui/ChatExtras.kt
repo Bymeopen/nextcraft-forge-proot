@@ -48,12 +48,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -100,7 +102,7 @@ internal fun ToolStepGroup(items: List<ActivityItem>, modifier: Modifier = Modif
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
     val live = items.lastOrNull()?.isComplete == false
-    val kinds = items.map { toolKind(it) }.distinct().take(3)
+    val kinds = remember(items) { items.map { toolKind(it) }.distinct().take(3) }
     val expandLabel = stringResource(if (open) R.string.a11y_collapse else R.string.a11y_expand)
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -279,10 +281,13 @@ private fun ChangedFileRow(
     // Swipe right keeps the file, left asks before reverting it so diagonal scroll gestures never lose changes.
     // Only while the row is collapsed: an open diff scrolls sideways and would fight the swipe.
     val haptics = LocalHapticFeedback.current
+    // The dismiss state is remembered without keys, so read the latest callback/path through rememberUpdatedState.
+    val currentOnKeepFile = rememberUpdatedState(onKeepFile)
+    val currentPath = rememberUpdatedState(change.path)
     val swipe = androidx.compose.material3.rememberSwipeToDismissBoxState(
         confirmValueChange = { target ->
             when (target) {
-                androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onKeepFile(change.path) }
+                androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); currentOnKeepFile.value(currentPath.value) }
                 androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { haptics.performHapticFeedback(HapticFeedbackType.LongPress); confirmRevert = true }
                 else -> Unit
             }
@@ -879,20 +884,22 @@ private fun ComposerAutocompletePopover(
         }
     }
 
-    val suggestions = remember(slashMatch, atMatch, workspaceFiles, readyAgents) {
+    // Resolved outside remember so the catalogue follows the active locale; passed in as a key.
+    val res = LocalContext.current.resources
+    val suggestions = remember(slashMatch, atMatch, workspaceFiles, readyAgents, res) {
         when {
             slashMatch != null -> {
                 val commands = listOf(
-                    ComposerSuggestion("cmd-build", "/build", "Build & install debug APK", ForgeGlyph.BUILD, "Action", "/build", executeImmediately = true),
-                    ComposerSuggestion("cmd-review", "/review", "Audit uncommitted changes with 2nd agent", ForgeGlyph.SPARK, "Swarm", "/review", executeImmediately = true),
-                    ComposerSuggestion("cmd-memory", "/memory", "Open persistent project memory (.forge/memory.md)", ForgeGlyph.FILE, "Memory", "/memory", executeImmediately = true),
-                    ComposerSuggestion("cmd-compact", "/compact", "Compact conversation history into a concise summary", ForgeGlyph.SPARK, "Context", "/compact", executeImmediately = true),
-                    ComposerSuggestion("cmd-diff", "/diff", "Open workspace diff & changed files", ForgeGlyph.CODE, "Pane", "/diff", executeImmediately = true),
-                    ComposerSuggestion("cmd-branch", "/branch", "Isolate this chat in its own Git branch", ForgeGlyph.SPARK, "Git", "/branch", executeImmediately = true),
-                    ComposerSuggestion("cmd-loop", "/loop 30m ", "Repeat a prompt on a schedule (5m–7d)", ForgeGlyph.SPARK, "Timer", "/loop 30m "),
-                    ComposerSuggestion("cmd-loop-off", "/loop off", "Clear all scheduled timers in this chat", ForgeGlyph.TRASH, "Timer", "/loop off", executeImmediately = true),
-                    ComposerSuggestion("cmd-terminal", "/terminal", "Switch to project Ubuntu Root Terminal", ForgeGlyph.TERMINAL, "Pane", "/terminal", executeImmediately = true),
-                    ComposerSuggestion("cmd-clear", "/clear", "Clear conversation history in this chat", ForgeGlyph.TRASH, "Chat", "/clear", executeImmediately = true),
+                    ComposerSuggestion("cmd-build", "/build", res.getString(R.string.composer_cmd_build), ForgeGlyph.BUILD, res.getString(R.string.composer_badge_action), "/build", executeImmediately = true),
+                    ComposerSuggestion("cmd-review", "/review", res.getString(R.string.composer_cmd_review), ForgeGlyph.SPARK, res.getString(R.string.composer_badge_swarm), "/review", executeImmediately = true),
+                    ComposerSuggestion("cmd-memory", "/memory", res.getString(R.string.composer_cmd_memory), ForgeGlyph.FILE, res.getString(R.string.composer_badge_memory), "/memory", executeImmediately = true),
+                    ComposerSuggestion("cmd-compact", "/compact", res.getString(R.string.composer_cmd_compact), ForgeGlyph.SPARK, res.getString(R.string.composer_badge_context), "/compact", executeImmediately = true),
+                    ComposerSuggestion("cmd-diff", "/diff", res.getString(R.string.composer_cmd_diff), ForgeGlyph.CODE, res.getString(R.string.composer_badge_pane), "/diff", executeImmediately = true),
+                    ComposerSuggestion("cmd-branch", "/branch", res.getString(R.string.composer_cmd_branch), ForgeGlyph.SPARK, res.getString(R.string.composer_badge_git), "/branch", executeImmediately = true),
+                    ComposerSuggestion("cmd-loop", "/loop 30m ", res.getString(R.string.composer_cmd_loop), ForgeGlyph.SPARK, res.getString(R.string.composer_badge_timer), "/loop 30m "),
+                    ComposerSuggestion("cmd-loop-off", "/loop off", res.getString(R.string.composer_cmd_loop_off), ForgeGlyph.TRASH, res.getString(R.string.composer_badge_timer), "/loop off", executeImmediately = true),
+                    ComposerSuggestion("cmd-terminal", "/terminal", res.getString(R.string.composer_cmd_terminal), ForgeGlyph.TERMINAL, res.getString(R.string.composer_badge_pane), "/terminal", executeImmediately = true),
+                    ComposerSuggestion("cmd-clear", "/clear", res.getString(R.string.composer_cmd_clear), ForgeGlyph.TRASH, res.getString(R.string.composer_badge_chat), "/clear", executeImmediately = true),
                 )
                 commands.filter { it.title.removePrefix("/").startsWith(slashMatch) || it.subtitle.lowercase().contains(slashMatch) }
             }
@@ -901,9 +908,9 @@ private fun ComposerAutocompletePopover(
                 val list = mutableListOf<ComposerSuggestion>()
                 if (atIndex == 0) {
                     val agentEntries = listOf(
-                        Triple("claude", com.nextcraft.forge.model.AgentKind.CLAUDE_CODE, "Claude Code CLI in Root Chroot"),
-                        Triple("agy", com.nextcraft.forge.model.AgentKind.ANTIGRAVITY, "Google Antigravity CLI (agy)"),
-                        Triple("deepseek", com.nextcraft.forge.model.AgentKind.DEEPSEEK_HARNESS, "DeepSeek Harness JSON-RPC"),
+                        Triple("claude", com.nextcraft.forge.model.AgentKind.CLAUDE_CODE, res.getString(R.string.composer_agent_claude)),
+                        Triple("agy", com.nextcraft.forge.model.AgentKind.ANTIGRAVITY, res.getString(R.string.composer_agent_agy)),
+                        Triple("deepseek", com.nextcraft.forge.model.AgentKind.DEEPSEEK_HARNESS, res.getString(R.string.composer_agent_deepseek)),
                     )
                     for ((tag, kind, desc) in agentEntries) {
                         if (tag.startsWith(query) || kind.title.lowercase().contains(query)) {
@@ -913,7 +920,7 @@ private fun ComposerAutocompletePopover(
                                 title = "@$tag",
                                 subtitle = desc,
                                 glyph = ForgeGlyph.SPARK,
-                                badge = if (isReady) "Agent" else "Setup",
+                                badge = res.getString(if (isReady) R.string.composer_badge_agent else R.string.composer_badge_setup),
                                 insertText = "@$tag ",
                             )
                         }
@@ -930,7 +937,7 @@ private fun ComposerAutocompletePopover(
                             title = file.name,
                             subtitle = file.path,
                             glyph = ForgeGlyph.FILE,
-                            badge = "File",
+                            badge = res.getString(R.string.composer_badge_file),
                             insertText = "${file.path} ",
                         )
                     }

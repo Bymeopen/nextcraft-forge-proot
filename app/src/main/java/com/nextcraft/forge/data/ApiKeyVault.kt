@@ -211,12 +211,10 @@ class ApiKeyVault(context: Context) {
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
             cleanSecret(cipher.doFinal(encrypted).toString(Charsets.UTF_8))
         }.onFailure { error ->
-            // Only drop ciphertext that is provably corrupt. Transient keystore failures
-            // (device locked, keystore daemon busy) must not destroy the user's secrets.
+            // Never delete silently: a corrupt entry (AEAD tag or base64 failure) stays on disk so the user can be
+            // told and re-enter the key, and transient keystore failures (device locked, daemon busy) lose nothing.
             android.util.Log.w("ApiKeyVault", "Decrypt failed: ${error::class.simpleName}")
-            if (error is javax.crypto.AEADBadTagException || error is IllegalArgumentException) {
-                removeEncrypted(storageId)
-            }
+            com.nextcraft.forge.runtime.ErrorLog.swallowed("ApiKeyVault", error)
         }.getOrNull()
     }
 

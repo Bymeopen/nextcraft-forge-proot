@@ -260,13 +260,15 @@ class ChatBranches(context: Context) {
          * files left behind by crashed processes.
          */
         val GIT_QUEUE_WAIT_SH: String = """
+            # pgrep -x misses git-lfs/git-remote-* helpers; the anchored -f pattern catches them without matching this
+            # script's own command line (which starts with bash, not git).
             forge_wait_git_lock() {
               local notified=0
               local waited=0
               while [ -f ".git/index.lock" ] || { [ -n "${'$'}{M:-}" ] && [ -f "${'$'}M/.git/index.lock" ]; } || { [ -n "${'$'}{C:-}" ] && [ -f "${'$'}C/.git/index.lock" ]; }; do
-                if ! pgrep -x git >/dev/null 2>&1; then
+                if ! pgrep -x git >/dev/null 2>&1 && ! pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; then
                   sleep 0.2
-                  if ! pgrep -x git >/dev/null 2>&1; then
+                  if ! pgrep -x git >/dev/null 2>&1 && ! pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; then
                     rm -f ".git/index.lock" "${'$'}{M:-.}/.git/index.lock" "${'$'}{C:-.}/.git/index.lock" 2>/dev/null || true
                     break
                   fi
@@ -278,7 +280,7 @@ class ChatBranches(context: Context) {
                 sleep 0.5
                 waited=${'$'}((waited + 1))
                 if [ "${'$'}waited" -ge 120 ]; then
-                  if ! pgrep -x git >/dev/null 2>&1; then
+                  if ! pgrep -x git >/dev/null 2>&1 && ! pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; then
                     rm -f ".git/index.lock" "${'$'}{M:-.}/.git/index.lock" "${'$'}{C:-.}/.git/index.lock" 2>/dev/null || true
                   fi
                   break
@@ -392,13 +394,15 @@ class ChatBranches(context: Context) {
             set -e
             M="/workspace/§FORGE_SLUG"
             C="§M/.forge/chats/§FORGE_ID"
+            # pgrep -x misses git-lfs/git-remote-* helpers; the anchored -f pattern catches them without matching this
+            # script's own command line (which starts with bash, not git).
             forge_wait_git_lock() {
               local notified=0
               local waited=0
               while [ -f ".git/index.lock" ] || [ -f "§M/.git/index.lock" ] || [ -f "§C/.git/index.lock" ]; do
-                if ! pgrep -x git >/dev/null 2>&1; then
+                if ! pgrep -x git >/dev/null 2>&1 && ! pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; then
                   sleep 0.2
-                  if ! pgrep -x git >/dev/null 2>&1; then
+                  if ! pgrep -x git >/dev/null 2>&1 && ! pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; then
                     rm -f ".git/index.lock" "§M/.git/index.lock" "§C/.git/index.lock" 2>/dev/null || true
                     break
                   fi
@@ -410,7 +414,7 @@ class ChatBranches(context: Context) {
                 sleep 0.5
                 waited=§((waited + 1))
                 if [ "§waited" -ge 120 ]; then
-                  if ! pgrep -x git >/dev/null 2>&1; then
+                  if ! pgrep -x git >/dev/null 2>&1 && ! pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; then
                     rm -f ".git/index.lock" "§M/.git/index.lock" "§C/.git/index.lock" 2>/dev/null || true
                   fi
                   break
@@ -425,7 +429,7 @@ class ChatBranches(context: Context) {
                   return 0
                 fi
                 local rc=§?
-                if [ "§attempt" -lt 6 ] && { [ -f ".git/index.lock" ] || [ -f "§M/.git/index.lock" ] || [ -f "§C/.git/index.lock" ] || pgrep -x git >/dev/null 2>&1; }; then
+                if [ "§attempt" -lt 6 ] && { [ -f ".git/index.lock" ] || [ -f "§M/.git/index.lock" ] || [ -f "§C/.git/index.lock" ] || pgrep -x git >/dev/null 2>&1 || pgrep -f '^(\S*/)?git(-[a-z]+)?( |§)' >/dev/null 2>&1; }; then
                   if [ "§attempt" -eq 0 ]; then echo "[FORGE_GIT_WAITING]"; fi
                   attempt=§((attempt + 1))
                   sleep 0.5

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -573,7 +574,7 @@ fun ForgeThemedCard(
     val cardModifier = if (onClick != null) {
         modifier
             .clip(shape)
-            .clickable(onClick = onClick)
+            .clickable(role = Role.Button, onClick = onClick)
     } else {
         modifier
     }
@@ -614,7 +615,7 @@ fun ForgeElevatedCard(
     val cardModifier = if (onClick != null) {
         modifier
             .clip(shape)
-            .clickable(onClick = onClick)
+            .clickable(role = Role.Button, onClick = onClick)
     } else {
         modifier
     }

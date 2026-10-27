@@ -86,6 +86,8 @@ import com.nextcraft.forge.runtime.RuntimeEngineChoice
 import com.nextcraft.forge.runtime.RuntimeSetupStatus
 import kotlinx.coroutines.launch
 
+private val AGY_EFFORT_SUFFIX = Regex("-(low|medium|high)$")
+
 /**
  * Settings, grouped the way the reference layout does: General (appearance, language, safety),
  * AI agent (agent tabs, access mode, endpoint, model & keys), GitHub, Developer tools, Linux
@@ -633,7 +635,7 @@ internal fun AntigravityAccountCard(
             onSelect = { id ->
                 viewModel.selectAntigravityModel(id)
                 onAgyModelChange(id)
-                Regex("-(low|medium|high)$").find(id)?.groupValues?.get(1)?.let(onAgyEffortChange)
+                AGY_EFFORT_SUFFIX.find(id)?.groupValues?.get(1)?.let(onAgyEffortChange)
                 showModelPicker = false
             },
             onDismiss = { showModelPicker = false },

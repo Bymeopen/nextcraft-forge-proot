@@ -81,9 +81,9 @@ Metrik: 997 `stringResource` vs ±14 literal; 2 dari 19 `items()` tanpa key; 15 
 
 | ID | Sev | Temuan | Lokasi | Status |
 |---|---|---|---|---|
-| C1 | HIGH | Allowlist auto-approve berisi `gradle`/`javac`/`kotlinc` (prioritas #6) | `ClaudeRuntimeBridge.kt:1014` | OPEN |
-| C2 | HIGH | Bypass `awk -f`/`sed -f`/`jq -f` (prioritas #7) | `ClaudeRuntimeBridge.kt:1016-1035, 1177-1186` | OPEN |
-| C3 | HIGH | Antigravity & Dsh tanpa gate approval, root di chroot (prioritas #8) | `AntigravityRuntimeBridge.kt:321`, `DshRuntimeBridge.kt:133, 378-380` | OPEN |
+| C1 | HIGH | Allowlist auto-approve berisi `gradle`/`javac`/`kotlinc` (prioritas #6) | `ClaudeRuntimeBridge.kt:1014` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
+| C2 | HIGH | Bypass `awk -f`/`sed -f`/`jq -f` (prioritas #7) | `ClaudeRuntimeBridge.kt:1016-1035, 1177-1186` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
+| C3 | HIGH | Antigravity & Dsh tanpa gate approval, root di chroot (prioritas #8) | `AntigravityRuntimeBridge.kt:321`, `DshRuntimeBridge.kt:133, 378-380` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
 | C4 | HIGH | Reaper mematikan agy aktif saat idle I/O (prioritas #9) | `GradleDaemonReaper.kt:19-22` | OPEN |
 | C5 | HIGH | Restore backup tertimpa prefs in-memory lama (prioritas #10) | `BackupManager.kt:190-200` | OPEN |
 | C6 | MEDIUM | Bearer token MCP ditulis plaintext ke `$DSH_HOME/cordis.patch.yml` default (tak dibersihkan); `/root/.dsh`, `~/.gemini`, `~/.npmrc`, `~/.netrc` tidak di `CREDENTIAL_PATH_PARTS` → `cat` auto-approve | `DshRuntimeBridge.kt:449-459`, `ForgeMcpServer.kt:649-654`, `ClaudeRuntimeBridge.kt:995-1004, 1104-1107` | OPEN |
@@ -128,11 +128,11 @@ Metrik: 997 `stringResource` vs ±14 literal; 2 dari 19 `items()` tanpa key; 15 
 
 | ID | Sev | Temuan | Lokasi | Status |
 |---|---|---|---|---|
-| E1 | HIGH | Regex `rm` mudah dilewati (prioritas #1) | `security_gate.py:19` | OPEN |
-| E2 | HIGH | `dd` tidak diblok (prioritas #2) | `security_gate.py:17-22` | OPEN |
-| E3 | HIGH | Format payload tunggal + fail-open (prioritas #3) | `security_gate.py:93-105` | OPEN |
-| E4 | HIGH | `edit_file` field alternatif tak dipindai (prioritas #4) | `security_gate.py:61-66` | OPEN |
-| E5 | HIGH | `fetch` tanpa allowlist skema/SSRF/limit (prioritas #5) | `web_and_ui_tool.py:264-268` | OPEN |
+| E1 | HIGH | Regex `rm` mudah dilewati (prioritas #1) | `security_gate.py:19` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
+| E2 | HIGH | `dd` tidak diblok (prioritas #2) | `security_gate.py:17-22` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
+| E3 | HIGH | Format payload tunggal + fail-open (prioritas #3) | `security_gate.py:93-105` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
+| E4 | HIGH | `edit_file` field alternatif tak dipindai (prioritas #4) | `security_gate.py:61-66` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
+| E5 | HIGH | `fetch` tanpa allowlist skema/SSRF/limit (prioritas #5) | `web_and_ui_tool.py:264-268` | EXCEPTION (keputusan user 2026-10-26: dibiarkan) |
 | E6 | MEDIUM | Pola secret hanya 4 keluarga (AWS `AKIA`, `password=`, Slack `xoxb-` lolos); secret ke `.md` di luar 3 file memori diizinkan | `security_gate.py:32-38, 50-57` | OPEN |
 | E7 | MEDIUM | Fork bomb & pipe-to-shell hanya signature (`bomb(){…}`, `bash <(curl …)` lolos) | `security_gate.py:21, 26-27` | OPEN |
 | E8 | MEDIUM | Isolasi workspace (§5.1) tidak diterapkan oleh gate | `security_gate.py:59-89` | OPEN |
@@ -149,6 +149,10 @@ Deny: `rm -rf /`, `rm -rf / --no-preserve-root`, `sudo rm -rf /`, `rm -rf $HOME`
 `rm -rf /workspace/nextcraft-forge`, `find / -delete`, `dd if=/dev/zero of=/dev/block/sda`, `bomb(){ bomb|bomb& };bomb`, `bash <(curl …)`,
 `shutil.rmtree('/')`, payload `{"tool_name":"Bash",…}`, stdin non-JSON, AWS/Slack/`password=` ke MEMORY.md, `ghp_` ke `docs/notes.md`,
 `edit_file` via `NewContent`/`edits[].newString`.
+
+## G. Pengecualian yang disetujui user
+
+E1–E5 (security_gate.py & web_and_ui_tool.py) dan C1–C3 (allowlist gradle/javac/kotlinc, bypass `-f`, Antigravity/Dsh tanpa gate) sengaja dibiarkan atas keputusan user pada 2026-10-26. Tidak diperbaiki.
 
 ## F. Terverifikasi aman (tidak perlu tindakan)
 

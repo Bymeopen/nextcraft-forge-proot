@@ -144,6 +144,7 @@ class SshController(
                     }
                 }
             }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SshController", it) }
+            runner.release(process)
             // Only this process's own entry: after Stop and a quick Start the map already holds the new tunnel.
             tunnelProcesses.remove(host.id, process)
             if (!tunnelProcesses.containsKey(host.id)) {

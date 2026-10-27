@@ -95,7 +95,7 @@ fun MarkdownText(
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                     )
                     is MarkdownBlock.Paragraph -> Text(
-                        text = parseInlineMarkdown(
+                        text = rememberInlineMarkdown(
                             text = block.text,
                             accentColor = tokens.accentText,
                             inlineCodeBg = tokens.inlineCodeBackground,
@@ -126,7 +126,7 @@ private fun HeaderBlock(
         else -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
     }
     Text(
-        text = parseInlineMarkdown(
+        text = rememberInlineMarkdown(
             text = block.text,
             accentColor = tokens.accentText,
             inlineCodeBg = tokens.inlineCodeBackground,
@@ -156,7 +156,7 @@ private fun BulletBlock(
             modifier = Modifier.padding(end = 8.dp),
         )
         Text(
-            text = parseInlineMarkdown(
+            text = rememberInlineMarkdown(
                 text = block.text,
                 accentColor = tokens.accentText,
                 inlineCodeBg = tokens.inlineCodeBackground,
@@ -184,7 +184,7 @@ private fun NumberedBlock(
             modifier = Modifier.padding(end = 8.dp),
         )
         Text(
-            text = parseInlineMarkdown(
+            text = rememberInlineMarkdown(
                 text = block.text,
                 accentColor = tokens.accentText,
                 inlineCodeBg = tokens.inlineCodeBackground,
@@ -216,7 +216,7 @@ private fun BlockQuoteView(
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = parseInlineMarkdown(
+            text = rememberInlineMarkdown(
                 text = block.text,
                 accentColor = tokens.accentText,
                 inlineCodeBg = tokens.inlineCodeBackground,
@@ -352,7 +352,7 @@ private fun TableBlockView(
                 ) {
                     cells.forEach { cellText ->
                         Text(
-                            text = parseInlineMarkdown(
+                            text = rememberInlineMarkdown(
                                 text = cellText,
                                 accentColor = tokens.accentText,
                                 inlineCodeBg = tokens.inlineCodeBackground,
@@ -502,6 +502,11 @@ private fun parseMarkdown(raw: String): List<MarkdownBlock> {
     flushParagraph()
     return blocks
 }
+
+/** Memoised per block so a streaming message only re-parses the block whose text changed. */
+@Composable
+private fun rememberInlineMarkdown(text: String, accentColor: Color, inlineCodeBg: Color): AnnotatedString =
+    remember(text, accentColor, inlineCodeBg) { parseInlineMarkdown(text, accentColor, inlineCodeBg) }
 
 private fun parseInlineMarkdown(
     text: String,

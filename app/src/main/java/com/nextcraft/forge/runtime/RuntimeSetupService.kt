@@ -295,14 +295,17 @@ class RuntimeSetupService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        try {
+        val foreground = try {
             startForeground(NOTIFICATION_ID, setupNotification(RuntimeSetupController.snapshot.value))
+            true
         } catch (error: RuntimeException) {
             // Android 12+ refuses foreground promotion once the app is in the background; the install can still
             // run (it resumes from its .part files), so do not crash the process.
             android.util.Log.w("RuntimeSetupService", "startForeground refused: ${error::class.simpleName}")
+            false
         }
-        acquireWakeLock()
+        // A wake lock without a foreground service would keep the CPU awake from the background; skip it then.
+        if (foreground) acquireWakeLock()
         val previousJob = installJob
         // A cancelled job can still be winding down; start the new one after it instead of dropping the request.
         if (previousJob?.isActive != true || previousJob.isCancelled) {
@@ -356,7 +359,12 @@ class RuntimeSetupService : Service() {
             installJob = job
             job.start()
         }
-        return START_REDELIVER_INTENT
+        // Installs resume from their .part files after process death; a replayed removal would delete again what the
+        // user may have reinstalled since, so removals are not redelivered.
+        return when (intent?.action) {
+            ACTION_REMOVE_AGENT, ACTION_REMOVE_STACK -> START_NOT_STICKY
+            else -> START_REDELIVER_INTENT
+        }
     }
 
     private fun updateNotification(force: Boolean = false) {

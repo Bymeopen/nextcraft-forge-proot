@@ -20,7 +20,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -33,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * The project's local Git repository: its branch, a commit box and the latest commits, plus the chats that work in
@@ -52,7 +52,7 @@ internal fun RepoSheet(
     var message by rememberSaveable { mutableStateOf("") }
     val branchChats = state.chats.filter { it.isolated }
     val anyRunInProject = state.runningChatIds.isNotEmpty()
-    val ci by viewModel.cicd.state.collectAsState()
+    val ci by viewModel.cicd.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(state.activeProjectId) {
         viewModel.refreshProjectRepo()

@@ -3,6 +3,7 @@ package com.nextcraft.forge.runtime
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
@@ -30,8 +31,8 @@ data class AndroidInstallEvent(
  * Installs a locally-built APK on the device.
  *
  * On rooted devices (NextCraft Forge's primary target), attempts a 1-tap silent
- * `su -c "pm install -r -d -S <size>"` stream install first (excluding self-updates
- * of NextCraft Forge itself), and automatically falls back to Android's standard
+ * `su -c "pm install -r -S <size>"` stream install first (excluding self-updates of
+ * NextCraft Forge itself and system packages), and automatically falls back to Android's standard
  * [PackageInstaller.Session] + [AndroidAppInstallReceiver] flow if root install fails.
  */
 object AndroidAppInstaller {
@@ -70,7 +71,7 @@ object AndroidAppInstaller {
             if (isSelfUpdate && com.nextcraft.forge.update.SilentSelfUpdate.install(appContext, apk)) {
                 return@Thread
             }
-            if (!isSelfUpdate && pkgName != null && apkHash != null && installSilentlyViaRoot(apk)) {
+            if (!isSelfUpdate && pkgName != null && apkHash != null && !isProtectedPackage(appContext, pkgName) && installSilentlyViaRoot(apk)) {
                 rememberInstalled(appContext, pkgName, apkHash)
                 val launched = launchAfterInstall && launch(appContext, pkgName)
                 publish(AndroidInstallEvent(operationId, pkgName, success = true, launched = launched))
@@ -93,29 +94,44 @@ object AndroidAppInstaller {
         return operationId
     }
 
+    /** The silent root path never touches this app or a system package; those go through the system installer. */
+    private fun isProtectedPackage(context: Context, packageName: String): Boolean {
+        if (packageName == context.packageName) return true
+        return runCatching {
+            val flags = context.packageManager.getApplicationInfo(packageName, 0).flags
+            flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        }.getOrDefault(false)
+    }
+
     /**
-     * Streams [apk] over stdin to `su -c "pm install -r -d -S <bytes>"` so `system_server`
+     * Streams [apk] over stdin to `su -c "pm install -r -S <bytes>"` so `system_server`
      * never needs direct SELinux filesystem access to the app's private data directory.
+     * No `-d`: an agent-built APK must not downgrade an installed app.
      */
     internal fun installSilentlyViaRoot(apk: File): Boolean = runCatching {
         val sizeBytes = apk.length()
         if (sizeBytes <= 0L) return@runCatching false
-        val proc = ProcessBuilder("su", "-c", "pm install -r -d -S $sizeBytes")
+        val proc = ProcessBuilder("su", "-c", "pm install -r -S $sizeBytes")
             .redirectErrorStream(true)
             .start()
         try {
+            // Drain stdout concurrently: pm may write before all of stdin is consumed and a full pipe would deadlock.
+            val output = StringBuilder()
+            val reader = Thread({
+                runCatching { proc.inputStream.bufferedReader().use { output.append(it.readText()) } }
+            }, "forge-pm-install-stdout").apply { isDaemon = true; start() }
             apk.inputStream().buffered().use { input ->
-                proc.outputStream.use { output ->
-                    input.copyTo(output)
-                    output.flush()
+                proc.outputStream.use { stdin ->
+                    input.copyTo(stdin)
+                    stdin.flush()
                 }
             }
             if (!proc.waitFor(60L, TimeUnit.SECONDS)) {
                 proc.destroyForcibly()
                 return@runCatching false
             }
-            val out = proc.inputStream.bufferedReader().use { it.readText() }
-            proc.exitValue() == 0 && out.contains("Success", ignoreCase = true)
+            reader.join(5_000L)
+            proc.exitValue() == 0 && output.contains("Success", ignoreCase = true)
         } finally {
             if (proc.isAlive) proc.destroyForcibly()
         }
