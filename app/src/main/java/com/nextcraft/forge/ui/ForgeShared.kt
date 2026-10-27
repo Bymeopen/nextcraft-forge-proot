@@ -1,6 +1,5 @@
 package com.nextcraft.forge.ui
 
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,21 +15,23 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material3.ripple
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -40,13 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nextcraft.forge.R
 
-/**
- * Shared screen furniture for Batch A of the UI reset. Every screen that lives *inside* a project
- * (chats, conversation, files, terminal, preview, launcher, developer tools) uses the same header,
- * every launcher list uses the same row, and every empty/loading/error moment uses the same state block.
- */
-
-/** Back arrow, 24sp title, 13sp subtitle and an optional action capsule on the right. 64dp tall. */
 @Composable
 fun ForgeProjectHeader(
     title: String,
@@ -54,36 +48,46 @@ fun ForgeProjectHeader(
     subtitle: String? = null,
     onBack: (() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
-    /** A project's name: draws its identity dot (same colour everywhere the project shows), so projects tell apart at a glance. */
     accentSeed: String? = null,
 ) {
-    val scheme = MaterialTheme.colorScheme
-    val compact = rememberCompactHeight()
+    val palette = MaterialTheme.colorScheme
+    val isCompactLayout = rememberCompactHeight()
+    val minRowHeight = if (isCompactLayout) 48.dp else ForgeSpace.header
+    val startPad = if (onBack != null) 4.dp else ForgeSpace.screen
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = if (compact) 48.dp else ForgeSpace.header)
-            .padding(start = if (onBack != null) 4.dp else ForgeSpace.screen, end = 14.dp, top = 4.dp),
+            .heightIn(min = minRowHeight)
+            .padding(start = startPad, end = 14.dp, top = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
-            // 48dp IconButton keeps the back target at the accessibility minimum.
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.a11y_back), tint = scheme.onSurface)
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = stringResource(R.string.a11y_back),
+                    tint = palette.onSurface,
+                )
             }
         }
         if (accentSeed != null) {
-            androidx.compose.foundation.layout.Box(
+            val isDarkBg = palette.background.luminance() < 0.5f
+            Box(
                 modifier = Modifier
                     .padding(end = 10.dp)
                     .size(10.dp)
-                    .background(projectAccent(accentSeed, dark = scheme.background.luminance() < 0.5f), androidx.compose.foundation.shape.CircleShape),
+                    .background(projectAccent(accentSeed, dark = isDarkBg), CircleShape),
             )
         }
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
+        ) {
             Text(
                 text = title,
-                fontSize = if (compact) ForgeType.cardTitle else ForgeType.screenTitle,
+                fontSize = if (isCompactLayout) ForgeType.cardTitle else ForgeType.screenTitle,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = (-0.2).sp,
                 maxLines = 1,
@@ -93,17 +97,18 @@ fun ForgeProjectHeader(
                 Text(
                     text = subtitle,
                     fontSize = ForgeType.secondary,
-                    color = scheme.onSurfaceVariant,
+                    color = palette.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        if (actions != null) ForgeActionPill(content = actions)
+        if (actions != null) {
+            ForgeActionPill(content = actions)
+        }
     }
 }
 
-/** A [ForgePillIcon] drawn with a stroke glyph instead of a Material vector. */
 @Composable
 fun ForgeGlyphPillIcon(
     glyph: ForgeGlyph,
@@ -113,24 +118,32 @@ fun ForgeGlyphPillIcon(
     enabled: Boolean = true,
     tint: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    val interaction = remember { MutableInteractionSource() }
+    val touchSource = remember { MutableInteractionSource() }
+    val resolvedTint = if (enabled) tint else tint.copy(alpha = 0.38f)
     Box(
         modifier = modifier
             .forgeMinTouch()
-            .forgePressScale(interaction, pressedScale = 0.88f)
+            .forgePressScale(touchSource, pressedScale = 0.88f)
             .size(width = 48.dp, height = 48.dp)
             .clip(RoundedCornerShape(100))
-            .clickable(interactionSource = interaction, indication = ripple(), enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
+            .clickable(
+                interactionSource = touchSource,
+                indication = ripple(),
+                enabled = enabled,
+                role = Role.Button,
+                onClickLabel = description,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        ForgeIcon(glyph, tint = if (enabled) tint else tint.copy(alpha = 0.38f), description = description)
+        ForgeIcon(
+            glyph = glyph,
+            tint = resolvedTint,
+            description = description,
+        )
     }
 }
 
-/**
- * Launcher row: 40dp accent tile with a stroke glyph, title, one-line subtitle, optional badge and a
- * chevron. One accent colour for every tile so status, not category, is what gets colour.
- */
 @Composable
 fun ForgeListRow(
     glyph: ForgeGlyph,
@@ -141,47 +154,73 @@ fun ForgeListRow(
     badge: String? = null,
     enabled: Boolean = true,
 ) {
-    val scheme = MaterialTheme.colorScheme
-    val tokens = LocalForgeThemeTokens.current
-    val interaction = remember { MutableInteractionSource() }
+    val palette = MaterialTheme.colorScheme
+    val themeTokens = LocalForgeThemeTokens.current
+    val touchSource = remember { MutableInteractionSource() }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .forgePressScale(interaction, pressedScale = 0.985f)
-            .clickable(interactionSource = interaction, indication = ripple(), enabled = enabled, role = Role.Button, onClick = onClick)
+            .forgePressScale(touchSource, pressedScale = 0.985f)
+            .clickable(
+                interactionSource = touchSource,
+                indication = ripple(),
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
             .heightIn(min = 64.dp)
             .padding(horizontal = ForgeSpace.screen, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(40.dp).background(tokens.cardElevatedColor, RoundedCornerShape(12.dp)),
+            modifier = Modifier
+                .size(40.dp)
+                .background(themeTokens.cardElevatedColor, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center,
-        ) { ForgeIcon(glyph, tint = scheme.primary, size = 22.dp) }
+        ) {
+            ForgeIcon(glyph = glyph, tint = palette.primary, size = 22.dp)
+        }
         Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontSize = ForgeType.rowTitle, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = title,
+                fontSize = ForgeType.rowTitle,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             if (!subtitle.isNullOrBlank()) {
-                // Two lines: on 360dp phones one line cut the descriptions mid-word ("paket bah…").
-                Text(subtitle, fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = subtitle,
+                    fontSize = ForgeType.secondary,
+                    color = palette.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         if (!badge.isNullOrBlank()) {
             Text(
                 text = badge,
                 fontSize = ForgeType.caption,
-                color = scheme.onSurface,
+                color = palette.onSurface,
                 modifier = Modifier
                     .padding(start = 8.dp)
-                    .background(scheme.onSurface.copy(alpha = 0.07f), RoundedCornerShape(100))
+                    .background(palette.onSurface.copy(alpha = 0.07f), RoundedCornerShape(100))
                     .padding(horizontal = 9.dp, vertical = 3.dp),
             )
         }
         Spacer(modifier = Modifier.width(6.dp))
-        Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = scheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+        Icon(
+            imageVector = Icons.Default.KeyboardArrowRight,
+            contentDescription = null,
+            tint = palette.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
-/** Empty / loading / error block: 56dp glyph, 17sp title, one line of help, at most one CTA. */
 @Composable
 fun ForgeEmptyState(
     glyph: ForgeGlyph,
@@ -192,21 +231,38 @@ fun ForgeEmptyState(
     onAction: (() -> Unit)? = null,
     tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
-    val scheme = MaterialTheme.colorScheme
+    val palette = MaterialTheme.colorScheme
     Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 36.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp, vertical = 36.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Box(
-            modifier = Modifier.size(56.dp).background(tint.copy(alpha = 0.10f), RoundedCornerShape(18.dp)),
+            modifier = Modifier
+                .size(56.dp)
+                .background(tint.copy(alpha = 0.10f), RoundedCornerShape(18.dp)),
             contentAlignment = Alignment.Center,
-        ) { ForgeIcon(glyph, tint = tint, size = 26.dp) }
+        ) {
+            ForgeIcon(glyph = glyph, tint = tint, size = 26.dp)
+        }
         Spacer(modifier = Modifier.height(14.dp))
-        Text(title, fontSize = ForgeType.cardTitle, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.forgeHeading())
+        Text(
+            text = title,
+            fontSize = ForgeType.cardTitle,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.forgeHeading(),
+        )
         if (!message.isNullOrBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
-            Text(message, fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            Text(
+                text = message,
+                fontSize = ForgeType.secondary,
+                color = palette.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
         }
         if (actionLabel != null && onAction != null) {
             Spacer(modifier = Modifier.height(18.dp))
@@ -215,8 +271,8 @@ fun ForgeEmptyState(
     }
 }
 
-/** Stable colour per project name: the hue comes from the name, lightness from the theme so it reads on both. */
 internal fun projectAccent(seed: String, dark: Boolean): Color {
-    val hue = ((seed.hashCode().toLong() and 0x7fffffff) % 360).toFloat()
-    return Color.hsv(hue, 0.55f, if (dark) 0.95f else 0.62f)
+    val angle = ((seed.hashCode().toLong() and 0x7fffffffL) % 360L).toFloat()
+    val valueBrightness = if (dark) 0.95f else 0.62f
+    return Color.hsv(angle, 0.55f, valueBrightness)
 }

@@ -3,6 +3,7 @@ package com.nextcraft.forge.runtime
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
 import com.nextcraft.forge.model.ChangeItem
 import com.nextcraft.forge.model.ChatMessage
@@ -20,56 +21,43 @@ data class RuntimeLaunchConfig(
     val environment: Map<String, String>,
 )
 
-/**
- * Shared cancellation hook so the foreground notification or UI can stop an active
- * coding agent session in ClaudeRuntimeBridge, AntigravityRuntimeBridge, or DshRuntimeBridge.
- */
 object RuntimeTaskController {
     const val AGENT = "agent"
     const val BUILD = "build"
 
-    /**
-     * Stop hooks by task kind. The agent and the Android build can run at the same time; a single slot let one
-     * overwrite the other's hook, and stopping the agent also killed the build.
-     */
-    private val hooks = LinkedHashMap<String, () -> Unit>()
+    private val cancelCallbacks = LinkedHashMap<String, () -> Unit>()
 
     @Synchronized
     fun register(kind: String, action: () -> Unit) {
-        hooks[kind] = action
+        cancelCallbacks[kind] = action
     }
 
-    /** Clears [action] only if it is still registered, so a finishing task cannot drop another task's stop hook. */
     @Synchronized
     fun release(action: (() -> Unit)?) {
-        if (action != null) hooks.entries.removeAll { it.value === action }
-    }
-
-    /** True while any agent session or build holds a stop hook, i.e. while work is running. */
-    @Synchronized
-    fun hasActiveTask(): Boolean = hooks.isNotEmpty()
-
-    /** Stops only the task of [kind]. */
-    fun stop(kind: String) {
-        // Parallel chats register as "agent:<sessionId>"; stopping the kind stops all of them.
-        val actions = synchronized(this) {
-            val keys = hooks.keys.filter { it == kind || it.startsWith("$kind:") }
-            keys.mapNotNull { hooks.remove(it) }
+        if (action != null) {
+            cancelCallbacks.entries.removeAll { it.value === action }
         }
-        actions.forEach { it() }
     }
 
-    /** Stops every running task (the shared notification's Stop action, app teardown). */
+    @Synchronized
+    fun hasActiveTask(): Boolean = cancelCallbacks.isNotEmpty()
+
+    fun stop(kind: String) {
+        val toInvoke = synchronized(this) {
+            val matchingKeys = cancelCallbacks.keys.filter { k -> k == kind || k.startsWith("$kind:") }
+            matchingKeys.mapNotNull { k -> cancelCallbacks.remove(k) }
+        }
+        for (cb in toInvoke) cb()
+    }
+
     fun requestStop() {
-        val actions = synchronized(this) { hooks.values.toList().also { hooks.clear() } }
-        actions.forEach { it() }
+        val toInvoke = synchronized(this) {
+            cancelCallbacks.values.toList().also { cancelCallbacks.clear() }
+        }
+        for (cb in toInvoke) cb()
     }
 }
 
-/**
- * Contract and helper dispatcher for RuntimeExecutionService so bridges in Block 3
- * can post foreground notifications without circular compile-time dependencies.
- */
 object RuntimeExecutionServiceContract {
     const val SERVICE_CLASS_NAME = "com.nextcraft.forge.runtime.RuntimeExecutionService"
     const val ACTION_START = "com.nextcraft.forge.runtime.action.START"
@@ -79,80 +67,93 @@ object RuntimeExecutionServiceContract {
     const val ACTION_CANCELLED = "com.nextcraft.forge.runtime.action.CANCELLED"
     const val EXTRA_PROJECT_NAME = "com.nextcraft.forge.runtime.extra.PROJECT_NAME"
     const val EXTRA_DETAIL = "com.nextcraft.forge.runtime.extra.DETAIL"
-    /** Fixed phrases travel as a string resource id plus format args, so the service words them in the app language. */
     const val EXTRA_DETAIL_RES = "com.nextcraft.forge.runtime.extra.DETAIL_RES"
     const val EXTRA_DETAIL_ARGS = "com.nextcraft.forge.runtime.extra.DETAIL_ARGS"
 
-    private fun resolveServiceClass(): Class<*>? =
+    private fun lookupServiceClass(): Class<*>? =
         runCatching { Class.forName(SERVICE_CLASS_NAME) }.getOrNull()
 
     fun startForeground(context: Context, projectName: String) {
-        val cls = resolveServiceClass() ?: return
+        val targetCls = lookupServiceClass() ?: return
         runCatching {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, cls)
-                    .setAction(ACTION_START)
-                    .putExtra(EXTRA_PROJECT_NAME, projectName),
-            )
-        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
+            val startIntent = Intent(context, targetCls)
+                .setAction(ACTION_START)
+                .putExtra(EXTRA_PROJECT_NAME, projectName)
+            ContextCompat.startForegroundService(context, startIntent)
+        }.onFailure { ErrorLog.swallowed("RuntimeBridge", it) }
     }
 
     fun pushProgress(context: Context, projectName: String?, detail: String) {
-        val cls = resolveServiceClass() ?: return
+        val targetCls = lookupServiceClass() ?: return
         runCatching {
-            context.startService(
-                Intent(context, cls)
-                    .setAction(ACTION_PROGRESS)
-                    .putExtra(EXTRA_PROJECT_NAME, projectName)
-                    .putExtra(EXTRA_DETAIL, detail),
-            )
-        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
+            val progIntent = Intent(context, targetCls)
+                .setAction(ACTION_PROGRESS)
+                .putExtra(EXTRA_PROJECT_NAME, projectName)
+                .putExtra(EXTRA_DETAIL, detail)
+            context.startService(progIntent)
+        }.onFailure { ErrorLog.swallowed("RuntimeBridge", it) }
     }
 
-    fun finishForeground(context: Context, completed: Boolean, projectName: String, detail: String, tag: String = "RuntimeBridge") {
-        val cls = resolveServiceClass() ?: return
+    fun finishForeground(
+        context: Context,
+        completed: Boolean,
+        projectName: String,
+        detail: String,
+        tag: String = "RuntimeBridge",
+    ) {
+        val targetCls = lookupServiceClass() ?: return
+        val outcomeAction = if (completed) ACTION_COMPLETE else ACTION_FAILED
         runCatching {
-            context.startService(
-                Intent(context, cls)
-                    .setAction(if (completed) ACTION_COMPLETE else ACTION_FAILED)
-                    .putExtra(EXTRA_PROJECT_NAME, projectName)
-                    .putExtra(EXTRA_DETAIL, detail),
-            )
-        }.onFailure { error ->
-            Log.w(tag, "Could not post task result notification", error)
-            runCatching { context.stopService(Intent(context, cls)) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
+            val doneIntent = Intent(context, targetCls)
+                .setAction(outcomeAction)
+                .putExtra(EXTRA_PROJECT_NAME, projectName)
+                .putExtra(EXTRA_DETAIL, detail)
+            context.startService(doneIntent)
+        }.onFailure { err ->
+            Log.w(tag, "Could not post task result notification", err)
+            runCatching { context.stopService(Intent(context, targetCls)) }
+                .onFailure { ErrorLog.swallowed("RuntimeBridge", it) }
         }
     }
 
-    fun finishForegroundRes(context: Context, completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, args: Array<String>, tag: String = "RuntimeBridge") {
-        val cls = resolveServiceClass() ?: return
+    fun finishForegroundRes(
+        context: Context,
+        completed: Boolean,
+        projectName: String,
+        @StringRes detailRes: Int,
+        args: Array<String>,
+        tag: String = "RuntimeBridge",
+    ) {
+        val targetCls = lookupServiceClass() ?: return
+        val outcomeAction = if (completed) ACTION_COMPLETE else ACTION_FAILED
         runCatching {
-            context.startService(
-                Intent(context, cls)
-                    .setAction(if (completed) ACTION_COMPLETE else ACTION_FAILED)
-                    .putExtra(EXTRA_PROJECT_NAME, projectName)
-                    .putExtra(EXTRA_DETAIL_RES, detailRes)
-                    .putExtra(EXTRA_DETAIL_ARGS, args),
-            )
-        }.onFailure { error ->
-            Log.w(tag, "Could not post task result notification", error)
-            runCatching { context.stopService(Intent(context, cls)) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
+            val doneIntent = Intent(context, targetCls)
+                .setAction(outcomeAction)
+                .putExtra(EXTRA_PROJECT_NAME, projectName)
+                .putExtra(EXTRA_DETAIL_RES, detailRes)
+                .putExtra(EXTRA_DETAIL_ARGS, args)
+            context.startService(doneIntent)
+        }.onFailure { err ->
+            Log.w(tag, "Could not post task result notification", err)
+            runCatching { context.stopService(Intent(context, targetCls)) }
+                .onFailure { ErrorLog.swallowed("RuntimeBridge", it) }
         }
     }
 
     fun cancelForeground(context: Context) {
-        val cls = resolveServiceClass() ?: return
+        val targetCls = lookupServiceClass() ?: return
         runCatching {
-            context.startService(Intent(context, cls).setAction(ACTION_CANCELLED))
+            context.startService(Intent(context, targetCls).setAction(ACTION_CANCELLED))
         }.onFailure {
-            runCatching { context.stopService(Intent(context, cls)) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeBridge", it) }
+            runCatching { context.stopService(Intent(context, targetCls)) }
+                .onFailure { ErrorLog.swallowed("RuntimeBridge", it) }
         }
     }
 }
 
 interface RuntimeBridge {
     val events: Flow<RuntimeEvent>
+
     suspend fun startSession(
         projectId: String,
         projectSlug: String,
@@ -161,6 +162,7 @@ interface RuntimeBridge {
         conversationHistory: List<ChatMessage>,
         provider: ProviderProfile,
     ): String
+
     suspend fun respondToApproval(request: ToolRequest, approved: Boolean)
     suspend fun stopSession(sessionId: String)
     suspend fun stopActiveSession()
@@ -171,35 +173,26 @@ interface RuntimeBridge {
     suspend fun acceptFileChange(projectId: String, path: String): Boolean
 }
 
-/** Keeps recent context while preventing an old chat from becoming an unbounded prompt allocation. */
 internal fun List<ChatMessage>.recentWithinCharacterBudget(maxCharacters: Int): List<ChatMessage> {
     if (maxCharacters <= 0 || isEmpty()) return emptyList()
-    var remaining = maxCharacters
-    val selected = ArrayDeque<ChatMessage>()
-    for (message in asReversed()) {
-        if (remaining <= 0) break
-        val text = if (message.text.length <= remaining) message.text else message.text.takeLast(remaining)
-        selected.addFirst(message.copy(text = text))
-        remaining -= text.length
-        if (text.length < message.text.length) break
+    var budgetLeft = maxCharacters
+    val window = ArrayDeque<ChatMessage>()
+    for (idx in lastIndex downTo 0) {
+        if (budgetLeft <= 0) break
+        val item = this[idx]
+        val clipped = if (item.text.length <= budgetLeft) item.text else item.text.takeLast(budgetLeft)
+        window.addFirst(item.copy(text = clipped))
+        budgetLeft -= clipped.length
+        if (clipped.length < item.text.length) break
     }
-    return selected.toList()
+    return window.toList()
 }
 
-/**
- * Self-hosted Custom API servers (LM Studio, vLLM, Ollama, Local Gateway…) often need no key,
- * but the agent CLIs refuse to start without one. Send a harmless placeholder that such servers ignore.
- */
 internal fun localServerPlaceholderKey(profile: ProviderProfile): String =
     if (profile.kind == ProviderKind.CUSTOM) "no-key-required" else ""
 
-/** Effort levels Claude Code accepts in CLAUDE_CODE_EFFORT_LEVEL. */
-val CLAUDE_EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max")
+val CLAUDE_EFFORT_LEVELS: List<String> = listOf("low", "medium", "high", "xhigh", "max")
 
-/**
- * Shared factual-accuracy and anti-hallucination rules injected into every coding agent and AI provider prompt
- * (Claude Code, Antigravity CLI, DeepSeek Harness, Anthropic API, OpenRouter, Kimi, OpenCode Zen, NVIDIA NIM, Custom API).
- */
 internal val ANTI_HALLUCINATION_RULES: List<String> = listOf(
     "Strict anti-hallucination & factual accuracy policy (applies to every AI provider and model):",
     "- Never fabricate, guess, or hallucinate file paths, class/function/symbol names, APIs, library versions, command outputs, or test/build results.",
@@ -210,220 +203,230 @@ internal val ANTI_HALLUCINATION_RULES: List<String> = listOf(
 
 internal fun buildAgentWorkspacePrompt(
     currentPrompt: String,
-    /** Earlier messages the agent has not seen (see [unseenBy]), oldest first. */
     priorMessages: List<ChatMessage>,
     guestWorkspacePath: String,
     projectKind: ProjectKind,
     androidStackInstalled: Boolean,
     maxHistoryChars: Int,
-    /** The agent resumes its own session and only needs the messages another agent answered since. */
     resumed: Boolean = false,
 ): String {
-    val recent = priorMessages.recentWithinCharacterBudget(maxHistoryChars)
-    val sb = StringBuilder()
-    sb.appendLine("<project_workspace>")
-    if (projectKind == ProjectKind.QUICK_PROJECT) {
-        sb.appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
-        sb.appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
-        sb.appendLine("Keep every file and command inside this project workspace.")
-    } else {
-        sb.appendLine("The current working directory $guestWorkspacePath is the project root.")
-        sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
-        sb.appendLine("When giving commands to the user, make them runnable from this project root.")
+    val trimmedHistory = priorMessages.recentWithinCharacterBudget(maxHistoryChars)
+    return buildString {
+        appendLine("<project_workspace>")
+        if (projectKind == ProjectKind.QUICK_PROJECT) {
+            appendLine("This is a lightweight project workspace at $guestWorkspacePath.")
+            appendLine("Respond conversationally, and use terminal or file tools whenever they are useful for the request.")
+            appendLine("Keep every file and command inside this project workspace.")
+        } else {
+            appendLine("The current working directory $guestWorkspacePath is the project root.")
+            appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
+            appendLine("When giving commands to the user, make them runnable from this project root.")
+        }
+        if (androidStackInstalled) {
+            for (line in AndroidToolchain.AGENT_PROMPT_LINES) appendLine(line)
+        } else {
+            appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
+        }
+        appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
+        for (rule in ANTI_HALLUCINATION_RULES) appendLine(rule)
+        appendLine("</project_workspace>")
+        appendLine()
+        appendConversationHistory(trimmedHistory, guestWorkspacePath, resumed)
+        appendLine(currentPrompt)
     }
-    if (androidStackInstalled) {
-        AndroidToolchain.AGENT_PROMPT_LINES.forEach(sb::appendLine)
-    } else {
-        sb.appendLine("The optional Android build toolchain is not installed in this NextCraft Forge runtime. You may create Android project files, but do not claim that Gradle, the Android SDK, or aapt2 is available and do not present build or install commands as verified. Tell the user to add the Android development stack in NextCraft Forge Settings before building.")
-    }
-    sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
-    ANTI_HALLUCINATION_RULES.forEach(sb::appendLine)
-    sb.appendLine("</project_workspace>")
-    sb.appendLine()
-    sb.appendConversationHistory(recent, guestWorkspacePath, resumed)
-    sb.appendLine(currentPrompt)
-    return sb.toString()
 }
 
 object RuntimeLaunchConfigBuilder {
+    private val CLAUDE_STREAM_ARGS = listOf(
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    )
+
     fun build(
         profile: ProviderProfile,
         authToken: String? = null,
         localGatewayUrl: String? = null,
-        /**
-         * Claude subscription signed in with `claude auth login`: the CLI reads and refreshes its own credentials file,
-         * so no token is passed. (A token in CLAUDE_CODE_OAUTH_TOKEN is never refreshed and expires within hours.)
-         */
         useStoredLogin: Boolean = false,
-        /** Claude Code effort level; blank or unknown values leave the CLI's default. */
         claudeEffort: String = "",
     ): RuntimeLaunchConfig {
-        val cleanToken = authToken?.trim().orEmpty()
-        val isClaudeOAuthToken = cleanToken.startsWith("sk-ant-oat")
-        val isAnthropicApiKey = cleanToken.startsWith("sk-ant-api")
-        val useClaudeOAuth = isClaudeOAuthToken ||
-            (profile.kind.protocol == ProviderProtocol.CLAUDE_LOGIN && !isAnthropicApiKey)
+        val secret = authToken?.trim().orEmpty()
+        val isOat = secret.startsWith("sk-ant-oat")
+        val isAntApi = secret.startsWith("sk-ant-api")
+        val oauthMode = isOat || (profile.kind.protocol == ProviderProtocol.CLAUDE_LOGIN && !isAntApi)
 
-        val environment = linkedMapOf(
+        val env = linkedMapOf(
             "DISABLE_AUTOUPDATER" to "1",
-            // Skip telemetry, error reporting and other background network calls inside Chroot.
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" to "1",
             "DISABLE_TELEMETRY" to "1",
             "DISABLE_ERROR_REPORTING" to "1",
         )
+
         when (profile.kind.protocol) {
             ProviderProtocol.CLAUDE_LOGIN -> {
-                require(cleanToken.isNotBlank() || useStoredLogin) { "Sign in to Claude or enter a subscription token first" }
-                if (useStoredLogin && cleanToken.isBlank()) {
-                    // Claude Code gives API-key variables precedence over the stored login; make sure none leaks in.
-                    environment["ANTHROPIC_API_KEY"] = ""
-                    environment["ANTHROPIC_AUTH_TOKEN"] = ""
-                    environment["CLAUDE_CODE_OAUTH_TOKEN"] = ""
-                } else if (isAnthropicApiKey) {
-                    environment["ANTHROPIC_BASE_URL"] = ProviderKind.ANTHROPIC.defaultBaseUrl
-                    environment["ANTHROPIC_MODEL"] = profile.model
-                        .takeUnless { it.isBlank() || it == "default" }
-                        ?: ProviderKind.ANTHROPIC.defaultModel
-                } else {
-                    environment["CLAUDE_CODE_OAUTH_TOKEN"] = cleanToken
-                    // Claude Code gives API-key variables precedence over OAuth. Explicitly
-                    // clear them so a previous API provider can never shadow this token.
-                    environment["ANTHROPIC_API_KEY"] = ""
-                    environment["ANTHROPIC_AUTH_TOKEN"] = ""
+                require(secret.isNotBlank() || useStoredLogin) {
+                    "Sign in to Claude or enter a subscription token first"
+                }
+                when {
+                    useStoredLogin && secret.isBlank() -> {
+                        env["ANTHROPIC_API_KEY"] = ""
+                        env["ANTHROPIC_AUTH_TOKEN"] = ""
+                        env["CLAUDE_CODE_OAUTH_TOKEN"] = ""
+                    }
+                    isAntApi -> {
+                        env["ANTHROPIC_BASE_URL"] = ProviderKind.ANTHROPIC.defaultBaseUrl
+                        val chosenModel = profile.model.takeUnless { it.isBlank() || it == "default" }
+                            ?: ProviderKind.ANTHROPIC.defaultModel
+                        env["ANTHROPIC_MODEL"] = chosenModel
+                    }
+                    else -> {
+                        env["CLAUDE_CODE_OAUTH_TOKEN"] = secret
+                        env["ANTHROPIC_API_KEY"] = ""
+                        env["ANTHROPIC_AUTH_TOKEN"] = ""
+                    }
                 }
             }
-            ProviderProtocol.ANTHROPIC -> {
-                // Claude Code appends /v1/messages itself; a base URL saved with /v1 would hit /v1/v1/messages.
-                environment["ANTHROPIC_BASE_URL"] = profile.resolvedBaseUrl.trim().trimEnd('/').removeSuffix("/v1")
-                environment["ANTHROPIC_MODEL"] = profile.model
-            }
-            ProviderProtocol.ANTHROPIC_GATEWAY -> {
-                // Claude Code appends /v1/messages itself; accept base URLs entered with or
-                // without /v1 so the agent hits the same endpoint as Test connection.
-                environment["ANTHROPIC_BASE_URL"] = profile.resolvedBaseUrl.trim().trimEnd('/').removeSuffix("/v1")
-                environment["ANTHROPIC_MODEL"] = profile.model
+            ProviderProtocol.ANTHROPIC,
+            ProviderProtocol.ANTHROPIC_GATEWAY,
+            -> {
+                env["ANTHROPIC_BASE_URL"] = profile.resolvedBaseUrl.trim().trimEnd('/').removeSuffix("/v1")
+                env["ANTHROPIC_MODEL"] = profile.model
             }
             ProviderProtocol.OPENROUTER -> {
-                environment["ANTHROPIC_BASE_URL"] = (localGatewayUrl ?: profile.resolvedBaseUrl).trim().trimEnd('/').removeSuffix("/v1")
-                environment["ANTHROPIC_MODEL"] = profile.model
+                val base = (localGatewayUrl ?: profile.resolvedBaseUrl).trim().trimEnd('/').removeSuffix("/v1")
+                env["ANTHROPIC_BASE_URL"] = base
+                env["ANTHROPIC_MODEL"] = profile.model
             }
             ProviderProtocol.OPENAI_RESPONSES,
             ProviderProtocol.OPENAI_CHAT,
             -> {
                 require(!localGatewayUrl.isNullOrBlank()) { "A local format gateway is required for this provider" }
-                environment["ANTHROPIC_BASE_URL"] = localGatewayUrl.trimEnd('/')
-                environment["ANTHROPIC_MODEL"] = "claude-sonnet-4-6"
+                env["ANTHROPIC_BASE_URL"] = localGatewayUrl.trimEnd('/')
+                env["ANTHROPIC_MODEL"] = "claude-sonnet-4-6"
             }
         }
-        claudeEffort.trim().lowercase().takeIf { it in CLAUDE_EFFORT_LEVELS }?.let { environment["CLAUDE_CODE_EFFORT_LEVEL"] = it }
-        val runtimeModel = environment["ANTHROPIC_MODEL"] ?: profile.model
-        if (useClaudeOAuth) {
-            if (cleanToken.isNotBlank()) {
-                environment["CLAUDE_CODE_OAUTH_TOKEN"] = cleanToken
-                environment["ANTHROPIC_API_KEY"] = ""
-                environment["ANTHROPIC_AUTH_TOKEN"] = ""
+
+        val normalizedEffort = claudeEffort.trim().lowercase()
+        if (normalizedEffort in CLAUDE_EFFORT_LEVELS) {
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = normalizedEffort
+        }
+
+        val activeModel = env["ANTHROPIC_MODEL"] ?: profile.model
+        if (oauthMode) {
+            if (secret.isNotBlank()) {
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = secret
+                env["ANTHROPIC_API_KEY"] = ""
+                env["ANTHROPIC_AUTH_TOKEN"] = ""
             }
         } else {
-            environment["ANTHROPIC_DEFAULT_OPUS_MODEL"] = runtimeModel
-            environment["ANTHROPIC_DEFAULT_SONNET_MODEL"] = runtimeModel
-            environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = runtimeModel
-            environment["ANTHROPIC_SMALL_MODEL"] = runtimeModel
-            environment["ANTHROPIC_FAST_MODEL"] = runtimeModel
-            environment["CLAUDE_CODE_SUBAGENT_MODEL"] = runtimeModel
-            environment["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
-            environment["CLAUDE_CODE_DISABLE_TOKEN_COUNTING"] = "1"
-            environment["DISABLE_TELEMETRY"] = "1"
-            if (cleanToken.isNotBlank()) {
-                environment["CLAUDE_CODE_OAUTH_TOKEN"] = ""
-                val isFirstPartyAnthropic = profile.kind.protocol == ProviderProtocol.ANTHROPIC ||
+            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = activeModel
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = activeModel
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = activeModel
+            env["ANTHROPIC_SMALL_MODEL"] = activeModel
+            env["ANTHROPIC_FAST_MODEL"] = activeModel
+            env["CLAUDE_CODE_SUBAGENT_MODEL"] = activeModel
+            env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+            env["CLAUDE_CODE_DISABLE_TOKEN_COUNTING"] = "1"
+            env["DISABLE_TELEMETRY"] = "1"
+
+            if (secret.isNotBlank()) {
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = ""
+                val targetsFirstPartyAnthropic = profile.kind.protocol == ProviderProtocol.ANTHROPIC ||
                     profile.kind.protocol == ProviderProtocol.CLAUDE_LOGIN ||
-                    isAnthropicApiKey ||
-                    environment["ANTHROPIC_BASE_URL"].orEmpty().contains("api.anthropic.com", ignoreCase = true)
+                    isAntApi ||
+                    env["ANTHROPIC_BASE_URL"].orEmpty().contains("api.anthropic.com", ignoreCase = true)
+
                 when {
                     profile.kind == ProviderKind.LLM_ROUTER || profile.kind.protocol == ProviderProtocol.OPENROUTER -> {
-                        environment["ANTHROPIC_AUTH_TOKEN"] = cleanToken
-                        environment["ANTHROPIC_API_KEY"] = ""
-                        environment["OPENROUTER_API_KEY"] = cleanToken
+                        env["ANTHROPIC_AUTH_TOKEN"] = secret
+                        env["ANTHROPIC_API_KEY"] = ""
+                        env["OPENROUTER_API_KEY"] = secret
                     }
-                    isFirstPartyAnthropic ||
+                    targetsFirstPartyAnthropic ||
                         profile.kind.protocol == ProviderProtocol.OPENAI_CHAT ||
                         profile.kind.protocol == ProviderProtocol.OPENAI_RESPONSES -> {
-                        // First-party Anthropic API (and LocalFormatGateway) must use x-api-key only;
-                        // setting ANTHROPIC_AUTH_TOKEN sends Authorization: Bearer <api-key>, which
-                        // api.anthropic.com rejects with HTTP 401 "Invalid bearer token".
-                        environment["ANTHROPIC_API_KEY"] = cleanToken
-                        environment["ANTHROPIC_AUTH_TOKEN"] = ""
+                        env["ANTHROPIC_API_KEY"] = secret
+                        env["ANTHROPIC_AUTH_TOKEN"] = ""
                     }
                     else -> {
-                        environment["ANTHROPIC_AUTH_TOKEN"] = cleanToken
-                        environment["ANTHROPIC_API_KEY"] = cleanToken
+                        env["ANTHROPIC_AUTH_TOKEN"] = secret
+                        env["ANTHROPIC_API_KEY"] = secret
                     }
                 }
             }
         }
+
         return RuntimeLaunchConfig(
             executable = "/usr/local/bin/claude",
-            arguments = listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"),
-            environment = environment,
+            arguments = CLAUDE_STREAM_ARGS,
+            environment = env,
         )
     }
 }
 
-/**
- * An agent's own saved conversation for one chat (Claude Code session, agy conversation) and how many chat messages
- * it had seen when it was saved. Messages after that count were answered by another agent, so the next turn gets them
- * as text. [tag] ties the session to where it can be resumed (provider and workspace); a different tag starts afresh.
- * Stored as "id|count|tag"; a bare id (older builds) has an unknown count.
- */
-internal data class SavedConversation(val id: String, val messageCount: Int = -1, val tag: String = "") {
+internal data class SavedConversation(
+    val id: String,
+    val messageCount: Int = -1,
+    val tag: String = "",
+) {
     fun encode(): String = "$id|$messageCount|$tag"
 
     companion object {
         fun decode(raw: String?): SavedConversation? {
             if (raw.isNullOrBlank()) return null
-            val parts = raw.split('|', limit = 3)
-            return SavedConversation(parts[0], parts.getOrNull(1)?.toIntOrNull() ?: -1, parts.getOrNull(2).orEmpty())
-                .takeIf { it.id.isNotBlank() }
+            val tokens = raw.split('|', limit = 3)
+            val convId = tokens[0]
+            if (convId.isBlank()) return null
+            val seenCount = tokens.getOrNull(1)?.toIntOrNull() ?: -1
+            val tagStr = tokens.getOrNull(2).orEmpty()
+            return SavedConversation(convId, seenCount, tagStr)
         }
     }
 }
 
-/** Chat messages worth giving an agent: no greeting placeholder and no error bubbles. */
-internal fun List<ChatMessage>.usefulForAgent(): List<ChatMessage> = filter { msg ->
-    (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
-        !msg.text.startsWith("Failed to") &&
-        !msg.text.startsWith("Error:") &&
-        !msg.text.contains("API Error")
+internal fun List<ChatMessage>.usefulForAgent(): List<ChatMessage> = filter { m ->
+    val t = m.text
+    (m.fromUser || !t.startsWith("Hi! Tell me")) &&
+        !t.startsWith("Failed to") &&
+        !t.startsWith("Error:") &&
+        !t.contains("API Error")
 }
 
-/**
- * The messages of [history] (current prompt last) an agent resuming [saved] has not seen: all earlier ones when there
- * is no saved conversation, only the newer ones when there is, none when the saved count is unknown.
- */
 internal fun List<ChatMessage>.unseenBy(saved: SavedConversation?): List<ChatMessage> {
-    val prior = dropLast(1)
-    val unseen = when {
-        saved == null -> prior
-        saved.messageCount < 0 || saved.messageCount >= prior.size -> emptyList()
-        else -> prior.drop(saved.messageCount)
+    val historyBeforeCurrent = dropLast(1)
+    val slice = when {
+        saved == null -> historyBeforeCurrent
+        saved.messageCount < 0 || saved.messageCount >= historyBeforeCurrent.size -> emptyList()
+        else -> historyBeforeCurrent.drop(saved.messageCount)
     }
-    return unseen.usefulForAgent()
+    return slice.usefulForAgent()
 }
 
-/** The `<conversation_history>` block; [resumed] says the agent already remembers what came before these messages. */
-internal fun StringBuilder.appendConversationHistory(messages: List<ChatMessage>, guestWorkspacePath: String, resumed: Boolean) {
+internal fun StringBuilder.appendConversationHistory(
+    messages: List<ChatMessage>,
+    guestWorkspacePath: String,
+    resumed: Boolean,
+) {
     if (messages.isEmpty()) return
     appendLine("<conversation_history>")
-    appendLine(
-        if (resumed) "These messages were exchanged in this chat with another assistant since your last reply. Take them into account."
-        else "The following is our prior conversation in this project. Continue naturally from where we left off.",
-    )
+    val headerNote = if (resumed) {
+        "These messages were exchanged in this chat with another assistant since your last reply. Take them into account."
+    } else {
+        "The following is our prior conversation in this project. Continue naturally from where we left off."
+    }
+    appendLine(headerNote)
     appendLine()
-    for (msg in messages) {
-        appendLine("${if (msg.fromUser) "User" else "Assistant"}: ${msg.text}")
-        if (msg.attachments.isNotEmpty()) {
+    for (m in messages) {
+        val speaker = if (m.fromUser) "User" else "Assistant"
+        appendLine("$speaker: ${m.text}")
+        if (m.attachments.isNotEmpty()) {
             appendLine("Attached files:")
-            msg.attachments.forEach { appendLine("- ${it.displayName}: $guestWorkspacePath/${it.relativePath} (${it.mimeType})") }
+            for (att in m.attachments) {
+                appendLine("- ${att.displayName}: $guestWorkspacePath/${att.relativePath} (${att.mimeType})")
+            }
         }
         appendLine()
     }

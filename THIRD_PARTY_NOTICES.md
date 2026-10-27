@@ -1,23 +1,31 @@
-# Third-party notices
+# Third-Party Notices & Conceptual Acknowledgements
 
-## Licensing of this project
-NextCraft Forge as a whole is distributed under the **GNU General Public License v3.0 only** (`LICENSE`,
-SPDX: `GPL-3.0-only`), because it links the GPLv3 Termux terminal libraries listed below.
-Parts derived from Mobile Harness stay under their **MIT** licence: MIT is GPL-compatible, so they are combined into the
-GPLv3 work, and their copyright and permission notice below must be kept in every copy.
+## 1. Licensing of NextCraft Forge (`com.nextcraft.forge`)
+**NextCraft Forge** as a combined work is distributed under the **GNU General Public License v3.0 only** (`LICENSE`, SPDX: `GPL-3.0-only`), because it links the GPLv3 Termux terminal emulator libraries listed below.
 
-| Component | Licence | Notice kept in |
-|---|---|---|
-| NextCraft Forge (combined work) | GPL-3.0-only | `LICENSE` |
-| Mobile Harness-derived parts | MIT | this file |
-| Termux `terminal-emulator` / `terminal-view` | GPL-3.0-only (Apache-2.0 portions by Jack Palevich) | this file |
+Starting with the **NextCraft Forge v2.0 Clean-Room Sovereign Architecture**, the core Android host application (`com.nextcraft.forge.*`), Dual-Engine supervisor (`Root Chroot` + `Non-Root PRoot`), native JNI spawner (`libforgespawn.so`), loopback protocol gateways, Compose UI system, Hermes-Lite v2 cognitive memory, and Forge MCP / Reference Index suite are authored and maintained as a sovereign codebase for NextCraft Forge.
 
-## Mobile Harness
-- **What:** NextCraft Forge started as an adaptation of Mobile Harness (https://github.com/techjarves/Mobile-Harness);
-  parts of the app and of the runtime bundle layout derive from it.
-- **Licence:** MIT, reproduced below as its licence requires.
+| Component | License | Notice Location |
+| :--- | :--- | :--- |
+| **NextCraft Forge (combined work)** | `GPL-3.0-only` | `LICENSE` |
+| **Termux `terminal-emulator` & `terminal-view` (`v0.118.0`)** | `GPL-3.0-only` (Apache-2.0 portions by Jack Palevich) | Section 2 below |
+| **Mobile Harness (Conceptual & Historical Inspiration + MIT Notice)** | `MIT` | Section 3 below |
+| **XERJ (`xerj-org/xerj` — Conceptual Inspiration for Reference Indexing)** | Conceptual Inspiration | Section 4 below |
 
-```
+---
+
+## 2. Termux Terminal Libraries (`GPL-3.0-only`)
+- **Component:** `com.github.termux.termux-app:terminal-emulator` and `com.github.termux.termux-app:terminal-view`, version `v0.118.0` (https://github.com/termux/termux-app), integrated for interactive PTY sessions (`ForgeTerminalClients.kt`, `TerminalScreen.kt`).
+- **License:** The `termux/termux-app` repository is released under **GNU GPLv3 only** (https://www.gnu.org/licenses/gpl-3.0.html), with portions derived from [Terminal Emulator for Android](https://github.com/jackpal/Android-Terminal-Emulator) by Jack Palevich under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+- **Distribution Requirement:** Any binary or source distribution of NextCraft Forge must remain under **GPL-3.0-only** accompanied by complete corresponding source code and this notice. See `docs/TERMINAL.md`.
+- **Copyright:** The Termux contributors; Jack Palevich for the Android-Terminal-Emulator portions.
+
+---
+
+## 3. Mobile Harness (`techjarves/Mobile-Harness` — Conceptual & Historical Inspiration)
+- **Acknowledgement:** Early prototypes of NextCraft Forge were inspired by and adapted concepts from **Mobile Harness** (https://github.com/techjarves/Mobile-Harness) regarding on-device Linux container packaging and mobile CLI agent workflows. In **NextCraft Forge v2.0**, the application architecture, Dual-Engine supervisor (`Ubuntu 24.04.5 LTS` Root Chroot + Non-Root PRoot), loopback gateways, domain models, and Compose UI were re-engineered in a clean-room sovereign rewrite. We retain the upstream MIT copyright and permission notice below in full respect of the project's historical lineage and MIT license compatibility with GPLv3:
+
+```text
 MIT License
 
 Copyright (c) 2026 Mobile Harness Contributors
@@ -41,15 +49,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Termux terminal libraries
-- **What:** `com.github.termux.termux-app:terminal-emulator` and `:terminal-view`, version `v0.118.0`
-  (https://github.com/termux/termux-app), used for the interactive terminal (`ForgeTerminalClients.kt`,
-  `TerminalScreen.kt`).
-- **Licence:** the `termux/termux-app` repository is released under GPLv3 only
-  (https://www.gnu.org/licenses/gpl-3.0.html). Its `LICENSE.md` makes an exception for code from
-  [Terminal Emulator for Android](https://github.com/jackpal/Android-Terminal-Emulator) by Jack Palevich, released under
-  the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0), which it locates in the `terminal-view` and
-  `terminal-emulator` libraries. Those libraries have no licence file of their own, so this app treats them as GPLv3.
-- **If you distribute this app to other people:** release it under GPLv3 together with its complete source code and this
-  notice. Using it yourself or inside one organisation is not distribution. See `docs/TERMINAL.md`.
-- **Copyright:** the Termux contributors; Jack Palevich for the Android-Terminal-Emulator portions.
+---
+
+## 4. XERJ (`xerj-org/xerj` — Conceptual Inspiration)
+- **Acknowledgement:** The **Forge Reference Index (`forge_reference_index.py`)** and its 5 MCP tools (`forge_reference_autoindex`, `forge_reference_search`, `forge_reference_def`, `forge_reference_batch_search`, `forge_reference_gain`) were written 100% from scratch in Python 3 using standard-library `sqlite3` (FTS5 BM25) and custom regex symbol extractors. We credit **`xerj-org/xerj`** purely as conceptual inspiration for equipping coding agents with local BM25 passage search, symbol definition lookup, and token-efficiency telemetry. No source code, schema, or assets from `xerj` are used or distributed in NextCraft Forge.

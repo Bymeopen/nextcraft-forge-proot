@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+
 package com.nextcraft.forge.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -10,19 +12,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -32,22 +34,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.R
+import com.nextcraft.forge.model.ProjectType
 import com.nextcraft.forge.runtime.McpConnector
 import com.nextcraft.forge.runtime.McpTransport
 import kotlinx.coroutines.launch
 
-/** Claude Code's MCP connectors and skills: add, switch on or off, remove. Changes apply from the next message. */
-@OptIn(ExperimentalMaterial3Api::class)
+private val MOBILE_HINT_KEYWORDS = listOf("android", "mobile", "ios", "flutter", "react native", "kotlin")
+private val GAME_HINT_KEYWORDS = listOf("game", "unity", "godot", "libgdx", "pygame", "phaser")
+
 @Composable
-internal fun ConnectorsSheet(state: ForgeUiState, viewModel: MainViewModel, onDismiss: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    val tokens = LocalForgeThemeTokens.current
-    var tab by rememberSaveable { mutableStateOf(0) }
-    LaunchedEffect(Unit) { viewModel.loadConnectors() }
+internal fun ConnectorsSheet(
+    state: ForgeUiState,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit,
+) {
+    val palette = MaterialTheme.colorScheme
+    var selectedSectionIdx by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        viewModel.loadConnectors()
+    }
 
     ForgeModalSheet(
         onDismissRequest = onDismiss,
@@ -59,121 +67,165 @@ internal fun ConnectorsSheet(state: ForgeUiState, viewModel: MainViewModel, onDi
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Text(stringResource(R.string.connectors_title), fontSize = ForgeType.screenTitle, fontWeight = FontWeight.SemiBold)
                 Text(
-                    stringResource(R.string.connectors_hint),
+                    text = stringResource(R.string.connectors_title),
+                    fontSize = ForgeType.screenTitle,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(R.string.connectors_hint),
                     fontSize = ForgeType.secondary,
-                    color = scheme.onSurfaceVariant,
+                    color = palette.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
             item {
                 ForgePillTabs(
-                    items = listOf(stringResource(R.string.connectors_tab_connectors), stringResource(R.string.connectors_tab_skills)),
-                    selectedIndex = tab,
-                    onSelect = { tab = it },
+                    items = listOf(
+                        stringResource(R.string.connectors_tab_connectors),
+                        stringResource(R.string.connectors_tab_skills),
+                    ),
+                    selectedIndex = selectedSectionIdx,
+                    onSelect = { selectedSectionIdx = it },
                 )
             }
-            if (tab == 0) connectorItems(state, viewModel) else skillItems(state, viewModel)
+            if (selectedSectionIdx == 0) {
+                renderMcpConnectorsSection(state, viewModel)
+            } else {
+                renderCustomSkillsSection(state, viewModel)
+            }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state: ForgeUiState, viewModel: MainViewModel) {
+private fun LazyListScope.renderMcpConnectorsSection(
+    state: ForgeUiState,
+    viewModel: MainViewModel,
+) {
     if (state.connectors.isEmpty()) {
-        item { ForgeEmptyState(glyph = ForgeGlyph.LINK, title = stringResource(R.string.connectors_empty)) }
+        item {
+            ForgeEmptyState(
+                glyph = ForgeGlyph.LINK,
+                title = stringResource(R.string.connectors_empty),
+            )
+        }
     }
-    items(state.connectors, key = { "connector-${it.id}" }) { connector ->
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    items(state.connectors, key = { "connector-${it.id}" }) { entry ->
+        val palette = MaterialTheme.colorScheme
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(connector.name, fontSize = ForgeType.rowTitle, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    connector.target,
+                    text = entry.name,
+                    fontSize = ForgeType.rowTitle,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = entry.target,
                     fontSize = ForgeType.secondary,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = palette.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Switch(checked = connector.enabled, onCheckedChange = { viewModel.setConnectorEnabled(connector.id, it) })
+            Switch(
+                checked = entry.enabled,
+                onCheckedChange = { active -> viewModel.setConnectorEnabled(entry.id, active) },
+            )
             ConfirmedAction(
                 title = stringResource(R.string.connector_delete),
-                message = connector.name,
+                message = entry.name,
                 confirmLabel = stringResource(R.string.connector_delete),
-                onConfirm = { viewModel.deleteConnector(connector.id) },
-            ) { onClick ->
-                ForgeTextButton(onClick = onClick) {
-                    Text(stringResource(R.string.connector_delete), color = MaterialTheme.colorScheme.error)
+                onConfirm = { viewModel.deleteConnector(entry.id) },
+            ) { triggerDelete ->
+                ForgeTextButton(onClick = triggerDelete) {
+                    Text(
+                        text = stringResource(R.string.connector_delete),
+                        color = palette.error,
+                    )
                 }
             }
         }
     }
     item {
-        var name by rememberSaveable { mutableStateOf("") }
-        var kind by rememberSaveable { mutableStateOf(0) }
-        var target by rememberSaveable { mutableStateOf("") }
-        var envName by rememberSaveable { mutableStateOf("") }
-        // The secret uses plain remember: rememberSaveable would write it into the saved-instance Bundle.
-        var secret by remember { mutableStateOf("") }
-        val activeProject = state.activeProject
-        val projectHints = "${activeProject?.name.orEmpty()} ${activeProject?.description.orEmpty()} ${activeProject?.language.orEmpty()}".lowercase()
-        val isMobileTarget = activeProject?.type == com.nextcraft.forge.model.ProjectType.ANDROID ||
-            listOf("android", "mobile", "ios", "flutter", "react native", "kotlin").any { it in projectHints }
-        val isGameTarget = listOf("game", "unity", "godot", "libgdx", "pygame", "phaser").any { it in projectHints }
-        val orderedPresets = remember(isMobileTarget, isGameTarget) {
-            McpConnector.presetsForProject(isMobileTarget = isMobileTarget, isGameTarget = isGameTarget)
+        var draftName by rememberSaveable { mutableStateOf("") }
+        var transportTabIdx by rememberSaveable { mutableIntStateOf(0) }
+        var draftEndpoint by rememberSaveable { mutableStateOf("") }
+        var draftEnvKey by rememberSaveable { mutableStateOf("") }
+        var draftSecretVal by remember { mutableStateOf("") }
+
+        val currentProj = state.activeProject
+        val combinedHints = "${currentProj?.name.orEmpty()} ${currentProj?.description.orEmpty()} ${currentProj?.language.orEmpty()}".lowercase()
+        val mobileProject = currentProj?.type == ProjectType.ANDROID || MOBILE_HINT_KEYWORDS.any { it in combinedHints }
+        val gameProject = GAME_HINT_KEYWORDS.any { it in combinedHints }
+        val recommendedPresets = remember(mobileProject, gameProject) {
+            McpConnector.presetsForProject(isMobileTarget = mobileProject, isGameTarget = gameProject)
         }
+
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                orderedPresets.forEach { preset ->
+                for (preset in recommendedPresets) {
                     OutlinedButton(
                         onClick = {
-                            name = preset.name
-                            kind = if (preset.transport == McpTransport.HTTP) 0 else 1
-                            target = preset.target
-                            envName = preset.secretName
+                            draftName = preset.name
+                            transportTabIdx = if (preset.transport == McpTransport.HTTP) 0 else 1
+                            draftEndpoint = preset.target
+                            draftEnvKey = preset.secretName
                         },
                         shape = RoundedCornerShape(100),
                     ) {
-                        val label = if (preset.name == "Context7") {
+                        val chipTitle = if (preset.name == "Context7") {
                             stringResource(R.string.connector_preset_context7)
                         } else {
                             preset.name
                         }
-                        Text(label)
+                        Text(chipTitle)
                     }
                 }
             }
             ForgeTextField(
-                value = name,
-                onValueChange = { name = it.take(40) },
+                value = draftName,
+                onValueChange = { draftName = it.take(40) },
                 label = { Text(stringResource(R.string.connector_name_hint)) },
                 singleLine = true,
                 kind = ForgeFieldKind.NAME,
                 modifier = Modifier.fillMaxWidth(),
             )
             ForgePillTabs(
-                items = listOf(stringResource(R.string.connector_kind_remote), stringResource(R.string.connector_kind_command)),
-                selectedIndex = kind,
-                onSelect = { kind = it },
+                items = listOf(
+                    stringResource(R.string.connector_kind_remote),
+                    stringResource(R.string.connector_kind_command),
+                ),
+                selectedIndex = transportTabIdx,
+                onSelect = { transportTabIdx = it },
             )
+            val isHttpMode = transportTabIdx == 0
             ForgeTextField(
-                value = target,
-                onValueChange = { target = it },
-                label = { Text(stringResource(if (kind == 0) R.string.connector_url_hint else R.string.connector_command_hint)) },
+                value = draftEndpoint,
+                onValueChange = { draftEndpoint = it },
+                label = {
+                    Text(
+                        stringResource(
+                            if (isHttpMode) R.string.connector_url_hint else R.string.connector_command_hint,
+                        ),
+                    )
+                },
                 singleLine = true,
-                kind = if (kind == 0) ForgeFieldKind.URL else ForgeFieldKind.IDENTIFIER,
+                kind = if (isHttpMode) ForgeFieldKind.URL else ForgeFieldKind.IDENTIFIER,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (kind == 1) {
+            if (!isHttpMode) {
                 ForgeTextField(
-                    value = envName,
-                    onValueChange = { envName = it.take(60) },
+                    value = draftEnvKey,
+                    onValueChange = { draftEnvKey = it.take(60) },
                     label = { Text(stringResource(R.string.connector_env_hint)) },
                     singleLine = true,
                     kind = ForgeFieldKind.IDENTIFIER,
@@ -181,8 +233,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
                 )
             }
             ForgeTextField(
-                value = secret,
-                onValueChange = { secret = it },
+                value = draftSecretVal,
+                onValueChange = { draftSecretVal = it },
                 label = { Text(stringResource(R.string.connector_secret_hint)) },
                 singleLine = true,
                 kind = ForgeFieldKind.SECRET,
@@ -191,94 +243,131 @@ private fun androidx.compose.foundation.lazy.LazyListScope.connectorItems(state:
             ForgePrimaryButton(
                 text = stringResource(R.string.connector_add),
                 onClick = {
-                    if (viewModel.saveConnector(
-                            name = name,
-                            transport = if (kind == 0) McpTransport.HTTP else McpTransport.COMMAND,
-                            target = target,
-                            secretName = envName,
-                            secret = secret,
-                        )
-                    ) {
-                        name = ""
-                        target = ""
-                        envName = ""
-                        secret = ""
+                    val savedOk = viewModel.saveConnector(
+                        name = draftName,
+                        transport = if (isHttpMode) McpTransport.HTTP else McpTransport.COMMAND,
+                        target = draftEndpoint,
+                        secretName = draftEnvKey,
+                        secret = draftSecretVal,
+                    )
+                    if (savedOk) {
+                        draftName = ""
+                        draftEndpoint = ""
+                        draftEnvKey = ""
+                        draftSecretVal = ""
                     }
                 },
-                enabled = name.isNotBlank() && target.isNotBlank(),
+                enabled = draftName.isNotBlank() && draftEndpoint.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.skillItems(state: ForgeUiState, viewModel: MainViewModel) {
+private fun LazyListScope.renderCustomSkillsSection(
+    state: ForgeUiState,
+    viewModel: MainViewModel,
+) {
     if (state.skills.isEmpty()) {
-        item { ForgeEmptyState(glyph = ForgeGlyph.SPARK, title = stringResource(R.string.skills_empty)) }
+        item {
+            ForgeEmptyState(
+                glyph = ForgeGlyph.SPARK,
+                title = stringResource(R.string.skills_empty),
+            )
+        }
     }
     item {
-        var name by rememberSaveable { mutableStateOf("") }
-        var description by rememberSaveable { mutableStateOf("") }
-        var body by rememberSaveable { mutableStateOf("") }
-        val scope = rememberCoroutineScope()
+        val palette = MaterialTheme.colorScheme
+        var skillIdDraft by rememberSaveable { mutableStateOf("") }
+        var skillSummaryDraft by rememberSaveable { mutableStateOf("") }
+        var skillMarkdownDraft by rememberSaveable { mutableStateOf("") }
+        val coroutineScope = rememberCoroutineScope()
+
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.skills.forEach { skill ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            for (skillEntry in state.skills) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(skill.name, fontSize = ForgeType.rowTitle, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (skill.description.isNotBlank()) {
+                        Text(
+                            text = skillEntry.name,
+                            fontSize = ForgeType.rowTitle,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (skillEntry.description.isNotBlank()) {
                             Text(
-                                skill.description,
+                                text = skillEntry.description,
                                 fontSize = ForgeType.secondary,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = palette.onSurfaceVariant,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
-                    ForgeTextButton(onClick = {
-                        name = skill.name
-                        description = skill.description
-                        scope.launch { body = viewModel.loadSkillBody(skill.name) }
-                    }) { Text(stringResource(R.string.skill_edit)) }
+                    ForgeTextButton(
+                        onClick = {
+                            skillIdDraft = skillEntry.name
+                            skillSummaryDraft = skillEntry.description
+                            coroutineScope.launch {
+                                skillMarkdownDraft = viewModel.loadSkillBody(skillEntry.name)
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.skill_edit))
+                    }
                     ConfirmedAction(
                         title = stringResource(R.string.connector_delete),
-                        message = skill.name,
+                        message = skillEntry.name,
                         confirmLabel = stringResource(R.string.connector_delete),
-                        onConfirm = { viewModel.deleteSkill(skill.name) },
-                    ) { onClick ->
-                        ForgeTextButton(onClick = onClick) {
-                            Text(stringResource(R.string.connector_delete), color = MaterialTheme.colorScheme.error)
+                        onConfirm = { viewModel.deleteSkill(skillEntry.name) },
+                    ) { triggerDelete ->
+                        ForgeTextButton(onClick = triggerDelete) {
+                            Text(
+                                text = stringResource(R.string.connector_delete),
+                                color = palette.error,
+                            )
                         }
                     }
                 }
             }
             ForgeTextField(
-                value = name,
-                onValueChange = { name = it.take(64) },
+                value = skillIdDraft,
+                onValueChange = { skillIdDraft = it.take(64) },
                 label = { Text(stringResource(R.string.skill_name_hint)) },
                 singleLine = true,
                 kind = ForgeFieldKind.IDENTIFIER,
                 modifier = Modifier.fillMaxWidth(),
             )
             ForgeTextField(
-                value = description,
-                onValueChange = { description = it.take(300) },
+                value = skillSummaryDraft,
+                onValueChange = { skillSummaryDraft = it.take(300) },
                 label = { Text(stringResource(R.string.skill_description_hint)) },
                 singleLine = false,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 96.dp),
             )
             ForgeTextField(
-                value = body,
-                onValueChange = { body = it },
+                value = skillMarkdownDraft,
+                onValueChange = { skillMarkdownDraft = it },
                 label = { Text(stringResource(R.string.skill_body_hint)) },
                 singleLine = false,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 96.dp),
             )
             ForgePrimaryButton(
                 text = stringResource(R.string.skill_save),
-                onClick = { viewModel.saveSkill(name, description, body); name = ""; description = ""; body = "" },
-                enabled = name.isNotBlank() && body.isNotBlank(),
+                onClick = {
+                    viewModel.saveSkill(skillIdDraft, skillSummaryDraft, skillMarkdownDraft)
+                    skillIdDraft = ""
+                    skillSummaryDraft = ""
+                    skillMarkdownDraft = ""
+                },
+                enabled = skillIdDraft.isNotBlank() && skillMarkdownDraft.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
