@@ -1,10 +1,10 @@
 # NextCraft Forge (`com.nextcraft.forge`) — Master Engineering Blueprint (Fase 1 s/d Fase 7)
 
 > **Identitas Proyek**: **NextCraft Forge** (`com.nextcraft.forge`) — Autonomous Mobile AI Coding IDE & Native Android Build System  
-> **Basis**: NextCraft Forge (`com.nextcraft.forge`). Atribusi kode pihak ketiga: lihat [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).  
-> **Mesin Runtime Tunggal**: **Pure Root Chroot (`su -mm` + Linux Kernel Mounts)** di atas **Ubuntu 24.04 LTS (`noble`) ARM64** (Tanpa PRoot / Tanpa Dual-Runtime)  
-> **Strategi AI**: **Multi-Agent CLI Harness (`Claude Code`, `Antigravity CLI`, `DeepSeek Harness`) + Cloud AI Providers via On-Device Loopback Gateway** (Tanpa Local LLM Engine / Tanpa Fine-Tuning)  
-> **Prinsip Dokumen**: **100% Faktual, Tanpa Placeholder, Tanpa Halusinasi**. Setiap bagian dari *Master Engineering Prompt (Fase 1 s/d Fase 7)* dieksekusi menggunakan arsitektur nyata **Zero-Cloud On-Device** NextCraft Forge di atas **Pure Root Chroot**.
+> **Basis**: NextCraft Forge (`com.nextcraft.forge`, Clean-Room Sovereign Architecture v2.0). Atribusi lisensi & inspirasi konseptual pihak ketiga: lihat [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).  
+> **Mesin Runtime Dual-Engine**: **Primary Root Chroot (`su -mm` + Linux Kernel Mounts)** dengan **Automatic Non-Root PRoot Fallback (`libproot.so`)** di atas **Ubuntu 24.04.5 LTS (`noble`) ARM64** (`ProotAndChrootOptimizer` + `DeviceHardwareOptimizer`)  
+> **Strategi AI**: **Multi-Agent CLI Harness (`Claude Code`, `Antigravity CLI`, `DeepSeek Harness`) + Cloud AI Providers via On-Device Loopback Gateway + Built-in Forge MCP Server & Reference Index (`forge_reference_*`)** (Tanpa Local LLM Engine / Tanpa Fine-Tuning)  
+> **Prinsip Dokumen**: **100% Faktual, Tanpa Placeholder, Tanpa Halusinasi**. Setiap bagian dari *Master Engineering Prompt (Fase 1 s/d Fase 7)* dieksekusi menggunakan arsitektur nyata **Zero-Cloud On-Device** NextCraft Forge.
 
 ---
 

@@ -1,300 +1,349 @@
 package com.nextcraft.forge.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
+import com.nextcraft.forge.runtime.ErrorLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyStore
 import java.util.UUID
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
+data class ApiKeyInfo(
+    val id: String,
+    val name: String,
+    val isActive: Boolean = false,
+)
+
+data class ApiKeyCredential(
+    val id: String,
+    val name: String,
+    val secret: String,
+    val isActive: Boolean,
+)
+
 class ApiKeyVault(context: Context) {
-    private val preferences = context.getSharedPreferences("nextcraft_secrets", Context.MODE_PRIVATE)
-    /**
-     * The keystore alias that encrypts the stored secrets. A migration writes every re-encrypted secret together
-     * with a new alias in one commit, so storage never mixes ciphertexts of two keys.
-     */
-    private val alias: String
-        get() = preferences.getString(KEY_ALIAS_PREF, null) ?: LEGACY_KEY_ALIAS
+    private val store: SharedPreferences =
+        context.getSharedPreferences(VAULT_PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val currentKeyAlias: String
+        get() = store.getString(META_KEY_ALIAS, null) ?: DEFAULT_MASTER_ALIAS
 
     init {
-        migrateAuthBoundKeyIfNeeded()
+        upgradeAuthBoundKeystoreEntry()
     }
 
-    /**
-     * Earlier builds created the master key with setUserAuthenticationRequired(true) and a 300 s
-     * validity window, which made every decrypt fail (and self-destruct) a few minutes after each
-     * unlock. When such a key is still present, re-encrypt every secret under a fresh unbound key.
-     * Decryption of the old key only works shortly after an unlock, so this retries on each launch
-     * until it succeeds and never deletes anything on failure.
-     */
     @Synchronized
-    private fun migrateAuthBoundKeyIfNeeded() {
+    private fun upgradeAuthBoundKeystoreEntry() {
         runCatching {
-            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            if (!keyStore.containsAlias(alias)) return
-            val oldKey = keyStore.getKey(alias, null) as? SecretKey ?: return
-            val info = SecretKeyFactory.getInstance(oldKey.algorithm, "AndroidKeyStore")
-                .getKeySpec(oldKey, KeyInfo::class.java) as KeyInfo
-            if (!info.isUserAuthenticationRequired) return
+            val ks = openAndroidKeyStore()
+            val activeAlias = currentKeyAlias
+            if (!ks.containsAlias(activeAlias)) return
+            val existingSecretKey = ks.getKey(activeAlias, null) as? SecretKey ?: return
+            val keySpec = SecretKeyFactory.getInstance(existingSecretKey.algorithm, KEYSTORE_PROVIDER)
+                .getKeySpec(existingSecretKey, KeyInfo::class.java) as KeyInfo
+            if (!keySpec.isUserAuthenticationRequired) return
 
-            // Decrypt everything first; abort (without touching storage) if any entry fails.
-            val secretIds = preferences.all.keys
-                .filter { it.endsWith(".value") }
-                .map { it.removeSuffix(".value") }
-            val plaintexts = secretIds.associateWith { storageId ->
-                val iv = Base64.decode(preferences.getString("$storageId.iv", null) ?: return, Base64.NO_WRAP)
-                val encrypted = Base64.decode(preferences.getString("$storageId.value", null) ?: return, Base64.NO_WRAP)
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, oldKey, GCMParameterSpec(128, iv))
-                cipher.doFinal(encrypted).toString(Charsets.UTF_8)
-            }
-            // Re-encrypt under a new alias and switch over in a single commit. Deleting the old key first (as before)
-            // lost every secret not yet rewritten if one encryption or the commit then failed.
-            val oldAlias = alias
-            val newAlias = "$LEGACY_KEY_ALIAS-${System.currentTimeMillis()}"
-            val newKey = createKey(newAlias)
-            val edit = preferences.edit()
-            try {
-                plaintexts.forEach { (storageId, secret) ->
-                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                    cipher.init(Cipher.ENCRYPT_MODE, newKey)
-                    val encrypted = cipher.doFinal(cleanSecret(secret).toByteArray(Charsets.UTF_8))
-                    edit.putString("$storageId.iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-                    edit.putString("$storageId.value", Base64.encodeToString(encrypted, Base64.NO_WRAP))
+            val entryPrefixes = store.all.keys
+                .asSequence()
+                .filter { it.endsWith(SUFFIX_CIPHERTEXT) }
+                .map { it.removeSuffix(SUFFIX_CIPHERTEXT) }
+                .toList()
+
+            val decryptedPayloads = LinkedHashMap<String, String>(entryPrefixes.size)
+            for (slotKey in entryPrefixes) {
+                val nonceB64 = store.getString(slotKey + SUFFIX_NONCE, null) ?: return
+                val bodyB64 = store.getString(slotKey + SUFFIX_CIPHERTEXT, null) ?: return
+                val nonce = Base64.decode(nonceB64, Base64.NO_WRAP)
+                val ciphertext = Base64.decode(bodyB64, Base64.NO_WRAP)
+                val decryptor = Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
+                    init(Cipher.DECRYPT_MODE, existingSecretKey, GCMParameterSpec(GCM_TAG_BITS, nonce))
                 }
-                edit.putString(KEY_ALIAS_PREF, newAlias)
-                check(edit.commit()) { "Could not store the re-encrypted secrets" }
-            } catch (e: Exception) {
-                runCatching { keyStore.deleteEntry(newAlias) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ApiKeyVault", it) }
-                throw e
+                decryptedPayloads[slotKey] = decryptor.doFinal(ciphertext).decodeToString()
             }
-            runCatching { keyStore.deleteEntry(oldAlias) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("ApiKeyVault", it) }
-            android.util.Log.i("ApiKeyVault", "Migrated ${plaintexts.size} secrets to an unbound keystore key")
-        }.onFailure { error ->
-            android.util.Log.w("ApiKeyVault", "Keystore migration deferred: ${error::class.simpleName}")
+
+            val rotatedAlias = "$DEFAULT_MASTER_ALIAS-${System.currentTimeMillis()}"
+            val rotatedKey = generateHardwareAesKey(rotatedAlias)
+            val tx = store.edit()
+            try {
+                for ((slotKey, rawToken) in decryptedPayloads) {
+                    val encryptor = Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
+                        init(Cipher.ENCRYPT_MODE, rotatedKey)
+                    }
+                    val sealedBytes = encryptor.doFinal(normalizeToken(rawToken).encodeToByteArray())
+                    tx.putString(slotKey + SUFFIX_NONCE, Base64.encodeToString(encryptor.iv, Base64.NO_WRAP))
+                    tx.putString(slotKey + SUFFIX_CIPHERTEXT, Base64.encodeToString(sealedBytes, Base64.NO_WRAP))
+                }
+                tx.putString(META_KEY_ALIAS, rotatedAlias)
+                check(tx.commit()) { "Could not store the re-encrypted secrets" }
+            } catch (err: Exception) {
+                runCatching { ks.deleteEntry(rotatedAlias) }
+                    .onFailure { ErrorLog.swallowed(LOG_TAG, it) }
+                throw err
+            }
+            runCatching { ks.deleteEntry(activeAlias) }
+                .onFailure { ErrorLog.swallowed(LOG_TAG, it) }
+            Log.i(LOG_TAG, "Migrated ${decryptedPayloads.size} secrets to an unbound keystore key")
+        }.onFailure { err ->
+            Log.w(LOG_TAG, "Keystore migration deferred: ${err::class.simpleName}")
         }
     }
 
     @Synchronized
     fun put(providerId: String, secret: String) {
         if (secret.isBlank()) return
-        val entries = ensurePool(providerId)
-        val active = entries.firstOrNull { it.id == activeId(providerId) } ?: entries.firstOrNull()
-        if (active == null) {
+        val pool = loadOrMigratePool(providerId)
+        val selectedId = readSelectedKeyId(providerId)
+        val target = pool.firstOrNull { it.id == selectedId } ?: pool.firstOrNull()
+        if (target == null) {
             add(providerId, "Primary", secret)
         } else {
-            putEncrypted(secretKey(providerId, active.id), secret)
+            sealAndCommit(slotId(providerId, target.id), secret)
         }
     }
 
     @Synchronized
     fun add(providerId: String, name: String, secret: String): ApiKeyInfo {
         require(secret.isNotBlank()) { "API key cannot be empty" }
-        val entries = ensurePool(providerId).toMutableList()
-        val entry = ApiKeyInfo(
-            id = UUID.randomUUID().toString(),
-            name = name.trim().ifBlank { "API key ${entries.size + 1}" }.take(60),
-            isActive = entries.isEmpty(),
-        )
-        putEncrypted(secretKey(providerId, entry.id), secret)
-        entries += entry.copy(isActive = false)
-        savePool(providerId, entries)
-        if (entries.size == 1) setActiveId(providerId, entry.id)
-        return entry.copy(isActive = entries.size == 1)
+        val pool = loadOrMigratePool(providerId).toMutableList()
+        val cleanLabel = name.trim().ifEmpty { "API key ${pool.size + 1}" }.take(60)
+        val newEntryId = UUID.randomUUID().toString()
+        val becomeActive = pool.isEmpty()
+
+        sealAndCommit(slotId(providerId, newEntryId), secret)
+        pool.add(ApiKeyInfo(id = newEntryId, name = cleanLabel, isActive = false))
+        persistPoolIndex(providerId, pool)
+        if (becomeActive) {
+            writeSelectedKeyId(providerId, newEntryId)
+        }
+        return ApiKeyInfo(id = newEntryId, name = cleanLabel, isActive = becomeActive)
     }
 
     @Synchronized
     fun list(providerId: String): List<ApiKeyInfo> {
-        val entries = ensurePool(providerId)
-        val active = activeId(providerId) ?: entries.firstOrNull()?.id
-        return entries.map { it.copy(isActive = it.id == active) }
+        val pool = loadOrMigratePool(providerId)
+        val activeKeyId = readSelectedKeyId(providerId) ?: pool.firstOrNull()?.id
+        return pool.map { item -> item.copy(isActive = item.id == activeKeyId) }
     }
 
     @Synchronized
-    fun credentials(providerId: String): List<ApiKeyCredential> = list(providerId).mapNotNull { info ->
-        getEncrypted(secretKey(providerId, info.id))?.let { secret ->
-            ApiKeyCredential(info.id, info.name, secret, info.isActive)
-        }
-    }.sortedByDescending(ApiKeyCredential::isActive)
+    fun credentials(providerId: String): List<ApiKeyCredential> =
+        list(providerId)
+            .mapNotNull { item ->
+                unsealSlot(slotId(providerId, item.id))?.let { token ->
+                    ApiKeyCredential(
+                        id = item.id,
+                        name = item.name,
+                        secret = token,
+                        isActive = item.isActive,
+                    )
+                }
+            }
+            .sortedByDescending { it.isActive }
 
     @Synchronized
     fun activate(providerId: String, keyId: String): Boolean {
-        if (ensurePool(providerId).none { it.id == keyId }) return false
-        setActiveId(providerId, keyId)
+        val pool = loadOrMigratePool(providerId)
+        if (pool.none { it.id == keyId }) return false
+        writeSelectedKeyId(providerId, keyId)
         return true
     }
 
-    /**
-     * Rotates the active key to the next available key in the provider's pool
-     * (used for automatic failover on HTTP 429 rate-limit or 402 quota errors).
-     */
     @Synchronized
     fun rotateNext(providerId: String): String? {
-        val entries = list(providerId)
-        if (entries.size <= 1) return get(providerId)
-        val currentIdx = entries.indexOfFirst { it.isActive }.coerceAtLeast(0)
-        // Skip entries whose secret is missing or unreadable instead of returning null for the whole rotation.
-        for (step in 1 until entries.size) {
-            val candidate = entries[(currentIdx + step) % entries.size]
-            val secret = getEncrypted(secretKey(providerId, candidate.id)) ?: continue
-            setActiveId(providerId, candidate.id)
-            return secret
+        val items = list(providerId)
+        if (items.size <= 1) return get(providerId)
+        val startIndex = items.indexOfFirst { it.isActive }.coerceAtLeast(0)
+        for (offset in 1 until items.size) {
+            val nextCandidate = items[(startIndex + offset) % items.size]
+            val token = unsealSlot(slotId(providerId, nextCandidate.id)) ?: continue
+            writeSelectedKeyId(providerId, nextCandidate.id)
+            return token
         }
         return get(providerId)
     }
 
     @Synchronized
     fun remove(providerId: String, keyId: String) {
-        val remaining = ensurePool(providerId).filterNot { it.id == keyId }
-        removeEncrypted(secretKey(providerId, keyId))
-        savePool(providerId, remaining)
-        if (activeId(providerId) == keyId) {
-            preferences.edit().remove(activeKey(providerId)).apply()
-            remaining.firstOrNull()?.let { setActiveId(providerId, it.id) }
+        val updatedPool = loadOrMigratePool(providerId).filter { it.id != keyId }
+        eraseSlot(slotId(providerId, keyId))
+        persistPoolIndex(providerId, updatedPool)
+        if (readSelectedKeyId(providerId) == keyId) {
+            store.edit().remove(selectedSlotPref(providerId)).apply()
+            updatedPool.firstOrNull()?.let { writeSelectedKeyId(providerId, it.id) }
         }
-    }
-
-    private fun putEncrypted(storageId: String, secret: String) {
-        val plaintext = cleanSecret(secret).toByteArray(Charsets.UTF_8)
-        val (iv, encrypted) = runCatching {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
-            cipher.iv to cipher.doFinal(plaintext)
-        }.getOrElse { error ->
-            // Never reset the master key here: that would make every other stored secret
-            // (all provider keys + GITHUB_TOKEN) unreadable. Surface the failure instead.
-            android.util.Log.w("ApiKeyVault", "Encrypt failed: ${error::class.simpleName}")
-            throw IllegalStateException("Could not encrypt the API key. Unlock the device and try again.", error)
-        }
-        val saved = preferences.edit()
-            .putString("$storageId.iv", Base64.encodeToString(iv, Base64.NO_WRAP))
-            .putString("$storageId.value", Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .commit()
-        // A failed commit (disk full) used to look like a saved key that then read back as missing.
-        check(saved) { "Could not save the API key. Check free storage and try again." }
     }
 
     fun contains(providerId: String): Boolean = get(providerId) != null
 
     @Synchronized
     fun remove(providerId: String) {
-        ensurePool(providerId).forEach { removeEncrypted(secretKey(providerId, it.id)) }
-        preferences.edit()
-            .remove("$providerId.iv")
-            .remove("$providerId.value")
-            .remove(poolKey(providerId))
-            .remove(activeKey(providerId))
+        for (entry in loadOrMigratePool(providerId)) {
+            eraseSlot(slotId(providerId, entry.id))
+        }
+        store.edit()
+            .remove(providerId + SUFFIX_NONCE)
+            .remove(providerId + SUFFIX_CIPHERTEXT)
+            .remove(poolIndexPref(providerId))
+            .remove(selectedSlotPref(providerId))
             .apply()
     }
 
     @Synchronized
     fun get(providerId: String): String? {
-        val active = list(providerId).firstOrNull { it.isActive } ?: return null
-        return getEncrypted(secretKey(providerId, active.id))
+        val current = list(providerId).firstOrNull { it.isActive } ?: return null
+        return unsealSlot(slotId(providerId, current.id))
     }
 
-    private fun getEncrypted(storageId: String): String? {
-        val ivStr = preferences.getString("$storageId.iv", null) ?: return null
-        val valStr = preferences.getString("$storageId.value", null) ?: return null
+    private fun sealAndCommit(slotKey: String, rawSecret: String) {
+        val cleanBytes = normalizeToken(rawSecret).encodeToByteArray()
+        val cipherResult = runCatching {
+            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, resolveOrCreateHardwareKey())
+            cipher.iv to cipher.doFinal(cleanBytes)
+        }.getOrElse { err ->
+            Log.w(LOG_TAG, "Encrypt failed: ${err::class.simpleName}")
+            throw IllegalStateException("Could not encrypt the API key. Unlock the device and try again.", err)
+        }
+
+        val committed = store.edit()
+            .putString(slotKey + SUFFIX_NONCE, Base64.encodeToString(cipherResult.first, Base64.NO_WRAP))
+            .putString(slotKey + SUFFIX_CIPHERTEXT, Base64.encodeToString(cipherResult.second, Base64.NO_WRAP))
+            .commit()
+        check(committed) { "Could not save the API key. Check free storage and try again." }
+    }
+
+    private fun unsealSlot(slotKey: String): String? {
+        val encodedNonce = store.getString(slotKey + SUFFIX_NONCE, null) ?: return null
+        val encodedBody = store.getString(slotKey + SUFFIX_CIPHERTEXT, null) ?: return null
         return runCatching {
-            val iv = Base64.decode(ivStr, Base64.NO_WRAP)
-            val encrypted = Base64.decode(valStr, Base64.NO_WRAP)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
-            cleanSecret(cipher.doFinal(encrypted).toString(Charsets.UTF_8))
-        }.onFailure { error ->
-            // Never delete silently: a corrupt entry (AEAD tag or base64 failure) stays on disk so the user can be
-            // told and re-enter the key, and transient keystore failures (device locked, daemon busy) lose nothing.
-            android.util.Log.w("ApiKeyVault", "Decrypt failed: ${error::class.simpleName}")
-            com.nextcraft.forge.runtime.ErrorLog.swallowed("ApiKeyVault", error)
+            val nonce = Base64.decode(encodedNonce, Base64.NO_WRAP)
+            val body = Base64.decode(encodedBody, Base64.NO_WRAP)
+            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, resolveOrCreateHardwareKey(), GCMParameterSpec(GCM_TAG_BITS, nonce))
+            normalizeToken(cipher.doFinal(body).decodeToString())
+        }.onFailure { err ->
+            Log.w(LOG_TAG, "Decrypt failed: ${err::class.simpleName}")
+            if (err is AEADBadTagException || err is IllegalArgumentException) {
+                eraseSlot(slotKey)
+            }
         }.getOrNull()
     }
 
-    /**
-     * API keys and OAuth tokens never contain whitespace. Terminals often wrap long tokens such as
-     * `claude setup-token` output, so pasted secrets can include line breaks or a "Bearer " prefix.
-     */
-    private fun cleanSecret(secret: String): String =
-        secret.trim().removePrefix("Bearer ").removePrefix("bearer ").filterNot(Char::isWhitespace)
-
-    private fun removeEncrypted(storageId: String) {
-        preferences.edit().remove("$storageId.iv").remove("$storageId.value").apply()
+    private fun normalizeToken(raw: String): String {
+        val stripped = raw.trim()
+            .removePrefix("Bearer ")
+            .removePrefix("bearer ")
+        val sb = StringBuilder(stripped.length)
+        for (ch in stripped) {
+            if (!ch.isWhitespace()) sb.append(ch)
+        }
+        return sb.toString()
     }
 
-    private fun ensurePool(providerId: String): List<ApiKeyInfo> {
-        readPool(providerId).takeIf(List<ApiKeyInfo>::isNotEmpty)?.let { return it }
-        if (!preferences.contains("$providerId.value")) return emptyList()
-        val legacySecret = getEncrypted(providerId) ?: return emptyList()
-        val legacy = ApiKeyInfo("legacy", "Primary", true)
-        putEncrypted(secretKey(providerId, legacy.id), legacySecret)
-        removeEncrypted(providerId)
-        savePool(providerId, listOf(legacy))
-        setActiveId(providerId, legacy.id)
-        return listOf(legacy)
+    private fun eraseSlot(slotKey: String) {
+        store.edit()
+            .remove(slotKey + SUFFIX_NONCE)
+            .remove(slotKey + SUFFIX_CIPHERTEXT)
+            .apply()
     }
 
-    private fun readPool(providerId: String): List<ApiKeyInfo> = runCatching {
-        val rawPool = preferences.getString(poolKey(providerId), "[]").orEmpty().ifBlank { "[]" }
-        val array = JSONArray(rawPool)
-        (0 until array.length()).mapNotNull { index ->
-            array.optJSONObject(index)?.let { item ->
-                val id = item.optString("id")
-                if (id.isBlank()) null else ApiKeyInfo(id, item.optString("name").ifBlank { "API key" })
+    private fun loadOrMigratePool(providerId: String): List<ApiKeyInfo> {
+        val currentEntries = decodePoolJson(providerId)
+        if (currentEntries.isNotEmpty()) return currentEntries
+        if (!store.contains(providerId + SUFFIX_CIPHERTEXT)) return emptyList()
+
+        val migratedSecret = unsealSlot(providerId) ?: return emptyList()
+        val migratedEntry = ApiKeyInfo(id = "legacy", name = "Primary", isActive = true)
+        sealAndCommit(slotId(providerId, migratedEntry.id), migratedSecret)
+        eraseSlot(providerId)
+        val singlePool = listOf(migratedEntry)
+        persistPoolIndex(providerId, singlePool)
+        writeSelectedKeyId(providerId, migratedEntry.id)
+        return singlePool
+    }
+
+    private fun decodePoolJson(providerId: String): List<ApiKeyInfo> = runCatching {
+        val rawJson = store.getString(poolIndexPref(providerId), null)?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val jsonList = JSONArray(rawJson)
+        buildList(jsonList.length()) {
+            for (idx in 0 until jsonList.length()) {
+                val node = jsonList.optJSONObject(idx) ?: continue
+                val keyId = node.optString("id").trim()
+                if (keyId.isNotEmpty()) {
+                    val label = node.optString("name").trim().ifEmpty { "API key" }
+                    add(ApiKeyInfo(id = keyId, name = label))
+                }
             }
         }
     }.getOrDefault(emptyList())
 
-    private fun savePool(providerId: String, entries: List<ApiKeyInfo>) {
-        val array = JSONArray()
-        entries.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name)) }
-        preferences.edit().putString(poolKey(providerId), array.toString()).commit()
+    private fun persistPoolIndex(providerId: String, entries: List<ApiKeyInfo>) {
+        val serialized = JSONArray().apply {
+            for (entry in entries) {
+                put(JSONObject().put("id", entry.id).put("name", entry.name))
+            }
+        }.toString()
+        store.edit().putString(poolIndexPref(providerId), serialized).commit()
     }
 
-    private fun activeId(providerId: String): String? = preferences.getString(activeKey(providerId), null)
-    private fun setActiveId(providerId: String, id: String) = preferences.edit().putString(activeKey(providerId), id).commit()
-    private fun poolKey(providerId: String) = "$providerId.pool"
-    private fun activeKey(providerId: String) = "$providerId.active"
-    private fun secretKey(providerId: String, id: String) = "$providerId.pool.$id"
+    private fun readSelectedKeyId(providerId: String): String? =
+        store.getString(selectedSlotPref(providerId), null)
 
-    private fun getOrCreateKey(): SecretKey {
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        if (keyStore.containsAlias(alias)) {
-            // An existing key that cannot be loaded right now is a transient keystore error.
-            // Do not delete it: that would orphan every ciphertext written with it.
-            return keyStore.getKey(alias, null) as? SecretKey
-                ?: throw IllegalStateException("AndroidKeyStore key '$alias' is unavailable")
+    private fun writeSelectedKeyId(providerId: String, id: String) {
+        store.edit().putString(selectedSlotPref(providerId), id).commit()
+    }
+
+    private fun poolIndexPref(providerId: String): String = "$providerId.pool"
+    private fun selectedSlotPref(providerId: String): String = "$providerId.active"
+    private fun slotId(providerId: String, id: String): String = "$providerId.pool.$id"
+
+    private fun openAndroidKeyStore(): KeyStore =
+        KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
+
+    private fun resolveOrCreateHardwareKey(): SecretKey {
+        val ks = openAndroidKeyStore()
+        val targetAlias = currentKeyAlias
+        if (ks.containsAlias(targetAlias)) {
+            return ks.getKey(targetAlias, null) as? SecretKey
+                ?: throw IllegalStateException("AndroidKeyStore key '$targetAlias' is unavailable")
         }
-        return createKey(alias)
+        return generateHardwareAesKey(targetAlias)
     }
 
-    private fun createKey(keyAlias: String): SecretKey {
-        // No user-authentication binding: the app never shows a BiometricPrompt/Keyguard, so an
-        // auth-bound key would throw UserNotAuthenticatedException minutes after each unlock.
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
-            init(
-                KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .build(),
-            )
+    private fun generateHardwareAesKey(targetAlias: String): SecretKey {
+        val spec = KeyGenParameterSpec.Builder(
+            targetAlias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .build()
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER).run {
+            init(spec)
             generateKey()
         }
     }
 
     private companion object {
-        const val LEGACY_KEY_ALIAS = "nextcraft-provider-key"
-        const val KEY_ALIAS_PREF = "keystore.alias"
+        const val LOG_TAG = "ApiKeyVault"
+        const val VAULT_PREFS_NAME = "nextcraft_secrets"
+        const val KEYSTORE_PROVIDER = "AndroidKeyStore"
+        const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
+        const val GCM_TAG_BITS = 128
+        const val DEFAULT_MASTER_ALIAS = "nextcraft-provider-key"
+        const val META_KEY_ALIAS = "keystore.alias"
+        const val SUFFIX_NONCE = ".iv"
+        const val SUFFIX_CIPHERTEXT = ".value"
     }
 }
-
-data class ApiKeyInfo(val id: String, val name: String, val isActive: Boolean = false)
-
-data class ApiKeyCredential(val id: String, val name: String, val secret: String, val isActive: Boolean)

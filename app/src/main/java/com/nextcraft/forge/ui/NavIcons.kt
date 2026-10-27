@@ -1,16 +1,15 @@
 package com.nextcraft.forge.ui
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -41,18 +40,20 @@ fun NavGlyph(
     size: Dp = 24.dp,
 ) {
     val animate = live && !reduceMotion
-    // One shared 0..1 clock; each glyph reads it differently (blink vs orbit). It only exists while the glyph is
-    // live: an infinite transition requests a frame on every vsync, so an idle bottom bar kept the app busy.
-    val t = if (animate) {
-        val transition = rememberInfiniteTransition()
-        val clock by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
-        )
-        clock
+    // Discrete low-power clock (~8 FPS only while live, 0 FPS when idle): avoids 120Hz VSync busy-rendering
+    // that previously consumed ~90% CPU on Main/RenderThread and kept Gold cores awake while waiting.
+    var t by remember { mutableStateOf(0f) }
+    if (animate) {
+        LaunchedEffect(Unit) {
+            var step = 0
+            while (true) {
+                delay(125L)
+                step = (step + 1) % 12
+                t = step / 12f
+            }
+        }
     } else {
-        0f
+        t = 0f
     }
     Canvas(modifier = modifier.size(size)) {
         val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)

@@ -125,7 +125,17 @@ class GeminiVideoClient {
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            code to stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            code to stream?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+                val sb = StringBuilder()
+                val buf = CharArray(4 * 1024)
+                val maxChars = 4 * 1024 * 1024
+                while (sb.length < maxChars) {
+                    val n = reader.read(buf, 0, minOf(buf.size, maxChars - sb.length))
+                    if (n <= 0) break
+                    sb.append(buf, 0, n)
+                }
+                sb.toString()
+            }.orEmpty()
         } finally {
             connection.disconnect()
         }

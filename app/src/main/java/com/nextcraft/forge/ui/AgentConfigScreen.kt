@@ -132,13 +132,25 @@ fun AgentConfigScreen(
             onSelect = { viewModel.selectAgent(agents[it]) },
             equalWidth = true, // 3 providers fit side by side; scrolling cut "Antigravity" at the edge
         )
-        val agent = state.agentKind
-        val agentInstalled = agent in state.installedAgents
+        val reduceMotion = rememberReduceMotion()
+        var lastAgentIndex by remember { mutableStateOf(agents.indexOf(state.agentKind).coerceAtLeast(0)) }
+        val currentAgentIndex = agents.indexOf(state.agentKind).coerceAtLeast(0)
+        val agentForward = currentAgentIndex >= lastAgentIndex
+        androidx.compose.runtime.SideEffect { lastAgentIndex = currentAgentIndex }
+
         var connectorsOpen by rememberSaveable { mutableStateOf(false) }
-        if (agent == AgentKind.CLAUDE_CODE && agentInstalled) {
+        if (connectorsOpen) ConnectorsSheet(state = state, viewModel = viewModel, onDismiss = { connectorsOpen = false })
+
+        androidx.compose.animation.AnimatedContent(
+            targetState = state.agentKind,
+            transitionSpec = { ForgeMotion.tabTransition(forward = agentForward, reduceMotion = reduceMotion) },
+            label = "agentConfigSwitch",
+        ) { agent ->
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        val agentInstalled = agent in state.installedAgents
+        if (agentInstalled) {
             ForgeTextButton(onClick = { connectorsOpen = true }) { Text(stringResource(R.string.connectors_open)) }
         }
-        if (connectorsOpen) ConnectorsSheet(state = state, viewModel = viewModel, onDismiss = { connectorsOpen = false })
 
         if (!agentInstalled) {
             // Not installed: one card, one call to action (the reference's "X is not installed" state).
@@ -515,6 +527,8 @@ fun AgentConfigScreen(
                 }
             }
         }
+        }
+        }
 
         Text(
             text = stringResource(R.string.agent_footer_security),
@@ -578,9 +592,14 @@ private fun AgentDisclosureRow(
     onToggle: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    val reduceMotion = rememberReduceMotion()
     Column {
         SettingsRow(icon = icon, title = title, subtitle = subtitle, onClick = onToggle, trailing = { Chevron(expanded) })
-        AnimatedVisibility(visible = expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
             Column {
                 ThinDivider()
                 content()

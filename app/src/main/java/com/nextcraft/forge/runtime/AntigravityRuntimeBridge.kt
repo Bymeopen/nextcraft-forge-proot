@@ -1,9 +1,8 @@
 package com.nextcraft.forge.runtime
 
-import com.nextcraft.forge.ui.UiText
-import com.nextcraft.forge.R
 import android.content.Context
-import com.nextcraft.forge.model.stringOrEmpty
+import androidx.annotation.StringRes
+import com.nextcraft.forge.R
 import com.nextcraft.forge.model.AgentKind
 import com.nextcraft.forge.model.ChangeItem
 import com.nextcraft.forge.model.ChatMessage
@@ -11,13 +10,17 @@ import com.nextcraft.forge.model.ProjectKind
 import com.nextcraft.forge.model.ProviderProfile
 import com.nextcraft.forge.model.RuntimeEvent
 import com.nextcraft.forge.model.ToolRequest
+import com.nextcraft.forge.model.stringOrEmpty
+import com.nextcraft.forge.ui.UiText
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -26,7 +29,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
-enum class AntigravityAuthStatus { SIGNED_OUT, STARTING, AWAITING_CODE, COMPLETING, SIGNED_IN, ERROR }
+enum class AntigravityAuthStatus {
+    SIGNED_OUT,
+    STARTING,
+    AWAITING_CODE,
+    COMPLETING,
+    SIGNED_IN,
+    ERROR,
+}
 
 data class AntigravityAuthState(
     val status: AntigravityAuthStatus = AntigravityAuthStatus.SIGNED_OUT,
@@ -39,8 +49,9 @@ internal sealed interface AntigravityParsedEvent {
     data class Initialized(val conversationId: String) : AntigravityParsedEvent
     data class Text(val value: String, val done: Boolean = false) : AntigravityParsedEvent
     data object ResponseDone : AntigravityParsedEvent
-    data class ToolStarted(val name: String, val detail: String) : AntigravityParsedEvent
-    data class ToolCompleted(val name: String, val detail: String) : AntigravityParsedEvent
+    data class ToolStarted(val name: String, val detail: String, val rawName: String = name) : AntigravityParsedEvent
+    data class ToolCompleted(val name: String, val detail: String, val rawName: String = name) : AntigravityParsedEvent
+    data class ScheduledWakeup(val intervalMinutes: Int, val prompt: String) : AntigravityParsedEvent
     data class Result(
         val conversationId: String?,
         val status: String,
@@ -51,80 +62,99 @@ internal sealed interface AntigravityParsedEvent {
 
 internal object AntigravityEventParser {
     fun parse(line: String): AntigravityParsedEvent? {
-        val root = runCatching { JSONObject(line) }.getOrNull() ?: return null
-        return when (root.stringOrEmpty("event")) {
-            "init" -> root.stringOrEmpty("conversation_id")
+        val json = runCatching { JSONObject(line) }.getOrNull() ?: return null
+        return when (json.stringOrEmpty("event")) {
+            "init" -> json.stringOrEmpty("conversation_id")
                 .takeIf(String::isNotBlank)
                 ?.let(AntigravityParsedEvent::Initialized)
+
             "step_update" -> {
-                val step = root.optJSONObject("step_update") ?: return null
-                val state = step.stringOrEmpty("state")
-                val type = step.stringOrEmpty("step_type")
-                val delta = step.stringOrEmpty("text_delta")
-                if (delta.isNotEmpty()) {
+                val payload = json.optJSONObject("step_update") ?: return null
+                val stepState = payload.stringOrEmpty("state")
+                val stepKind = payload.stringOrEmpty("step_type")
+                val chunk = payload.stringOrEmpty("text_delta")
+                if (chunk.isNotEmpty()) {
                     return AntigravityParsedEvent.Text(
-                        value = delta,
-                        done = type.equals("agent_response", true) && state == "DONE",
+                        value = chunk,
+                        done = stepKind.equals("agent_response", ignoreCase = true) && stepState == "DONE",
                     )
                 }
-                if (type.equals("agent_response", true) && state == "DONE") {
+                if (stepKind.equals("agent_response", ignoreCase = true) && stepState == "DONE") {
                     return AntigravityParsedEvent.ResponseDone
                 }
-                if (type.contains("tool", true) || type.contains("command", true)) {
-                    val rawName = step.stringOrEmpty("tool_name").ifBlank {
-                        step.optJSONObject("tool_info")?.stringOrEmpty("name").orEmpty()
-                    }.ifBlank { type.ifBlank { "Tool" } }
-                    val name = antigravityToolDisplayName(rawName)
-                    val detail = antigravityToolDetail(step, rawName).ifBlank { name }
-                    if (state in setOf("DONE", "ERROR")) {
-                        val output = step.optJSONObject("tool_info")
-                            ?.stringOrEmpty("output")
-                            ?.takeIf(String::isNotBlank)
-                            ?.let(::antigravityToolOutput)
-                        val error = step.optJSONObject("tool_info")
-                            ?.optJSONObject("error")
-                            ?.stringOrEmpty("message")
-                            ?.takeIf(String::isNotBlank)
-                            ?.let(::redactToolDetail)
-                        AntigravityParsedEvent.ToolCompleted(name, output ?: error ?: detail)
-                    } else {
-                        AntigravityParsedEvent.ToolStarted(name, detail)
+                if (stepKind.contains("tool", ignoreCase = true) || stepKind.contains("command", ignoreCase = true)) {
+                    val toolId = payload.stringOrEmpty("tool_name").ifBlank {
+                        payload.optJSONObject("tool_info")?.stringOrEmpty("name").orEmpty()
+                    }.ifBlank { stepKind.ifBlank { "Tool" } }
+                    if (toolId.equals("schedule", ignoreCase = true)) {
+                        val argNode = payload.optJSONObject("tool_info")?.optJSONObject("parameters")
+                        val wakePrompt = argNode?.stringOrEmpty("Prompt")?.trim()?.removeSurrounding("\"")?.trim().orEmpty()
+                        val waitSec = argNode?.opt("DurationSeconds")?.toString()?.trim()?.toLongOrNull() ?: 0L
+                        if (wakePrompt.isNotBlank() && waitSec >= 60L) {
+                            val clampedMins = ((waitSec + 59L) / 60L).coerceIn(5L, 7L * 24L * 60L).toInt()
+                            return AntigravityParsedEvent.ScheduledWakeup(clampedMins, wakePrompt)
+                        }
                     }
-                } else null
+                    val uiLabel = formatAgyToolLabel(toolId)
+                    val summary = extractAgyToolSummary(payload, toolId).ifBlank { uiLabel }
+                    if (stepState == "DONE" || stepState == "ERROR") {
+                        val infoObj = payload.optJSONObject("tool_info")
+                        val rawOut = infoObj?.stringOrEmpty("output")?.takeIf(String::isNotBlank)?.let(::scrubAgyToolOutput)
+                        val rawErr = infoObj?.optJSONObject("error")?.stringOrEmpty("message")?.takeIf(String::isNotBlank)?.let(::scrubAgyToolSummary)
+                        AntigravityParsedEvent.ToolCompleted(uiLabel, rawOut ?: rawErr ?: summary, toolId)
+                    } else {
+                        AntigravityParsedEvent.ToolStarted(uiLabel, summary, toolId)
+                    }
+                } else {
+                    null
+                }
             }
+
             "result" -> {
-                val result = root.optJSONObject("result") ?: root
+                val resNode = json.optJSONObject("result") ?: json
                 AntigravityParsedEvent.Result(
-                    result.stringOrEmpty("conversation_id").takeIf(String::isNotBlank),
-                    result.stringOrEmpty("status", "ERROR"),
-                    result.stringOrEmpty("response").takeIf(String::isNotBlank),
-                    result.stringOrEmpty("error").takeIf(String::isNotBlank),
+                    conversationId = resNode.stringOrEmpty("conversation_id").takeIf(String::isNotBlank),
+                    status = resNode.stringOrEmpty("status", "ERROR"),
+                    response = resNode.stringOrEmpty("response").takeIf(String::isNotBlank),
+                    error = resNode.stringOrEmpty("error").takeIf(String::isNotBlank),
                 )
             }
-            else -> null // Forward compatible with new agy event types.
+
+            else -> null
         }
     }
 }
 
-private fun antigravityToolDisplayName(name: String): String = when (name.lowercase()) {
+private fun formatAgyToolLabel(rawToolId: String): String = when (rawToolId.lowercase()) {
     "run_command" -> "Bash"
-    "write_to_file", "replace_file_content", "multi_replace_file_content" -> "Write"
-    "view_file" -> "Read"
+    "write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file" -> "Write"
+    "view_file", "read_file" -> "Read"
     "list_dir" -> "List files"
     "grep_search", "search_files" -> "Search"
     "schedule" -> "Wait"
     "manage_task" -> "Manage task"
-    else -> name.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    "call_mcp_tool" -> "MCP"
+    else -> if (rawToolId.startsWith("mcp_", ignoreCase = true)) {
+        "MCP · " + rawToolId.removePrefix("mcp_").replace('_', ' ')
+    } else {
+        rawToolId.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
 }
 
-private fun antigravityToolDetail(step: JSONObject, rawName: String): String {
-    step.stringOrEmpty("description").takeIf(String::isNotBlank)?.let { return redactToolDetail(it) }
-    val info = step.optJSONObject("tool_info")
-    val parameters = info?.optJSONObject("parameters")
-    val preferredKeys = when (rawName.lowercase()) {
+private fun extractAgyToolSummary(stepNode: JSONObject, rawToolId: String): String {
+    stepNode.stringOrEmpty("description").takeIf(String::isNotBlank)?.let { return scrubAgyToolSummary(it) }
+    val toolInfo = stepNode.optJSONObject("tool_info")
+    val params = toolInfo?.optJSONObject("parameters")
+    if (rawToolId.equals("call_mcp_tool", ignoreCase = true) && params != null) {
+        val srv = params.stringOrEmpty("ServerName")
+        val fn = params.stringOrEmpty("ToolName")
+        if (srv.isNotBlank() || fn.isNotBlank()) {
+            return scrubAgyToolSummary(listOf(srv, fn).filter(String::isNotBlank).joinToString(" / "))
+        }
+    }
+    val candidateKeys = when (rawToolId.lowercase()) {
         "run_command" -> listOf("CommandLine", "command", "cmd")
-        "write_to_file", "replace_file_content", "multi_replace_file_content" ->
-            listOf("TargetFile", "AbsolutePath", "path", "file")
+        "write_to_file", "replace_file_content", "multi_replace_file_content" -> listOf("TargetFile", "AbsolutePath", "path", "file")
         "view_file" -> listOf("AbsolutePath", "TargetFile", "path", "file")
         "list_dir" -> listOf("DirectoryPath", "AbsolutePath", "path")
         "grep_search", "search_files" -> listOf("Query", "Pattern", "query", "pattern")
@@ -132,57 +162,52 @@ private fun antigravityToolDetail(step: JSONObject, rawName: String): String {
         "manage_task" -> listOf("Action", "TaskId")
         else -> emptyList()
     }
-    preferredKeys.forEach { key ->
-        parameters?.opt(key)?.toString()?.takeIf { it.isNotBlank() && it != "null" }?.let {
-            val prefix = when {
-                rawName.equals("schedule", true) && key == "DurationSeconds" -> "Wait "
-                rawName.equals("manage_task", true) -> "$key: "
-                else -> ""
-            }
-            val suffix = if (rawName.equals("schedule", true) && key == "DurationSeconds") "s" else ""
-            return redactToolDetail(prefix + it + suffix)
+    for (k in candidateKeys) {
+        val v = params?.opt(k)?.toString()?.takeIf { it.isNotBlank() && it != "null" } ?: continue
+        val lead = when {
+            rawToolId.equals("schedule", ignoreCase = true) && k == "DurationSeconds" -> "Wait "
+            rawToolId.equals("manage_task", ignoreCase = true) -> "$k: "
+            else -> ""
         }
+        val tail = if (rawToolId.equals("schedule", ignoreCase = true) && k == "DurationSeconds") "s" else ""
+        return scrubAgyToolSummary("$lead$v$tail")
     }
-    return parameters?.toString()?.takeUnless { it == "{}" }?.let(::redactToolDetail)
-        ?: step.optJSONObject("tool")?.toString()?.let(::redactToolDetail)
-        .orEmpty()
+    return params?.toString()?.takeUnless { it == "{}" }?.let(::scrubAgyToolSummary)
+        ?: stepNode.optJSONObject("tool")?.toString()?.let(::scrubAgyToolSummary).orEmpty()
 }
 
-private fun redactToolDetail(value: String): String = value
-    .replace(Regex("(?i)(api[_-]?key|token|secret|password)(\\s*[=:]\\s*)([^\\s'\"]+)"), "$1$2••••")
-    .replace(Regex("(?i)(authorization:\\s*bearer\\s+)[^\\s'\"]+"), "$1••••")
+private val SECRET_KEY_VALUE_REGEX = Regex("(?i)(api[_-]?key|token|secret|password)(\\s*[=:]\\s*)([^\\s'\"]+)")
+private val BEARER_HEADER_REGEX = Regex("(?i)(authorization:\\s*bearer\\s+)[^\\s'\"]+")
+
+private fun scrubAgyToolSummary(raw: String): String = raw
+    .replace(SECRET_KEY_VALUE_REGEX, "$1$2••••")
+    .replace(BEARER_HEADER_REGEX, "$1••••")
     .replace(Regex("\\s+"), " ")
     .trim()
     .take(500)
 
-private fun antigravityToolOutput(value: String): String {
-    val redacted = value
-        .replace(Regex("(?i)(api[_-]?key|token|secret|password)(\\s*[=:]\\s*)([^\\s'\"]+)"), "$1$2••••")
-        .replace(Regex("(?i)(authorization:\\s*bearer\\s+)[^\\s'\"]+"), "$1••••")
+private fun scrubAgyToolOutput(raw: String): String {
+    val cleaned = raw
+        .replace(SECRET_KEY_VALUE_REGEX, "$1$2••••")
+        .replace(BEARER_HEADER_REGEX, "$1••••")
         .replace("\r\n", "\n")
         .replace('\r', '\n')
         .trim()
-    return if (redacted.length <= 6_000) redacted else "…\n" + redacted.takeLast(6_000)
+    return if (cleaned.length <= 6_000) cleaned else "…\n" + cleaned.takeLast(6_000)
 }
 
-/** Official Antigravity CLI bridge running inside NextCraft Forge Root Chroot. OAuth and credentials remain owned by agy. */
-private const val HELLO_TIMEOUT_MILLIS = 90_000L
+private const val DEFAULT_HELLO_TIMEOUT_MS = 90_000L
 
-/**
- * Stream-json's result event is terminal, but agy may keep its input loop alive
- * after emitting it. Stop the entire spawned process group so task completion is
- * driven by the protocol rather than an implementation-specific process exit.
- */
-private suspend fun stopAfterTerminalResult(process: Process) {
-    if (!process.isAlive) return
-    process.destroy()
+private suspend fun terminateProcessAfterResult(proc: Process) {
+    if (!proc.isAlive) return
+    proc.destroy()
     repeat(20) {
-        if (!process.isAlive) return
+        if (!proc.isAlive) return
         delay(50)
     }
-    if (process.isAlive) process.destroyForcibly()
+    if (proc.isAlive) proc.destroyForcibly()
     repeat(20) {
-        if (!process.isAlive) return
+        if (!proc.isAlive) return
         delay(50)
     }
 }
@@ -191,226 +216,224 @@ class AntigravityRuntimeBridge(
     private val context: Context,
     private val model: () -> String,
     private val effort: () -> String,
-    /** The chat's saved agy conversation ([SavedConversation.encode]; a bare id from older builds also works). */
     private val conversationId: (String) -> String?,
     private val saveConversationId: (String, String?) -> Unit,
 ) : RuntimeBridge {
-    private val installer = RuntimeInstaller(context)
-    private val checkpoints = WorkspaceCheckpoints(context.filesDir, context)
-    private val eventBus = MutableSharedFlow<RuntimeEvent>(
+    private val runtimeInstaller = RuntimeInstaller(context)
+    private val workspaceCheckpoints = WorkspaceCheckpoints(context.filesDir, context)
+    private val sharedEvents = MutableSharedFlow<RuntimeEvent>(
         extraBufferCapacity = 1024,
-        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.SUSPEND,
+        onBufferOverflow = BufferOverflow.SUSPEND,
     )
-    override val events: Flow<RuntimeEvent> = eventBus
-    private val finished = ConcurrentHashMap.newKeySet<String>()
-    @Volatile private var activeProcess: Process? = null
-    @Volatile private var activeSessionId: String? = null
-    @Volatile private var userStopRequested = false
-    private val foreground = ForegroundSession(context, "AntigravityBridge")
+    override val events: Flow<RuntimeEvent> = sharedEvents
+    private val completedSessionIds = ConcurrentHashMap.newKeySet<String>()
 
-    @Volatile private var activeProjectSlug = ""
+    @Volatile private var runningProcess: Process? = null
+    @Volatile private var currentSessionId: String? = null
+    @Volatile private var stopRequestedByUser = false
+    @Volatile private var currentSlug = ""
+    private val fgNotifier = ForegroundSession(context, "AntigravityBridge")
 
-    /**
-     * agy kept alive after its turn: the next message to the same project, model and conversation is written to its
-     * stdin, skipping the cold start (sign-in, quota and model lookup, conversation resume) of a new process.
-     */
-    private class WarmAgy(
-        val process: Process,
-        val tailer: InotifyLogTailer,
-        val outputFile: File,
+    private class WarmAgyInstance(
+        val proc: Process,
+        val logTailer: InotifyLogTailer,
+        val logFile: File,
         val projectId: String,
-        val model: String,
-        val effort: String,
-        val conversationId: String?,
+        val modelId: String,
+        val effortLevel: String,
+        val convId: String?,
     )
-    @Volatile private var warm: WarmAgy? = null
-    @Volatile private var warmGeneration = 0L
-    /**
-     * null until known; false once agy showed it only starts on end of input, so every turn closes stdin. Saved per
-     * agy version, so the 20 s probe that finds this out runs once, not after every app restart.
-     */
-    private val warmModeFile = File(context.filesDir, "agy-warm-mode")
-    @Volatile private var warmSupported: Boolean? = null
-    @Volatile private var warmModeLoaded = false
 
-    private fun agyVersion(): String = installer.installedAgentVersions()[AgentKind.ANTIGRAVITY].orEmpty()
+    @Volatile private var standbyInstance: WarmAgyInstance? = null
+    @Volatile private var standbyEpoch = 0L
+    private val warmSupportCacheFile = File(context.filesDir, "agy-warm-mode")
+    @Volatile private var supportsWarmStdin: Boolean? = null
+    @Volatile private var warmCacheChecked = false
 
-    private fun readWarmMode(): Boolean? = runCatching {
-        val (version, mode) = warmModeFile.readText().trim().split(' ', limit = 2)
-        if (version != agyVersion()) null else mode.toBooleanStrictOrNull()
+    private fun installedAgyVersion(): String =
+        runtimeInstaller.installedAgentVersions()[AgentKind.ANTIGRAVITY].orEmpty()
+
+    private fun loadCachedWarmSupport(): Boolean? = runCatching {
+        val parts = warmSupportCacheFile.readText().trim().split(' ', limit = 2)
+        if (parts.size == 2 && parts[0] == installedAgyVersion()) parts[1].toBooleanStrictOrNull() else null
     }.getOrNull()
 
-    private fun rememberWarmMode(supported: Boolean) {
-        warmSupported = supported
-        runCatching { warmModeFile.writeText("${agyVersion()} $supported") }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+    private fun persistWarmSupport(supported: Boolean) {
+        supportsWarmStdin = supported
+        runCatching { warmSupportCacheFile.writeText("${installedAgyVersion()} $supported") }
+            .onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
     }
 
-    private fun closeWarm(entry: WarmAgy?) {
-        entry ?: return
-        runCatching { entry.tailer.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
-        runCatching { entry.process.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+    private fun disposeWarmInstance(instance: WarmAgyInstance?) {
+        instance ?: return
+        runCatching { instance.logTailer.close() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+        runCatching { instance.proc.destroy() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         Thread {
             runCatching {
                 Thread.sleep(500)
-                if (entry.process.isAlive) entry.process.destroyForcibly()
-                entry.outputFile.delete()
-            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                if (instance.proc.isAlive) instance.proc.destroyForcibly()
+                instance.logFile.delete()
+            }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         }.apply { isDaemon = true }.start()
     }
 
-    /**
-     * Reaps orphaned `/root/.local/bin/agy --input-format stream-json` processes whose parent died (PPID == 1) and
-     * trims CLI logs older than 3 days.
-     */
-    private fun reapOrphanedAgyProcessesAndOldLogs() {
+    private fun sweepOrphanedProcessesAndLogs() {
         Thread({
             runCatching {
-                val script = "for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do " +
+                val cmd = "for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do " +
                     "ppid=\$(awk '/^PPid:/{print \$2}' /proc/\$p/status 2>/dev/null); " +
                     "[ \"\$ppid\" = \"1\" ] && kill -9 \$p 2>/dev/null; done; true"
-                val proc = ProcessBuilder("su", "-c", script)
+                val shellArgs = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", cmd) else listOf("/system/bin/sh", "-c", cmd)
+                val reaper = ProcessBuilder(shellArgs)
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
                     .start()
-                if (!proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) proc.destroyForcibly()
-            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                if (!reaper.waitFor(5, TimeUnit.SECONDS)) reaper.destroyForcibly()
+            }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
             runCatching {
-                val cutoff = System.currentTimeMillis() - 3L * 24 * 60 * 60 * 1_000L
-                val logDir = File(installer.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
-                logDir.listFiles()?.forEach { file ->
-                    if (file.isFile && file.name.startsWith("cli-") && file.lastModified() < cutoff) {
-                        file.delete()
-                    }
+                val thresholdMs = System.currentTimeMillis() - 3L * 24L * 3600L * 1000L
+                val cliLogsDir = File(runtimeInstaller.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
+                cliLogsDir.listFiles()?.forEach { f ->
+                    if (f.isFile && f.name.startsWith("cli-") && f.lastModified() < thresholdMs) f.delete()
                 }
-            }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+            }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         }, "forge-agy-orphan-reaper").apply { isDaemon = true }.start()
     }
 
-    /** An idle warm agy holds memory in the chroot; let it go after a while without messages. */
-    private fun scheduleWarmExpiry(entry: WarmAgy) {
-        val generation = ++warmGeneration
+    private fun applyPowerAffinityProfile(lowPowerStandby: Boolean) {
+        Thread({
+            runCatching {
+                val cpuMask = if (lowPowerStandby) "0f" else "ff"
+                val cmd = buildString {
+                    append("for p in \$(pgrep -f '[/]root/[.]local/bin/agy.*--input-format stream-json' 2>/dev/null); do ")
+                    append("taskset -ap $cpuMask \$p >/dev/null 2>&1 || true; ")
+                    append("done; ")
+                    if (lowPowerStandby) {
+                        append("for r in /sys/class/remoteproc/remoteproc*/power/control; do [ -w \"\$r\" ] && echo auto > \"\$r\" 2>/dev/null || true; done; ")
+                    }
+                    append("true")
+                }
+                val shellArgs = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", cmd) else listOf("/system/bin/sh", "-c", cmd)
+                val tuner = ProcessBuilder(shellArgs)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
+                    .start()
+                if (!tuner.waitFor(3, TimeUnit.SECONDS)) tuner.destroyForcibly()
+            }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+        }, "forge-agy-standby-power").apply { isDaemon = true }.start()
+    }
+
+    private fun armStandbyEvictionTimer(instance: WarmAgyInstance) {
+        applyPowerAffinityProfile(lowPowerStandby = true)
+        val epoch = ++standbyEpoch
         Thread {
-            runCatching { Thread.sleep(WARM_IDLE_MS) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
-            if (warmGeneration == generation && warm === entry) {
-                warm = null
-                closeWarm(entry)
+            runCatching { Thread.sleep(WARM_STANDBY_TTL_MS) }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+            if (standbyEpoch == epoch && standbyInstance === instance) {
+                standbyInstance = null
+                disposeWarmInstance(instance)
             }
         }.apply { isDaemon = true }.start()
     }
 
-    fun configureProjectRoot(projectId: String, rootPath: String) = checkpoints.configureProjectRoot(projectId, rootPath)
+    fun configureProjectRoot(projectId: String, rootPath: String) =
+        workspaceCheckpoints.configureProjectRoot(projectId, rootPath)
 
-    /**
-     * Lightweight connectivity probe: sends a tiny hello to agy and returns its
-     * reply text. No foreground service, no checkpoints, no saved conversation.
-     */
-    suspend fun hello(timeoutMillis: Long = HELLO_TIMEOUT_MILLIS): String = withContext(Dispatchers.IO) {
-        if (!installer.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
-            throw IllegalStateException("Antigravity CLI is not installed.")
-        }
-        val startedAtMillis = System.currentTimeMillis()
+    suspend fun hello(timeoutMillis: Long = DEFAULT_HELLO_TIMEOUT_MS): String = withContext(Dispatchers.IO) {
+        check(runtimeInstaller.isAgentInstalled(AgentKind.ANTIGRAVITY)) { "Antigravity CLI is not installed." }
+        val startMs = System.currentTimeMillis()
         try {
             withTimeout(timeoutMillis) {
-                val installed = installer.installedRuntime()
-                val probeDir = File(context.cacheDir, "agy-hello").apply { mkdirs() }
-                val command = buildList {
+                val rt = runtimeInstaller.installedRuntime()
+                val scratchDir = File(context.cacheDir, "agy-hello").apply { mkdirs() }
+                val cmdArgs = buildList {
                     add(RuntimeInstaller.AGY_GUEST_PATH)
-                    addAll(listOf("--input-format", "stream-json"))
-                    addAll(listOf("--output-format", "stream-json"))
-                    addAll(listOf("--print-timeout", "2m"))
+                    addAll(listOf("--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "2m"))
                     add("--dangerously-skip-permissions")
-                    addAntigravitySelection(model(), effort())
+                    appendModelAndEffortFlags(model(), effort())
                     add("--new-project")
                 }
-                val outputFile = File(context.cacheDir, "agy-hello-${System.nanoTime()}.log")
-                val process = installer.process(
-                    installed.chrootExec,
-                    installed.rootfs,
-                    probeDir,
+                val logOut = File(context.cacheDir, "agy-hello-${System.nanoTime()}.log")
+                val proc = runtimeInstaller.process(
+                    rt.chrootExec,
+                    rt.rootfs,
+                    scratchDir,
                     emptyMap(),
-                    command,
+                    cmdArgs,
                     guestWorkspacePath = "/workspace/hello",
                     emulateHardLinks = false,
-                    outputFile = outputFile,
+                    outputFile = logOut,
                     trustClaudeWorkspace = false,
                 )
                 try {
-                    val request = JSONObject()
+                    val helloPayload = JSONObject()
                         .put("event", "user")
                         .put("message", JSONObject().put("content", "Reply with exactly: ok"))
                         .toString() + "\n"
-                    process.outputStream.write(request.toByteArray())
-                    process.outputStream.flush()
-                    process.outputStream.close()
-                    var reply: String? = null
-                    var lastDiagnostic = ""
-                    fun handleLine(rawLine: String): Boolean {
-                        val line = rawLine.trimEnd('\r')
-                        if (line.isBlank()) return false
-                        lastDiagnostic = line.takeLast(500)
-                        when (val event = AntigravityEventParser.parse(line)) {
-                            is AntigravityParsedEvent.Text -> if (reply == null && event.value.isNotBlank()) reply = event.value
+                    proc.outputStream.write(helloPayload.toByteArray())
+                    proc.outputStream.flush()
+                    proc.outputStream.close()
+                    var capturedReply: String? = null
+                    var lastRawLine = ""
+                    fun inspectLine(raw: String): Boolean {
+                        val trimmed = raw.trimEnd('\r')
+                        if (trimmed.isBlank()) return false
+                        lastRawLine = trimmed.takeLast(500)
+                        when (val ev = AntigravityEventParser.parse(trimmed)) {
+                            is AntigravityParsedEvent.Text -> if (capturedReply == null && ev.value.isNotBlank()) capturedReply = ev.value
                             is AntigravityParsedEvent.Result -> {
-                                if (event.status.equals("SUCCESS", ignoreCase = true)) {
-                                    if (reply == null && !event.response.isNullOrBlank()) reply = event.response
+                                if (ev.status.equals("SUCCESS", ignoreCase = true)) {
+                                    if (capturedReply == null && !ev.response.isNullOrBlank()) capturedReply = ev.response
                                     return true
                                 }
-                                throw AntigravitySessionException(friendlyError(event.error ?: event.status))
+                                throw AntigravitySessionException(formatFriendlyError(ev.error ?: ev.status))
                             }
                             else -> Unit
                         }
                         return false
                     }
-                    var done = false
-                    InotifyLogTailer(outputFile).use { tailer ->
-                        while (!done && (process.isAlive || tailer.hasUnreadBytes())) {
-                            // readLines blocks without suspending, so withTimeout (and a cancel) could never fire here.
+                    var completed = false
+                    InotifyLogTailer(logOut).use { tailer ->
+                        while (!completed && (proc.isAlive || tailer.hasUnreadBytes())) {
                             ensureActive()
                             for (line in tailer.readLines(timeoutMs = 50L)) {
-                                if (handleLine(line)) {
-                                    done = true
+                                if (inspectLine(line)) {
+                                    completed = true
                                     break
                                 }
                             }
                         }
-                        if (!done) {
+                        if (!completed) {
                             for (line in tailer.readLines(timeoutMs = 0L, flushIncomplete = true)) {
-                                if (handleLine(line)) {
-                                    done = true
+                                if (inspectLine(line)) {
+                                    completed = true
                                     break
                                 }
                             }
                         }
                     }
-                    check(done) { friendlyError(lastDiagnostic.ifBlank { "Antigravity exited without answering" }) }
-                    stopAfterTerminalResult(process)
-                    reply?.trim().takeUnless { it.isNullOrEmpty() } ?: "ok"
+                    check(completed) { formatFriendlyError(lastRawLine.ifBlank { "Antigravity exited without answering" }) }
+                    terminateProcessAfterResult(proc)
+                    capturedReply?.trim().takeUnless { it.isNullOrEmpty() } ?: "ok"
                 } finally {
-                    runCatching { process.destroy() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
-                    runCatching {
-                        if (process.isAlive) process.destroyForcibly()
-                    }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
-                    runCatching { outputFile.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
-                    runCatching { probeDir.deleteRecursively() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                    runCatching { proc.destroy() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                    runCatching { if (proc.isAlive) proc.destroyForcibly() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                    runCatching { logOut.delete() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                    runCatching { scratchDir.deleteRecursively() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                 }
             }
-        } catch (e: TimeoutCancellationException) {
-            // The probe's own timeout ("Timed out waiting for 45000 ms") is not the 60-minute task limit: classify
-            // only what agy logged (network, server error, sign-in) and otherwise say the probe got no answer.
-            val diagnostic = recentAntigravityDiagnostic(startedAtMillis)
-            val noAnswer = "Antigravity did not answer within ${timeoutMillis / 1000} s. Check the connection and try again."
-            val message = if (diagnostic.isBlank()) {
-                noAnswer
+        } catch (_: TimeoutCancellationException) {
+            val diag = readRecentCliLogTail(startMs)
+            val fallbackMsg = "Antigravity did not answer within ${timeoutMillis / 1000} s. Check the connection and try again."
+            val resolvedMsg = if (diag.isBlank()) {
+                fallbackMsg
             } else {
-                antigravityFriendlyError("", diagnostic).takeUnless { it == ANTIGRAVITY_GENERIC_FAILURE } ?: noAnswer
+                antigravityFriendlyError("", diag).takeUnless { it == DEFAULT_AGY_ERROR_TEXT } ?: fallbackMsg
             }
-            throw AntigravitySessionException(message)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            throw AntigravitySessionException(
-                antigravityFriendlyError(e.message.orEmpty(), recentAntigravityDiagnostic(startedAtMillis)),
-            )
+            throw AntigravitySessionException(resolvedMsg)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (err: Throwable) {
+            throw AntigravitySessionException(antigravityFriendlyError(err.message.orEmpty(), readRecentCliLogTail(startMs)))
         }
     }
 
@@ -423,388 +446,398 @@ class AntigravityRuntimeBridge(
         provider: ProviderProfile,
     ): String = withContext(Dispatchers.IO + NonCancellable) {
         val sessionId = UUID.randomUUID().toString()
-        val sessionStartedAtMillis = System.currentTimeMillis()
-        activeSessionId = sessionId
-        userStopRequested = false
-        activeProjectSlug = projectSlug
-        foreground.begin()
-        finished.remove(sessionId)
-        eventBus.emit(RuntimeEvent.SessionStarted(sessionId))
-        if (!installer.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
-            emitFailure(sessionId, "Antigravity CLI is not installed. Open Settings → Coding agent to install it.")
-            activeSessionId = null
-            activeProjectSlug = ""
-            foreground.clearStart()
+        val turnStartMs = System.currentTimeMillis()
+        currentSessionId = sessionId
+        stopRequestedByUser = false
+        currentSlug = projectSlug
+        fgNotifier.begin()
+        completedSessionIds.remove(sessionId)
+        sharedEvents.emit(RuntimeEvent.SessionStarted(sessionId))
+        if (!runtimeInstaller.isAgentInstalled(AgentKind.ANTIGRAVITY)) {
+            dispatchSessionFailed(sessionId, "Antigravity CLI is not installed. Open Settings → Coding agent to install it.")
+            currentSessionId = null
+            currentSlug = ""
+            fgNotifier.clearStart()
             return@withContext sessionId
         }
 
-        var spawnedOutputFile: File? = null
-        var openTailer: InotifyLogTailer? = null
-        var keptWarm = false
-        var savedConversation: SavedConversation? = null
-        var stopHandler: (() -> Unit)? = null
+        var sessionLogFile: File? = null
+        var activeTailer: InotifyLogTailer? = null
+        var preservedForWarmStandby = false
+        var decodedConv: SavedConversation? = null
+        var cancelCallback: (() -> Unit)? = null
+
         runCatching {
-            stopHandler = {
-                userStopRequested = true
-                val running = activeProcess
-                if (running != null) {
+            cancelCallback = {
+                stopRequestedByUser = true
+                runningProcess?.let { proc ->
                     Thread {
                         runCatching {
-                            running.destroy()
+                            proc.destroy()
                             Thread.sleep(500)
-                            if (running.isAlive) running.destroyForcibly()
-                        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                            if (proc.isAlive) proc.destroyForcibly()
+                        }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                     }.apply { isDaemon = true }.start()
                 }
             }
-            stopHandler?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
-            startForegroundRuntime(projectSlug)
-            pushForegroundProgress("Starting Antigravity…")
-            val installed = installer.installedRuntime()
-            val workspace = checkpoints.ensureWorkspace(projectId)
-            checkpoints.createCheckpoint(projectId, workspace)
-            val before = checkpoints.snapshot(workspace)
-            // Read on the IO thread (it checks the installed agy version), once per app run.
-            if (!warmModeLoaded) {
-                warmSupported = readWarmMode()
-                warmModeLoaded = true
+            cancelCallback?.let { RuntimeTaskController.register("${RuntimeTaskController.AGENT}:$sessionId", it) }
+            fgNotifier.start(projectSlug)
+            updateForegroundStatus("Starting Antigravity…")
+            val rt = runtimeInstaller.installedRuntime()
+            val wsDir = workspaceCheckpoints.ensureWorkspace(projectId)
+            workspaceCheckpoints.createCheckpoint(projectId, wsDir)
+            val preSnapshot = workspaceCheckpoints.snapshot(wsDir)
+            if (!warmCacheChecked) {
+                supportsWarmStdin = loadCachedWarmSupport()
+                warmCacheChecked = true
             }
-            val currentModel = model()
-            val currentEffort = effort()
-            savedConversation = SavedConversation.decode(conversationId(projectId))
-            val currentConversation = savedConversation?.id
-            // agy only remembers its own conversation: messages it has not seen (all of them in a chat begun with
-            // another agent, or the turns another agent answered since) go along as text.
-            val unseen = conversationHistory.unseenBy(savedConversation).recentWithinCharacterBudget(MAX_HISTORY_CHARACTERS)
-            val promptWithHistory = StringBuilder()
-                .apply { appendConversationHistory(unseen, "/workspace/$projectSlug", resumed = savedConversation != null) }
-                .append(prompt).toString()
-            // The chat will hold the history plus this answer once the turn ends.
-            fun remember(id: String) = saveConversationId(projectId, SavedConversation(id, conversationHistory.size + 1).encode())
-            val previous = warm
-            warm = null
-            warmGeneration++
-            val reuse = previous?.takeIf {
-                warmSupported == true && it.process.isAlive && it.projectId == projectId &&
-                    it.model == currentModel && it.effort == currentEffort && it.conversationId == currentConversation
+            val selectedModel = model()
+            val selectedEffort = effort()
+            decodedConv = SavedConversation.decode(conversationId(projectId))
+            val existingConvId = decodedConv?.id
+            val unseenMessages = conversationHistory.unseenBy(decodedConv).recentWithinCharacterBudget(HISTORY_CHAR_BUDGET)
+            val fullUserPrompt = StringBuilder()
+                .apply { appendConversationHistory(unseenMessages, "/workspace/$projectSlug", resumed = decodedConv != null) }
+                .append(prompt)
+                .toString()
+
+            fun persistConvId(id: String) =
+                saveConversationId(projectId, SavedConversation(id, conversationHistory.size + 1).encode())
+
+            val prevWarm = standbyInstance
+            standbyInstance = null
+            standbyEpoch++
+            val reusableWarm = prevWarm?.takeIf {
+                supportsWarmStdin == true &&
+                    it.proc.isAlive &&
+                    it.projectId == projectId &&
+                    it.modelId == selectedModel &&
+                    it.effortLevel == selectedEffort &&
+                    it.convId == existingConvId
             }
-            if (reuse == null) {
-                closeWarm(previous)
-                reapOrphanedAgyProcessesAndOldLogs()
+            if (reusableWarm == null) {
+                disposeWarmInstance(prevWarm)
+                sweepOrphanedProcessesAndLogs()
             }
-            val process: Process
+            val proc: Process
             val tailer: InotifyLogTailer
-            if (reuse != null) {
-                process = reuse.process
-                tailer = reuse.tailer
-                spawnedOutputFile = reuse.outputFile
-                tailer.readLines(timeoutMs = 0L) // drop anything agy printed after the previous result
+            if (reusableWarm != null) {
+                applyPowerAffinityProfile(lowPowerStandby = false)
+                proc = reusableWarm.proc
+                tailer = reusableWarm.logTailer
+                sessionLogFile = reusableWarm.logFile
+                tailer.readLines(timeoutMs = 0L)
             } else {
-                val command = antigravityCommand(currentModel, currentEffort, currentConversation)
-                process = installer.process(
-                    installed.chrootExec,
-                    installed.rootfs,
-                    workspace,
+                val cmdArgs = antigravityCommand(selectedModel, selectedEffort, existingConvId)
+                proc = runtimeInstaller.process(
+                    rt.chrootExec,
+                    rt.rootfs,
+                    wsDir,
                     emptyMap(),
-                    command,
+                    cmdArgs,
                     guestWorkspacePath = "/workspace/$projectSlug",
                     emulateHardLinks = false,
                     trustClaudeWorkspace = false,
                 )
-                // Registered before anything below can throw: onFailure kills activeProcess, so a failing tailer must not
-                // leave agy running unattended.
-                activeProcess = process
-                val native = process as? NativeSpawnProcess ?: error("Unsupported Antigravity process")
-                spawnedOutputFile = native.outputFile
-                tailer = InotifyLogTailer(native.outputFile)
+                runningProcess = proc
+                val nativeProc = proc as? NativeSpawnProcess ?: error("Unsupported Antigravity process")
+                sessionLogFile = nativeProc.outputFile
+                tailer = InotifyLogTailer(nativeProc.outputFile)
             }
-            openTailer = tailer
-            activeProcess = process
-            if (userStopRequested) process.destroy()
-            val request = JSONObject()
+            activeTailer = tailer
+            runningProcess = proc
+            if (stopRequestedByUser) proc.destroy()
+            val userEnvelope = JSONObject()
                 .put("event", "user")
-                .put("message", JSONObject().put("content", antigravityWorkspacePrompt(projectSlug, promptWithHistory)))
+                .put("message", JSONObject().put("content", antigravityWorkspacePrompt(projectSlug, fullUserPrompt)))
                 .toString() + "\n"
-            process.outputStream.write(request.toByteArray())
-            process.outputStream.flush()
-            // Keep stdin open so agy can take the next message; once it proved it waits for end of input, close it.
-            var stdinOpen = warmSupported != false
-            if (!stdinOpen) process.outputStream.close()
-            val promptSentAtMillis = System.currentTimeMillis()
-            var eventSeen = false
-            var lastDiagnostic = ""
-            var resultSeen = false
-            var assistantTextSeen = false
-            var lastAgentResponseDone = false
-            var activeToolName: String? = null
-            var activeToolDetail = ""
-            var activeToolStartedAtMillis = 0L
-            var lastToolProgressAtMillis = 0L
-            var lastRetryCheckAtMillis = 0L
-            var lastRetryStatus: String? = null
-            suspend fun handleLine(rawLine: String) {
-                val line = rawLine.trimEnd('\r')
-                if (line.isBlank()) return
-                lastDiagnostic = line.takeLast(1_000)
-                val parsed = AntigravityEventParser.parse(line)
-                if (parsed != null) eventSeen = true
-                when (val event = parsed) {
-                    is AntigravityParsedEvent.Initialized -> remember(event.conversationId)
+            proc.outputStream.write(userEnvelope.toByteArray())
+            proc.outputStream.flush()
+            var stdinKeptOpen = supportsWarmStdin != false
+            if (!stdinKeptOpen) proc.outputStream.close()
+
+            val promptDispatchedAtMs = System.currentTimeMillis()
+            var receivedAnyEvent = false
+            var lastRawLine = ""
+            var sawTerminalResult = false
+            var emittedAssistantText = false
+            var finalResponseMarkedDone = false
+            var runningToolLabel: String? = null
+            var runningToolSummary = ""
+            var toolStartTimestampMs = 0L
+            var lastGradlePingMs = 0L
+            var lastRetryScanMs = 0L
+            var prevRetryBanner: String? = null
+            var pendingScheduleWakeup: AntigravityParsedEvent.ScheduledWakeup? = null
+            var scheduleTriggeredAtMs = 0L
+
+            suspend fun consumeStreamLine(rawLine: String) {
+                val cleanLine = rawLine.trimEnd('\r')
+                if (cleanLine.isBlank()) return
+                lastRawLine = cleanLine.takeLast(1_000)
+                val parsedEvent = AntigravityEventParser.parse(cleanLine)
+                if (parsedEvent != null) receivedAnyEvent = true
+                when (val ev = parsedEvent) {
+                    is AntigravityParsedEvent.Initialized -> persistConvId(ev.conversationId)
                     is AntigravityParsedEvent.Text -> {
-                        assistantTextSeen = true
-                        lastAgentResponseDone = event.done
-                        pushForegroundProgress("Antigravity is working…")
-                        eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, event.value))
+                        emittedAssistantText = true
+                        finalResponseMarkedDone = ev.done
+                        if (pendingScheduleWakeup != null && ev.done) sawTerminalResult = true
+                        updateForegroundStatus("Antigravity is working…")
+                        sharedEvents.emit(RuntimeEvent.AssistantDelta(sessionId, ev.value))
                     }
                     is AntigravityParsedEvent.ResponseDone -> {
-                        if (assistantTextSeen) lastAgentResponseDone = true
+                        if (emittedAssistantText) finalResponseMarkedDone = true
+                        if (pendingScheduleWakeup != null) sawTerminalResult = true
+                    }
+                    is AntigravityParsedEvent.ScheduledWakeup -> {
+                        pendingScheduleWakeup = ev
+                        scheduleTriggeredAtMs = System.currentTimeMillis()
+                        val infoText = "Scheduled in ${ev.intervalMinutes}m: ${ev.prompt}"
+                        sharedEvents.emit(RuntimeEvent.ToolStarted(sessionId, "Schedule", infoText))
+                        sharedEvents.emit(RuntimeEvent.ToolCompleted(sessionId, "Schedule", infoText))
+                        sharedEvents.emit(RuntimeEvent.AssistantDelta(sessionId, "\n\n[[schedule: ${ev.intervalMinutes}m | ${ev.prompt}]]"))
                     }
                     is AntigravityParsedEvent.ToolStarted -> {
-                        lastAgentResponseDone = false
-                        activeToolName = event.name
-                        activeToolDetail = event.detail
-                        activeToolStartedAtMillis = System.currentTimeMillis()
-                        lastToolProgressAtMillis = activeToolStartedAtMillis
-                        pushForegroundProgress("Running ${event.name}: ${event.detail}")
-                        eventBus.emit(RuntimeEvent.ToolStarted(sessionId, event.name, event.detail))
+                        finalResponseMarkedDone = false
+                        runningToolLabel = ev.name
+                        runningToolSummary = ev.detail
+                        toolStartTimestampMs = System.currentTimeMillis()
+                        lastGradlePingMs = toolStartTimestampMs
+                        updateForegroundStatus("Running ${ev.name}: ${ev.detail}")
+                        sharedEvents.emit(RuntimeEvent.ToolStarted(sessionId, ev.name, ev.detail))
                     }
                     is AntigravityParsedEvent.ToolCompleted -> {
-                        if (activeToolName == event.name) activeToolName = null
-                        pushForegroundProgress("Antigravity is working…")
-                        eventBus.emit(RuntimeEvent.ToolCompleted(sessionId, event.name, event.detail))
+                        if (runningToolLabel == ev.name) runningToolLabel = null
+                        updateForegroundStatus("Antigravity is working…")
+                        sharedEvents.emit(RuntimeEvent.ToolCompleted(sessionId, ev.name, ev.detail))
                     }
                     is AntigravityParsedEvent.Result -> {
-                        event.conversationId?.let(::remember)
-                        val completedBeforeDisconnect = assistantTextSeen && lastAgentResponseDone && activeToolName == null
-                        if (event.status.equals("SUCCESS", ignoreCase = true) || completedBeforeDisconnect) {
-                            if (!assistantTextSeen && !event.response.isNullOrBlank()) {
-                                assistantTextSeen = true
-                                eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, event.response))
+                        ev.conversationId?.let(::persistConvId)
+                        val finishedCleanlyBeforeDrop = emittedAssistantText && finalResponseMarkedDone && runningToolLabel == null
+                        if (ev.status.equals("SUCCESS", ignoreCase = true) || finishedCleanlyBeforeDrop) {
+                            if (!emittedAssistantText && !ev.response.isNullOrBlank()) {
+                                emittedAssistantText = true
+                                sharedEvents.emit(RuntimeEvent.AssistantDelta(sessionId, ev.response))
                             }
-                            resultSeen = true
-                        } else throw AntigravitySessionException(
-                            friendlyError(event.error ?: event.status, System.currentTimeMillis() - sessionStartedAtMillis),
-                        )
+                            sawTerminalResult = true
+                        } else {
+                            throw AntigravitySessionException(
+                                formatFriendlyError(
+                                    ev.error ?: ev.status,
+                                    readRecentCliLogTail(turnStartMs),
+                                    System.currentTimeMillis() - turnStartMs,
+                                ),
+                            )
+                        }
                     }
                     null -> Unit
                 }
             }
+
             run {
-                outputLoop@ while (process.isAlive || tailer.hasUnreadBytes()) {
-                    val lines = tailer.readLines(timeoutMs = 250L)
-                    if (lines.isEmpty()) {
-                        val now = System.currentTimeMillis()
-                        if (stdinOpen && !eventSeen && now - promptSentAtMillis >= WARM_PROBE_MS) {
-                            if (reuse != null) {
-                                // A kept-alive agy can think for a long time before its first event on a heavy prompt, so 20 s of
-                                // silence alone proves nothing. It is called stuck only after a longer quiet period with no sign
-                                // of life in its own log. The warm mode stays on: one slow answer must not switch it off for good.
-                                val quietMs = now - promptSentAtMillis
-                                val stillWorking = quietMs < WARM_REUSE_MAX_WAIT_MS &&
-                                    (quietMs < WARM_REUSE_QUIET_MS || agyLogActive(now))
-                                if (!stillWorking) {
-                                    throw AntigravitySessionException(
-                                        "Antigravity stopped responding. Send the message again.",
-                                    )
+                readLoop@ while (proc.isAlive || tailer.hasUnreadBytes()) {
+                    val batch = tailer.readLines(timeoutMs = 250L)
+                    if (batch.isEmpty()) {
+                        val nowMs = System.currentTimeMillis()
+                        if (pendingScheduleWakeup != null && nowMs - scheduleTriggeredAtMs >= 3_500L) {
+                            sawTerminalResult = true
+                            break@readLoop
+                        }
+                        if (stdinKeptOpen && !receivedAnyEvent && nowMs - promptDispatchedAtMs >= WARM_INITIAL_PROBE_MS) {
+                            if (reusableWarm != null) {
+                                val silenceDurationMs = nowMs - promptDispatchedAtMs
+                                val aliveInLogs = silenceDurationMs < WARM_REUSE_CEILING_MS &&
+                                    (silenceDurationMs < WARM_REUSE_SILENCE_MS || isCliLogRecentlyModified(nowMs))
+                                if (!aliveInLogs) {
+                                    throw AntigravitySessionException("Antigravity stopped responding. Send the message again.")
                                 }
                             } else {
-                                // This agy only starts on end of input; give it that and remember for later turns.
-                                rememberWarmMode(false)
-                                stdinOpen = false
-                                runCatching { process.outputStream.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+                                persistWarmSupport(false)
+                                stdinKeptOpen = false
+                                runCatching { proc.outputStream.close() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
                             }
                         }
-                        pushForegroundProgress(
-                            activeToolName?.let { name -> "Running $name: $activeToolDetail" }
-                                ?: "Antigravity is working…",
+                        updateForegroundStatus(
+                            runningToolLabel?.let { lbl -> "Running $lbl: $runningToolSummary" } ?: "Antigravity is working…",
                         )
-                        // agy retries failed requests silently; surface them so a long wait has a visible reason.
-                        if (now - lastRetryCheckAtMillis >= RETRY_CHECK_INTERVAL_MS) {
-                            lastRetryCheckAtMillis = now
-                            antigravityRetryStatus(recentAntigravityDiagnostic(sessionStartedAtMillis))
-                                ?.takeIf { it != lastRetryStatus }
-                                ?.let { status ->
-                                    lastRetryStatus = status
-                                    pushForegroundProgress(status)
-                                    eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, "Antigravity", status))
+                        if (nowMs - lastRetryScanMs >= RETRY_POLL_INTERVAL_MS) {
+                            lastRetryScanMs = nowMs
+                            antigravityRetryStatus(readRecentCliLogTail(turnStartMs))
+                                ?.takeIf { it != prevRetryBanner }
+                                ?.let { banner ->
+                                    prevRetryBanner = banner
+                                    updateForegroundStatus(banner)
+                                    sharedEvents.emit(RuntimeEvent.RuntimeLog(sessionId, "Antigravity", banner))
                                 }
                         }
-                        if (activeToolName == "Bash" && activeToolDetail.contains("gradle", ignoreCase = true) &&
-                            now - activeToolStartedAtMillis >= 10_000L && now - lastToolProgressAtMillis >= 10_000L
+                        if (
+                            runningToolLabel == "Bash" &&
+                            runningToolSummary.contains("gradle", ignoreCase = true) &&
+                            nowMs - toolStartTimestampMs >= 10_000L &&
+                            nowMs - lastGradlePingMs >= 10_000L
                         ) {
-                            lastToolProgressAtMillis = now
-                            eventBus.emit(
+                            lastGradlePingMs = nowMs
+                            sharedEvents.emit(
                                 RuntimeEvent.ToolProgress(
                                     sessionId,
                                     "Bash",
-                                    antigravityGradleProgress(activeToolDetail, now - activeToolStartedAtMillis),
+                                    antigravityGradleProgress(runningToolSummary, nowMs - toolStartTimestampMs),
                                 ),
                             )
                         }
                         continue
                     }
-                    for (line in lines) {
-                        handleLine(line)
-                        if (resultSeen) break@outputLoop
+                    for (line in batch) {
+                        consumeStreamLine(line)
+                        if (sawTerminalResult) break@readLoop
                     }
                 }
-                if (!resultSeen) {
+                if (!sawTerminalResult) {
                     for (line in tailer.readLines(timeoutMs = 0L, flushIncomplete = true)) {
-                        handleLine(line)
-                        if (resultSeen) break
+                        consumeStreamLine(line)
+                        if (sawTerminalResult) break
                     }
                 }
             }
-            if (resultSeen && stdinOpen && process.isAlive) {
-                // agy answered without end of input and is still running: keep it for the next message.
-                rememberWarmMode(true)
-                val entry = WarmAgy(
-                    process, tailer, spawnedOutputFile!!, projectId, currentModel, currentEffort,
-                    SavedConversation.decode(conversationId(projectId))?.id,
+
+            if (pendingScheduleWakeup != null) {
+                terminateProcessAfterResult(proc)
+            } else if (sawTerminalResult && stdinKeptOpen && proc.isAlive) {
+                persistWarmSupport(true)
+                val warmEntry = WarmAgyInstance(
+                    proc = proc,
+                    logTailer = tailer,
+                    logFile = sessionLogFile!!,
+                    projectId = projectId,
+                    modelId = selectedModel,
+                    effortLevel = selectedEffort,
+                    convId = SavedConversation.decode(conversationId(projectId))?.id,
                 )
-                warm = entry
-                keptWarm = true
-                scheduleWarmExpiry(entry)
-            } else if (resultSeen) {
-                stopAfterTerminalResult(process)
-            } else if (assistantTextSeen && lastAgentResponseDone && activeToolName == null) {
-                // agy finished streaming the final agent_response (state=DONE) before the connection or process dropped.
-                resultSeen = true
-                stopAfterTerminalResult(process)
+                standbyInstance = warmEntry
+                preservedForWarmStandby = true
+                armStandbyEvictionTimer(warmEntry)
+            } else if (sawTerminalResult) {
+                terminateProcessAfterResult(proc)
+            } else if (emittedAssistantText && finalResponseMarkedDone && runningToolLabel == null) {
+                sawTerminalResult = true
+                terminateProcessAfterResult(proc)
             } else {
-                val exit = process.waitFor()
-                check(exit == 0 && resultSeen) {
-                    friendlyError(
-                        lastDiagnostic.ifBlank { "Antigravity exited with code $exit" },
-                        System.currentTimeMillis() - sessionStartedAtMillis,
+                val exitCode = proc.waitFor()
+                check(exitCode == 0 && sawTerminalResult) {
+                    formatFriendlyError(
+                        lastRawLine.ifBlank { "Antigravity exited with code $exitCode" },
+                        readRecentCliLogTail(turnStartMs),
+                        System.currentTimeMillis() - turnStartMs,
                     )
                 }
             }
-            val paths = checkpoints.changedFiles(workspace, before)
-            if (paths.isNotEmpty()) {
-                checkpoints.saveChangedPaths(projectId, paths)
-                val allPending = checkpoints.readChangedPaths(projectId).filterNot(checkpoints::isInternalRuntimePath)
-                eventBus.emit(RuntimeEvent.FilesChanged(sessionId, checkpoints.buildChangeDetails(projectId, workspace, allPending)))
-            } else if (checkpoints.readChangedPaths(projectId).isEmpty()) {
+
+            val modifiedPaths = workspaceCheckpoints.changedFiles(wsDir, preSnapshot)
+            if (modifiedPaths.isNotEmpty()) {
+                workspaceCheckpoints.saveChangedPaths(projectId, modifiedPaths)
+                val visiblePending = workspaceCheckpoints.readChangedPaths(projectId).filterNot(workspaceCheckpoints::isInternalRuntimePath)
+                sharedEvents.emit(RuntimeEvent.FilesChanged(sessionId, workspaceCheckpoints.buildChangeDetails(projectId, wsDir, visiblePending)))
+            } else if (workspaceCheckpoints.readChangedPaths(projectId).isEmpty()) {
                 acceptLastChanges(projectId)
             }
-            emitCompleted(sessionId)
-            finishForegroundRuntimeRes(true, projectSlug, com.nextcraft.forge.R.string.notif_agent_finished_in, "Antigravity", projectSlug)
-        }.onFailure {
-            val diagnostic = recentAntigravityDiagnostic(sessionStartedAtMillis)
-            // A failure after launch (parser/IO/provider error) must not leave the agent running unattended in the chroot.
-            activeProcess?.let { running -> runCatching { if (running.isAlive) running.destroyForcibly() } }
-            val lost = savedConversation != null &&
-                LOST_CONVERSATION.containsMatchIn("${it.message.orEmpty()}\n$diagnostic")
-            if (lost) saveConversationId(projectId, null) // the retry starts a new one with the chat history
-            val message = when {
-                userStopRequested -> "Stopped by user"
-                lost -> ClaudeRuntimeBridge.SESSION_LOST_MESSAGE
-                // Already classified when it was thrown; classifying the friendly text again could pick up log noise.
-                it is AntigravitySessionException -> it.message.orEmpty()
-                else -> antigravityFriendlyError(
-                    it.message.orEmpty(), diagnostic, System.currentTimeMillis() - sessionStartedAtMillis,
-                )
+            dispatchSessionCompleted(sessionId)
+            fgNotifier.finishRes(true, projectSlug, R.string.notif_agent_finished_in, "Antigravity", projectSlug)
+        }.onFailure { err ->
+            val diag = readRecentCliLogTail(turnStartMs)
+            runningProcess?.let { proc -> runCatching { if (proc.isAlive) proc.destroyForcibly() } }
+            val convMissing = decodedConv != null && MISSING_CONVERSATION_PATTERN.containsMatchIn("${err.message.orEmpty()}\n$diag")
+            if (convMissing) saveConversationId(projectId, null)
+            val errBanner = when {
+                stopRequestedByUser -> "Stopped by user"
+                convMissing -> ClaudeRuntimeBridge.SESSION_LOST_MESSAGE
+                err is AntigravitySessionException -> err.message.orEmpty()
+                else -> antigravityFriendlyError(err.message.orEmpty(), diag, System.currentTimeMillis() - turnStartMs)
             }
-            emitFailure(sessionId, message)
-            if (userStopRequested) cancelForegroundRuntime()
-            else finishForegroundRuntime(false, projectSlug, message)
+            dispatchSessionFailed(sessionId, errBanner)
+            if (stopRequestedByUser) fgNotifier.cancel() else fgNotifier.finish(false, projectSlug, errBanner)
         }
-        if (!keptWarm) {
-            runCatching { openTailer?.close() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
-            runCatching { spawnedOutputFile?.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+
+        if (!preservedForWarmStandby) {
+            runCatching { activeTailer?.close() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
+            runCatching { sessionLogFile?.delete() }.onFailure { ErrorLog.swallowed("AntigravityRuntimeBridge", it) }
         }
-        activeProcess = null
-        activeSessionId = null
-        activeProjectSlug = ""
-        foreground.clearStart()
-        RuntimeTaskController.release(stopHandler)
+        runningProcess = null
+        currentSessionId = null
+        currentSlug = ""
+        fgNotifier.clearStart()
+        RuntimeTaskController.release(cancelCallback)
         sessionId
     }
 
-    override suspend fun respondToApproval(request: ToolRequest, approved: Boolean) {
-        // agy headless streaming runs with --dangerously-skip-permissions inside Chroot.
-    }
+    override suspend fun respondToApproval(request: ToolRequest, approved: Boolean) = Unit
 
     override suspend fun stopSession(sessionId: String) = withContext(Dispatchers.IO) {
-        if (activeSessionId == sessionId) {
-            userStopRequested = true
-            activeProcess?.destroy()
+        if (currentSessionId == sessionId) {
+            stopRequestedByUser = true
+            runningProcess?.destroy()
             delay(500)
-            if (activeProcess?.isAlive == true) activeProcess?.destroyForcibly()
-            emitFailure(sessionId, "Stopped by user")
+            if (runningProcess?.isAlive == true) runningProcess?.destroyForcibly()
+            dispatchSessionFailed(sessionId, "Stopped by user")
         }
     }
 
-    override suspend fun stopActiveSession() = activeSessionId?.let { stopSession(it) } ?: Unit
+    override suspend fun stopActiveSession() {
+        currentSessionId?.let { stopSession(it) }
+    }
 
     override suspend fun undoLastChanges(projectId: String): Boolean = withContext(Dispatchers.IO) {
-        val workspace = checkpoints.ensureWorkspace(projectId)
-        checkpoints.revertLatestTurn(projectId, workspace).isNotEmpty()
+        val wsDir = workspaceCheckpoints.ensureWorkspace(projectId)
+        workspaceCheckpoints.revertLatestTurn(projectId, wsDir).isNotEmpty()
     }
 
     override suspend fun acceptLastChanges(projectId: String): Unit = withContext(Dispatchers.IO) {
-        checkpoints.acceptAll(projectId)
+        workspaceCheckpoints.acceptAll(projectId)
     }
 
     override suspend fun loadPendingChanges(projectId: String): List<ChangeItem> = withContext(Dispatchers.IO) {
-        val paths = checkpoints.readChangedPaths(projectId).filterNot(checkpoints::isInternalRuntimePath)
-        if (paths.isEmpty()) emptyList() else checkpoints.buildChangeDetails(projectId, checkpoints.ensureWorkspace(projectId), paths)
+        val paths = workspaceCheckpoints.readChangedPaths(projectId).filterNot(workspaceCheckpoints::isInternalRuntimePath)
+        if (paths.isEmpty()) emptyList() else workspaceCheckpoints.buildChangeDetails(projectId, workspaceCheckpoints.ensureWorkspace(projectId), paths)
     }
 
     override suspend fun undoFileChange(projectId: String, path: String): Boolean = withContext(Dispatchers.IO) {
-        val workspace = checkpoints.ensureWorkspace(projectId)
-        checkpoints.revertFile(projectId, workspace, path)
+        val wsDir = workspaceCheckpoints.ensureWorkspace(projectId)
+        workspaceCheckpoints.revertFile(projectId, wsDir, path)
     }
 
     override suspend fun acceptFileChange(projectId: String, path: String): Boolean = withContext(Dispatchers.IO) {
-        val workspace = checkpoints.ensureWorkspace(projectId)
-        checkpoints.acceptFile(projectId, workspace, path)
+        val wsDir = workspaceCheckpoints.ensureWorkspace(projectId)
+        workspaceCheckpoints.acceptFile(projectId, wsDir, path)
     }
 
-    private suspend fun emitCompleted(sessionId: String) {
-        if (finished.add(sessionId)) eventBus.emit(RuntimeEvent.SessionCompleted(sessionId))
+    private suspend fun dispatchSessionCompleted(sessionId: String) {
+        if (completedSessionIds.add(sessionId)) sharedEvents.emit(RuntimeEvent.SessionCompleted(sessionId))
     }
 
-    private suspend fun emitFailure(sessionId: String, reason: String) {
-        if (finished.add(sessionId)) eventBus.emit(RuntimeEvent.SessionFailed(sessionId, reason))
+    private suspend fun dispatchSessionFailed(sessionId: String, reason: String) {
+        if (completedSessionIds.add(sessionId)) sharedEvents.emit(RuntimeEvent.SessionFailed(sessionId, reason))
     }
 
-    private fun startForegroundRuntime(projectName: String) = foreground.start(projectName)
-
-    /** Keeps long, silent Antigravity turns visibly active in Android's foreground service. */
-    private fun pushForegroundProgress(detailRaw: String) {
-        if (activeSessionId == null) return
-        foreground.progress(activeProjectSlug, detailRaw)
+    private fun updateForegroundStatus(statusText: String) {
+        if (currentSessionId == null) return
+        fgNotifier.progress(currentSlug, statusText)
     }
 
-    private fun finishForegroundRuntime(completed: Boolean, projectName: String, detail: String) =
-        foreground.finish(completed, projectName, detail)
+    private fun formatFriendlyError(raw: String, diagnostic: String = "", elapsedMs: Long = 0L): String =
+        antigravityFriendlyError(raw, diagnostic, elapsedMs = elapsedMs)
 
-    private fun finishForegroundRuntimeRes(completed: Boolean, projectName: String, @androidx.annotation.StringRes detailRes: Int, vararg args: String) =
-        foreground.finishRes(completed, projectName, detailRes, *args)
-
-    private fun cancelForegroundRuntime() = foreground.cancel()
-
-    private fun friendlyError(raw: String, elapsedMs: Long = 0L): String =
-        antigravityFriendlyError(raw, elapsedMs = elapsedMs)
-
-    /** True when agy wrote to its own log in the last 45 s: it is alive and busy (a retry, a stream), not stuck. */
-    private fun agyLogActive(nowMillis: Long): Boolean = runCatching {
-        val logDir = File(installer.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
-        logDir.listFiles()?.any { it.isFile && it.name.startsWith("cli-") && nowMillis - it.lastModified() < 45_000L } == true
+    private fun isCliLogRecentlyModified(nowMs: Long): Boolean = runCatching {
+        val logFolder = File(runtimeInstaller.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
+        logFolder.listFiles()?.any { it.isFile && it.name.startsWith("cli-") && nowMs - it.lastModified() < 45_000L } == true
     }.getOrDefault(false)
 
-    private fun recentAntigravityDiagnostic(sinceMillis: Long): String = runCatching {
-        val logDir = File(
-            installer.installedRuntime().rootfs,
-            "root/.gemini/antigravity-cli/log",
-        )
-        val latest = logDir.listFiles()
-            ?.filter { it.isFile && it.name.startsWith("cli-") && it.lastModified() >= sinceMillis - 2_000L }
+    private fun readRecentCliLogTail(sinceMs: Long): String = runCatching {
+        val logFolder = File(runtimeInstaller.installedRuntime().rootfs, "root/.gemini/antigravity-cli/log")
+        val newestLog = logFolder.listFiles()
+            ?.filter { it.isFile && it.name.startsWith("cli-") && it.lastModified() >= sinceMs - 2_000L }
             ?.maxByOrNull(File::lastModified)
             ?: return@runCatching ""
-        latest.readTailText(12_000)
+        newestLog.readTailText(12_000)
     }.getOrDefault("")
 }
 
@@ -813,59 +846,50 @@ internal fun antigravityFriendlyError(
     diagnostic: String = "",
     elapsedMs: Long = Long.MAX_VALUE,
 ): String {
-    val rawValue = raw.replace(Regex("\\s+"), " ").trim()
-    // The error itself decides first. The agy log tail is only a fallback and never decides "timeout": the
-    // prompt tells the agent to run `timeout 15m gradle`, so that word is routinely in the log.
-    // "60-minute limit" only fits a turn that really ran that long; a quick timeout is something else, show it.
-    val ranToLimit = elapsedMs >= ANTIGRAVITY_TASK_LIMIT_MS - 5 * 60_000L
-    return classifyAntigravityError(rawValue, allowTimeout = ranToLimit)
-        ?: classifyAntigravityError("$rawValue ${antigravityDiagnosticSignal(diagnostic)}", allowTimeout = false)
-        ?: rawValue.ifBlank { ANTIGRAVITY_GENERIC_FAILURE }.take(500)
+    val normalizedRaw = raw.replace(Regex("\\s+"), " ").trim()
+    val hitTurnCeiling = elapsedMs >= AGY_TURN_LIMIT_MS - 5 * 60_000L
+    return matchKnownAgyFailure(normalizedRaw, considerTimeout = hitTurnCeiling)
+        ?: matchKnownAgyFailure("$normalizedRaw ${stripSilentAuthStartupNoise(diagnostic)}", considerTimeout = false)
+        ?: normalizedRaw.ifBlank { DEFAULT_AGY_ERROR_TEXT }.take(500)
 }
 
-/**
- * The agy log tail without startup noise: every agy start logs "You are not logged into Antigravity" until its
- * silent auth finishes, so those lines only mean "not signed in" when the log never reports a successful auth.
- */
-private fun antigravityDiagnosticSignal(diagnostic: String): String {
-    val lines = diagnostic.lineSequence()
-    val authenticated = diagnostic.contains("silent auth succeeded", ignoreCase = true)
-    return lines
-        .filterNot { authenticated && it.contains("not logged in", ignoreCase = true) }
+private fun stripSilentAuthStartupNoise(rawDiag: String): String {
+    val silentAuthOk = rawDiag.contains("silent auth succeeded", ignoreCase = true)
+    return rawDiag.lineSequence()
+        .filterNot { silentAuthOk && it.contains("not logged in", ignoreCase = true) }
         .joinToString(" ")
         .replace(Regex("\\s+"), " ")
         .trim()
 }
 
-private const val ANTIGRAVITY_TASK_LIMIT_MS = 60 * 60_000L
+private const val AGY_TURN_LIMIT_MS = 60 * 60_000L
 
-private fun classifyAntigravityError(value: String, allowTimeout: Boolean): String? = when {
-    ANTIGRAVITY_NETWORK_ERRORS.any { value.contains(it, ignoreCase = true) } ->
+private fun matchKnownAgyFailure(text: String, considerTimeout: Boolean): String? = when {
+    NETWORK_FAILURE_TOKENS.any { text.contains(it, ignoreCase = true) } ->
         "Antigravity could not reach Google. Check your internet or DNS connection, then try again."
-    ANTIGRAVITY_SERVER_ERRORS.any { value.contains(it, ignoreCase = true) } ->
+    UPSTREAM_SERVER_TOKENS.any { text.contains(it, ignoreCase = true) } ->
         "Google's Antigravity server returned an error. Wait a moment and try again; your files were kept."
-    // Google's stream sent nothing for 5 minutes (a long think on a big context): agy gives up on that request.
-    value.contains("stream idle timeout", true) || value.contains("context deadline exceeded", true) ->
+    text.contains("invalid model selection", ignoreCase = true) || text.contains("not recognized as a known model", ignoreCase = true) ->
+        "Antigravity could not fetch the model catalog from Google (network/DNS timeout). Check your connection and try again."
+    text.contains("stream idle timeout", ignoreCase = true) || text.contains("context deadline exceeded", ignoreCase = true) ->
         "Google sent nothing for 5 minutes while the model was thinking, so Antigravity dropped the request. Your files were kept."
-    value.contains("stream was interrupted", true) ->
+    text.contains("stream was interrupted", ignoreCase = true) ->
         "The connection to Google dropped mid-answer. Send the message again to continue."
-    value.contains("authentication required", true) ||
-        value.contains("authentication failed", true) ||
-        value.contains("not signed in", true) ||
-        value.contains("not logged in", true) ->
+    text.contains("authentication required", ignoreCase = true) ||
+        text.contains("authentication failed", ignoreCase = true) ||
+        text.contains("not signed in", ignoreCase = true) ||
+        text.contains("not logged in", ignoreCase = true) ->
         "Antigravity needs Google sign-in. Open Settings → Coding agent."
-    value.contains("out of credits", true) || value.contains("quota", true) ->
+    text.contains("out of credits", ignoreCase = true) || text.contains("quota", ignoreCase = true) ->
         "Your Antigravity account is out of credits. Check the account plan or wait for credits to reset."
-    allowTimeout && (value.contains("timed out", true) || value.contains("timeout", true)) ->
+    considerTimeout && (text.contains("timed out", ignoreCase = true) || text.contains("timeout", ignoreCase = true)) ->
         "Antigravity reached the 60-minute task limit. Your files were kept."
-    // Only from agy's own error: its log mentions models routinely ("model ... not in local config, using default"),
-    // which made unrelated failures read as "model unavailable".
-    allowTimeout && value.contains("model", true) && (value.contains("invalid", true) || value.contains("unknown", true)) ->
+    considerTimeout && text.contains("model", ignoreCase = true) && (text.contains("invalid", ignoreCase = true) || text.contains("unknown", ignoreCase = true)) ->
         "The selected Antigravity model is unavailable. Refresh models in Settings."
     else -> null
 }
 
-private val ANTIGRAVITY_NETWORK_ERRORS = listOf(
+private val NETWORK_FAILURE_TOKENS = listOf(
     "network issue connecting to the server",
     "dial tcp",
     "read tcp",
@@ -881,7 +905,7 @@ private val ANTIGRAVITY_NETWORK_ERRORS = listOf(
     "userinfo request failed",
 )
 
-private val ANTIGRAVITY_SERVER_ERRORS = listOf(
+private val UPSTREAM_SERVER_TOKENS = listOf(
     "code 500",
     "code 502",
     "code 503",
@@ -889,97 +913,87 @@ private val ANTIGRAVITY_SERVER_ERRORS = listOf(
     "unavailable (code",
 )
 
-private const val RETRY_CHECK_INTERVAL_MS = 5_000L
+private const val RETRY_POLL_INTERVAL_MS = 5_000L
+private const val WARM_INITIAL_PROBE_MS = 20_000L
+private const val WARM_REUSE_SILENCE_MS = 90_000L
+private const val WARM_REUSE_CEILING_MS = 10 * 60_000L
+private const val WARM_STANDBY_TTL_MS = 3 * 60_000L
+private const val DEFAULT_AGY_ERROR_TEXT = "Antigravity could not complete the task."
 
-/** Without any agy event this long after the prompt, agy is waiting for end of input (or a kept one is stuck). */
-private const val WARM_PROBE_MS = 20_000L
+private val LOG_RETRY_REGEX = Regex("""Run: attempt (\d+) failed \((.*)\), retrying in (\w+)""")
 
-/** A kept-alive agy gets this long to show a first event before its log decides whether it is still working. */
-private const val WARM_REUSE_QUIET_MS = 90_000L
-
-/** Upper bound for a kept-alive agy that shows no event at all, however active its log looks. */
-private const val WARM_REUSE_MAX_WAIT_MS = 10 * 60_000L
-
-/** A kept-alive agy is stopped after this long without a message (3 min balances warm reuse vs ~400 MB RSS). */
-private const val WARM_IDLE_MS = 3 * 60_000L
-
-private const val ANTIGRAVITY_GENERIC_FAILURE = "Antigravity could not complete the task."
-
-private val ANTIGRAVITY_RETRY_LINE = Regex("""Run: attempt (\d+) failed \((.*)\), retrying in (\w+)""")
-
-/**
- * The newest "Run: attempt N failed (…), retrying in Xs" line in an agy log tail, as a short status for the
- * user (agy only writes these retries to its log, never to the stream), or null when there is none.
- */
 internal fun antigravityRetryStatus(logTail: String): String? {
-    val match = ANTIGRAVITY_RETRY_LINE.findAll(logTail).lastOrNull() ?: return null
-    val (attempt, reason, delay) = match.destructured
-    val cause = when {
-        ANTIGRAVITY_SERVER_ERRORS.any { reason.contains(it, ignoreCase = true) } -> "Google server error"
-        ANTIGRAVITY_NETWORK_ERRORS.any { reason.contains(it, ignoreCase = true) } -> "Connection to Google failed"
+    val lastMatch = LOG_RETRY_REGEX.findAll(logTail).lastOrNull() ?: return null
+    val (attemptNum, errCause, backoffDelay) = lastMatch.destructured
+    val label = when {
+        UPSTREAM_SERVER_TOKENS.any { errCause.contains(it, ignoreCase = true) } -> "Google server error"
+        NETWORK_FAILURE_TOKENS.any { errCause.contains(it, ignoreCase = true) } -> "Connection to Google failed"
         else -> "Request failed"
     }
-    return "$cause, retrying in $delay (attempt $attempt)"
+    return "$label, retrying in $backoffDelay (attempt $attemptNum)"
 }
 
 private class AntigravitySessionException(message: String) : IllegalStateException(message)
 
-/** Same budget as the other agents' history. */
-private const val MAX_HISTORY_CHARACTERS = 160_000
-
-/** agy's wording when `--conversation` names a conversation it no longer has. */
-private val LOST_CONVERSATION = Regex("conversation[^\n]{0,60}(not found|does not exist|no such|unknown)", RegexOption.IGNORE_CASE)
+private const val HISTORY_CHAR_BUDGET = 160_000
+private val MISSING_CONVERSATION_PATTERN = Regex("conversation[^\n]{0,60}(not found|does not exist|no such|unknown)", RegexOption.IGNORE_CASE)
 
 internal fun antigravityCommand(model: String, effort: String, conversationId: String?): List<String> = buildList {
     add(RuntimeInstaller.AGY_GUEST_PATH)
-    addAll(listOf("--input-format", "stream-json"))
-    addAll(listOf("--output-format", "stream-json"))
-    addAll(listOf("--print-timeout", "60m"))
+    addAll(listOf("--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", "60m"))
     add("--dangerously-skip-permissions")
-    addAntigravitySelection(model, effort)
-    conversationId?.takeIf(String::isNotBlank)?.let {
-        addAll(listOf("--conversation", it))
-    } ?: add("--new-project")
+    appendModelAndEffortFlags(model, effort)
+    if (!conversationId.isNullOrBlank()) {
+        addAll(listOf("--conversation", conversationId))
+    } else {
+        add("--new-project")
+    }
 }
 
-private fun MutableList<String>.addAntigravitySelection(model: String, effort: String) {
+private fun MutableList<String>.appendModelAndEffortFlags(model: String, effort: String) {
     if (model.isNotBlank()) {
         addAll(listOf("--model", model))
     }
-    // A model id that already names its effort (gemini-4-argon-high) gets no second, possibly different --effort.
-    val modelHasEffort = Regex("-(low|medium|high)$").containsMatchIn(model)
-    if (!modelHasEffort && effort in setOf("low", "medium", "high")) {
+    val hasEmbeddedEffort = Regex("-(low|medium|high)$").containsMatchIn(model)
+    if (!hasEmbeddedEffort && effort in setOf("low", "medium", "high")) {
         addAll(listOf("--effort", effort))
     }
 }
 
 internal fun antigravityWorkspacePrompt(projectSlug: String, prompt: String): String {
-    val safeSlug = projectSlug
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
-    return """
-    <nextcraft_workspace>
-    The active project workspace is /workspace/$safeSlug. Create, edit, read, run, and build project files only inside this directory. Do not create project output under ~/.gemini/antigravity-cli/scratch or any other scratch directory.
-
-    For Android projects, never use plain `gradle build` or start a Gradle daemon. Build only the debug APK. First check whether `app/build/outputs/apk/debug/` already contains an APK.
-    - For a first build with no existing debug APK, allow dependency resolution and use:
-      `timeout 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace`
-    - For a later build with an existing debug APK, prefer the cached fast path:
-      `timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`
-    NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.
-    Start the optimized Android build with `run_command` normally inside the Root Chroot workspace. If Antigravity moves the command into a managed task, immediately use `manage_task` to check its status and obtain its log path. Poll that managed task and tail its log with short commands about every 10 seconds so the user receives progress, then read the final output and exit status. Never wait silently on a long foreground command.
-    Operate with the precision, speed, and surgical execution style of Claude Code: target under 10 seconds per turn, combine related operations into a single tool step whenever possible, and deliver concise, high-signal responses.
-    ${ANTI_HALLUCINATION_RULES.joinToString("\n    ")}
-    </nextcraft_workspace>
-
-    $prompt
-""".trimIndent()
+    val escapedSlug = buildString(projectSlug.length) {
+        for (ch in projectSlug) {
+            when (ch) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                '"' -> append("&quot;")
+                '\'' -> append("&apos;")
+                else -> append(ch)
+            }
+        }
+    }
+    return buildString {
+        appendLine("<nextcraft_workspace>")
+        appendLine("The active project workspace is /workspace/$escapedSlug. Create, edit, read, run, and build project files only inside this directory. Do not create project output under ~/.gemini/antigravity-cli/scratch or any other scratch directory.")
+        appendLine()
+        appendLine("For Android projects, never use plain `gradle build` or start a Gradle daemon. Build only the debug APK. First check whether `app/build/outputs/apk/debug/` already contains an APK.")
+        appendLine("- For a first build with no existing debug APK, allow dependency resolution and use:")
+        appendLine("  `timeout 15m gradle ${AndroidToolchain.GRADLE_BASE_FLAGS} assembleDebug --console=plain --stacktrace`")
+        appendLine("- For a later build with an existing debug APK, prefer the cached fast path:")
+        appendLine("  `timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`")
+        appendLine("NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.")
+        appendLine("Start the optimized Android build with `run_command` normally inside the Root Chroot workspace. If Antigravity moves the command into a managed task, immediately use `manage_task` to check its status and obtain its log path. Poll that managed task and tail its log with short commands about every 10 seconds so the user receives progress, then read the final output and exit status. Never wait silently on a long foreground command.")
+        appendLine("When scheduling a delayed or periodic follow-up (such as a 15-minute GitHub CI/PR check), prefer ending your reply with `[[schedule: 15m | <prompt>]]` (or `[[unschedule]]` once complete) instead of keeping an in-process timer running, so the current agent turn stops cleanly and NextCraft Forge's app-level scheduler wakes up the chat after the delay.")
+        appendLine("Operate with the precision, speed, and surgical execution style of Claude Code: target under 10 seconds per turn, combine related operations into a single tool step whenever possible, and deliver concise, high-signal responses.")
+        ANTI_HALLUCINATION_RULES.forEach { appendLine(it) }
+        appendLine("</nextcraft_workspace>")
+        appendLine()
+        append(prompt)
+    }
 }
 
 internal fun antigravityGradleProgress(command: String, elapsedMillis: Long): String {
-    val elapsedSeconds = (elapsedMillis.coerceAtLeast(0L) / 1_000L)
-    return "Gradle is running · ${elapsedSeconds}s\n$command\nFull output will appear when the command completes."
+    val sec = elapsedMillis.coerceAtLeast(0L) / 1_000L
+    return "Gradle is running · ${sec}s\n$command\nFull output will appear when the command completes."
 }

@@ -1614,7 +1614,11 @@ grep -q "InotifyLogTailer(" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/run
 grep -q "InotifyLogTailer(" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/DshRuntimeBridge.kt" || fail "Missing UPGRADE-001 InotifyLogTailer in DshRuntimeBridge.kt"
 grep -q "streamOpenAiSseLines(" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/LocalFormatGateway.kt" || fail "Missing UPGRADE-002 streamOpenAiSseLines in LocalFormatGateway.kt"
 grep -q "interactiveHighRiskApprovals" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/data/AppPreferences.kt" || fail "Missing UPGRADE-004 interactiveHighRiskApprovals in AppPreferences.kt"
-pass "C-1..C-3, H-1..H-6, BUG-036..041, and UPGRADE-001..004 security & concurrency invariants verified across source tree"
+grep -q "os.path.realpath(" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/ForgeMcpServer.kt" || fail "Missing realpath symlink guard in ForgeMcpServer.kt"
+grep -q "_SafePreviewRedirectHandler" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/ForgeMcpServer.kt" || fail "Missing _SafePreviewRedirectHandler SSRF guard in ForgeMcpServer.kt"
+grep -q "G branch -d --" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/runtime/ChatBranches.kt" || fail "Missing git option-injection guard in ChatBranches.kt"
+grep -q "ssh.stopAllTunnels()" "$ROOT_DIR/app/src/main/java/com/nextcraft/forge/ui/MainViewModel.kt" || fail "Missing ssh.stopAllTunnels() cleanup in MainViewModel.onCleared()"
+pass "C-1..C-3, H-1..H-6, BUG-036..041, UPGRADE-001..004, ForgeMcpServer, ChatBranches & MainViewModel security/resource invariants verified"
 
 echo "=================================================================="
 echo " ALL $PASS_COUNT VERIFICATION CHECKS PASSED (0 FAILURES)"

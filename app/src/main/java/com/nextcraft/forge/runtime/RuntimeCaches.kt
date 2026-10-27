@@ -34,7 +34,8 @@ internal object RuntimeCaches {
     }
 
     private fun runRoot(command: String, timeoutSeconds: Long): String? = runCatching {
-        val proc = ProcessBuilder("su", "-c", command).redirectErrorStream(true).start()
+        val argv = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", command) else listOf("/system/bin/sh", "-c", command)
+        val proc = ProcessBuilder(argv).redirectErrorStream(true).start()
         val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
         val watchdog = Thread({
             try {

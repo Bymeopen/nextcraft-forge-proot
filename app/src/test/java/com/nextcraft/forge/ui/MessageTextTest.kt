@@ -67,6 +67,9 @@ class MessageTextTest {
             "Unsafe Gradle task name: '\$task'",
             "Invalid application UID for \$packageName",
             "Update download exceeds the allowed size.", // covered by an exact entry; listed twice in source
+            "Snapshot has too many entries (max \$MAX_RESTORE_ENTRIES)",
+            "Snapshot refuses to overwrite symbolic links",
+            "Snapshot exceeds maximum extracted size (\${MAX_TOTAL_BYTES / 1_048_576} MB)",
         )
         val files = listOf(
             "src/main/java/com/nextcraft/forge/runtime/AndroidBuildSupport.kt",

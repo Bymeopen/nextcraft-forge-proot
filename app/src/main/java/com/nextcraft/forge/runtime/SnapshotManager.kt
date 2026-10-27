@@ -76,8 +76,11 @@ class SnapshotManager(private val filesDir: File) {
         val root = workspace.canonicalFile
         // Validate every entry before touching the project, so a bad archive cannot leave it half-cleared.
         ZipInputStream(snapshot.file.inputStream().buffered()).use { zip ->
+            var entries = 0
             var entry = zip.nextEntry
             while (entry != null) {
+                entries += 1
+                check(entries <= MAX_RESTORE_ENTRIES) { "Snapshot has too many entries (max $MAX_RESTORE_ENTRIES)" }
                 require(File(root, entry.name).canonicalFile.toPath().startsWith(root.toPath())) { "Snapshot contains an unsafe path" }
                 entry = zip.nextEntry
             }
@@ -85,16 +88,33 @@ class SnapshotManager(private val filesDir: File) {
         val safety = create(projectId, workspace, "Before restore")
         check(clearRestorable(root)) { "Could not clear the project folder; a build or terminal may still be using it." }
         ZipInputStream(snapshot.file.inputStream().buffered()).use { zip ->
+            var totalBytes = 0L
+            val buf = ByteArray(16 * 1024)
             var entry = zip.nextEntry
             while (entry != null) {
-                val out = File(root, entry.name).canonicalFile
+                val rawOut = File(root, entry.name)
+                require(!Files.isSymbolicLink(rawOut.toPath())) { "Snapshot refuses to overwrite symbolic links" }
+                val out = rawOut.canonicalFile
                 // Zip-slip guard: entries must stay inside the project folder.
                 require(out.toPath().startsWith(root.toPath())) { "Snapshot contains an unsafe path" }
                 if (entry.isDirectory) {
                     out.mkdirs()
                 } else {
                     out.parentFile?.mkdirs()
-                    out.outputStream().use { zip.copyTo(it) }
+                    require(!Files.isSymbolicLink(out.toPath())) { "Snapshot refuses to overwrite symbolic links" }
+                    out.outputStream().use { outStream ->
+                        while (true) {
+                            val read = zip.read(buf)
+                            if (read < 0) break
+                            totalBytes += read
+                            if (totalBytes > MAX_TOTAL_BYTES) {
+                                outStream.close()
+                                out.delete()
+                                error("Snapshot exceeds maximum extracted size (${MAX_TOTAL_BYTES / 1_048_576} MB)")
+                            }
+                            outStream.write(buf, 0, read)
+                        }
+                    }
                     if (entry.time > 0) out.setLastModified(entry.time)
                 }
                 zip.closeEntry()
@@ -132,5 +152,6 @@ class SnapshotManager(private val filesDir: File) {
         val NAME = Regex("^(\\d{10,})-(.*)\\.zip$")
         val EXCLUDED_DIRS = setOf("node_modules", ".gradle", "build", "__pycache__", ".cxx", ".venv", ".forge", ".rea")
         const val MAX_TOTAL_BYTES = 500L * 1024 * 1024
+        const val MAX_RESTORE_ENTRIES = 50_000
     }
 }

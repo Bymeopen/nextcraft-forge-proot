@@ -86,6 +86,6 @@ internal class ForegroundSession(
     }
 
     private companion object {
-        const val PROGRESS_MIN_INTERVAL_MS = 750L
+        const val PROGRESS_MIN_INTERVAL_MS = 2_000L
     }
 }

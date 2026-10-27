@@ -429,22 +429,86 @@ def _run(args: argparse.Namespace) -> Result:
 
 
 def _cfg_for(path: str, symbol: str | None) -> dict:
-    """CFG da fungsi ``symbol`` (default ``main``, atau titik masuk bila biner tidak punya simbol)."""
+    """CFG dari fungsi ``symbol`` (default ``main``, atau fungsi utama/titik masuk bila biner tidak punya simbol)."""
+    from .analysis.disasm import _pick_default_function
     from .parsers.elf import function_symbols, open_elf
     from .result import E_SYMBOL
 
     with open(path, "rb") as handle:
         elf = open_elf(handle)
         functions = function_symbols(elf)
+        if symbol and (symbol.strip().startswith(("0x", "0X")) or symbol.strip().isdigit()):
+            try:
+                addr = int(symbol.strip(), 0)
+                code = decode(elf, handle, address=addr, name=f"sub_{addr:x}")
+                return cfg_mod.build_cfg(code)
+            except ValueError:
+                pass
         wanted = symbol or "main"
         match = next((f for f in functions if f["name"] == wanted), None)
+        if match is None and symbol and symbol != "main":
+            match = next((f for f in functions if symbol in f["name"]), None)
         if match is not None:
             code = decode(elf, handle, function=match)
-        elif not symbol:
-            code = decode(elf, handle, address=elf.header["e_entry"], name="entry")
+        elif not symbol or symbol == "main":
+            addr, fname, fsize = _pick_default_function(elf, functions)
+            if fsize > 0:
+                code = decode(elf, handle, function={"name": fname, "addr": addr, "size": fsize})
+            else:
+                code = decode(elf, handle, address=addr, name=fname)
         else:
-            raise ReaError(E_SYMBOL, f"Simbol tidak ditemukan: {symbol}", "Biner mungkin di-strip; pakai `rea analyze --disasm` tanpa nama untuk titik masuk.")
+            raise ReaError(E_SYMBOL, f"Simbol tidak ditemukan: {symbol}", "Biner mungkin di-strip; pakai `rea analyze --disasm` tanpa nama untuk fungsi utama.")
     return cfg_mod.build_cfg(code)
+
+
+def _extract_primary_apk_so(apk_path: str) -> tuple[str | None, str | None]:
+    """Menyalin pustaka native utama (.so) dari dalam APK ke berkas sementara agar bisa dianalisis ELF/disasm/CFG."""
+    import tempfile
+    import zipfile
+
+    if not zipfile.is_zipfile(apk_path):
+        return None, None
+    generic_prefixes = (
+        "libc++_shared",
+        "libandroidx.",
+        "libdatastore_",
+        "libconscrypt",
+        "libsqlite",
+        "libssl",
+        "libcrypto",
+        "libapplovin",
+        "libcrashlytics",
+        "libfirebase",
+        "libmmkv",
+        "lib sentry",
+    )
+    apk_stem = re.sub(r"[^a-z0-9]", "", os.path.basename(apk_path).lower().split()[0])
+    preferred_abis = ("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+    with zipfile.ZipFile(apk_path) as archive:
+        so_entries = [n for n in archive.namelist() if n.startswith("lib/") and n.endswith(".so") and n.count("/") >= 2]
+        if not so_entries:
+            return None, None
+
+        def _score(entry: str) -> tuple[int, int, int, int, int]:
+            parts = entry.split("/")
+            abi = parts[1] if len(parts) > 2 else ""
+            base = parts[-1].lower()
+            abi_rank = preferred_abis.index(abi) if abi in preferred_abis else 99
+            is_generic = 1 if any(base.startswith(p) for p in generic_prefixes) else 0
+            matches_name = 0 if (apk_stem and len(apk_stem) >= 3 and apk_stem in base) else 1
+            try:
+                size = archive.getinfo(entry).file_size
+            except KeyError:
+                size = 0
+            is_app_sized = 0 if (32 * 1024 <= size <= 1536 * 1024) else 1
+            return (abi_rank, is_generic, matches_name, is_app_sized, -size)
+
+        chosen = sorted(so_entries, key=_score)[0]
+        raw = archive.read(chosen)
+    fd, tmp_path = tempfile.mkstemp(prefix="rea_apk_", suffix="_" + os.path.basename(chosen))
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(raw)
+    return tmp_path, chosen
 
 
 def _analyze(args: argparse.Namespace) -> Result:
@@ -452,37 +516,62 @@ def _analyze(args: argparse.Namespace) -> Result:
     data: dict = {"identify": info}
     result = Result(command="analyze", data=data)
     is_elf = info["type"] == "ELF"
-    if is_elf:
-        data["elf"] = elf_mod.summarize(args.file)
-    elif args.disasm is not None or args.addr is not None:
-        raise ReaError(E_BAD_FORMAT, f"Disassembly belum mendukung berkas {info['type']}.", "Saat ini hanya ELF (fase 2).")
-    else:
-        result.warnings.append(f"Parser untuk {info['type']} belum tersedia; hanya identifikasi dan string.")
-    needs_elf = args.cfg is not None or args.xrefs
-    if needs_elf and not is_elf:
-        raise ReaError(E_BAD_FORMAT, f"CFG dan xref belum mendukung berkas {info['type']}.", "Saat ini hanya ELF.")
-    if args.strings:
-        data["strings"] = strings_mod.extract(
-            args.file, min_len=args.min_len, max_items=args.max_strings, only_interesting=args.interesting
-        )
-    if args.entropy:
-        data["entropy"] = {
-            "map": entropy_mod.entropy_map(args.file),
-            "sections": entropy_mod.section_entropy(args.file, data["elf"]["sections"]) if is_elf else [],
-        }
-    if args.cfg is not None:
-        graph = _cfg_for(args.file, args.cfg or None)
-        if not args.dot:
-            graph.pop("dot", None)
-        data["cfg"] = graph
-    if args.xrefs:
-        pool = strings_mod.extract(args.file, max_items=3000)["strings"]
-        data["xrefs"] = xrefs_mod.analyze_xrefs(args.file, pool)
-        result.warnings += data["xrefs"].pop("warnings")
-    if args.disasm is not None or args.addr is not None:
-        address = _parse_address(args.addr) if args.addr is not None else None
-        symbol = None if address is not None or args.disasm == "" else args.disasm
-        data["disasm"] = disasm_mod.disassemble(args.file, symbol=symbol, address=address, count=args.count)
+    is_apk = info["type"] == "APK"
+    elf_target = args.file if is_elf else None
+    tmp_so: str | None = None
+    try:
+        if is_apk:
+            data["apk"] = apk_mod.summarize_apk(args.file)
+            tmp_so, so_entry = _extract_primary_apk_so(args.file)
+            if tmp_so and so_entry:
+                data["apk"]["primary_native_lib"] = so_entry
+                elf_target = tmp_so
+                data["elf"] = elf_mod.summarize(tmp_so)
+                data["elf"]["source_entry"] = so_entry
+        elif is_elf:
+            data["elf"] = elf_mod.summarize(args.file)
+        elif args.disasm is not None or args.addr is not None:
+            raise ReaError(E_BAD_FORMAT, f"Disassembly belum mendukung berkas {info['type']}.", "Saat ini mendukung ELF dan APK (dengan pustaka .so).")
+        else:
+            result.warnings.append(f"Parser untuk {info['type']} belum tersedia; hanya identifikasi dan string.")
+
+        needs_elf = args.cfg is not None or args.xrefs
+        if needs_elf and not elf_target:
+            if is_apk:
+                result.warnings.append("APK tidak memiliki pustaka native (.so); CFG dan xref native dilewati.")
+            else:
+                raise ReaError(E_BAD_FORMAT, f"CFG dan xref belum mendukung berkas {info['type']}.", "Saat ini mendukung ELF dan APK.")
+        if args.strings:
+            data["strings"] = strings_mod.extract(
+                args.file, min_len=args.min_len, max_items=args.max_strings, only_interesting=args.interesting
+            )
+        if args.entropy:
+            data["entropy"] = {
+                "map": entropy_mod.entropy_map(args.file),
+                "sections": entropy_mod.section_entropy(elf_target, data["elf"]["sections"]) if elf_target and "elf" in data else [],
+            }
+        if args.cfg is not None and elf_target:
+            graph = _cfg_for(elf_target, args.cfg or None)
+            if not args.dot:
+                graph.pop("dot", None)
+            data["cfg"] = graph
+        if args.xrefs and elf_target:
+            pool = strings_mod.extract(elf_target, max_items=3000)["strings"]
+            data["xrefs"] = xrefs_mod.analyze_xrefs(elf_target, pool)
+            result.warnings += data["xrefs"].pop("warnings")
+        if args.disasm is not None or args.addr is not None:
+            if elf_target:
+                address = _parse_address(args.addr) if args.addr is not None else None
+                symbol = None if address is not None or args.disasm == "" else args.disasm
+                data["disasm"] = disasm_mod.disassemble(elf_target, symbol=symbol, address=address, count=args.count)
+            elif is_apk:
+                result.warnings.append("APK tidak memiliki pustaka native (.so); disassembly native dilewati.")
+    finally:
+        if tmp_so and os.path.exists(tmp_so):
+            try:
+                os.remove(tmp_so)
+            except OSError:
+                pass
     for hook in ("on_parse", "on_analyze"):
         _merge_plugin_results(data, hook, _run_plugins(result, hook, info["type"], args.file, data))
     if not args.json:
@@ -493,29 +582,48 @@ def _analyze(args: argparse.Namespace) -> Result:
 
 
 def _report(args: argparse.Namespace) -> Result:
-    """Laporan Markdown: identifikasi, ringkasan ELF, string menarik, dan disassembly fungsi utama."""
+    """Laporan Markdown: identifikasi, ringkasan ELF/APK, string menarik, dan disassembly fungsi utama."""
     info = identify(args.file)
     data: dict = {"identify": info, "missing": []}
-    if info["type"] == "ELF":
-        data["elf"] = elf_mod.summarize(args.file)
-        try:
-            symbol = "main" if any(f["name"] == "main" for f in data["elf"]["functions"]) else None
-            data["disasm"] = disasm_mod.disassemble(args.file, symbol=symbol, count=40)
-        except ReaError as error:
-            data["missing"].append(f"Disassembly dilewati: {error.message}")
-    else:
-        data["missing"].append(f"Parser untuk {info['type']} belum tersedia; laporan hanya berisi identifikasi dan string.")
-    data["strings"] = strings_mod.extract(args.file, max_items=500)
-    data["entropy"] = {
-        "map": entropy_mod.entropy_map(args.file),
-        "sections": entropy_mod.section_entropy(args.file, data["elf"]["sections"]) if info["type"] == "ELF" else [],
-    }
-    if info["type"] == "ELF":
-        try:
-            data["cfg"] = _cfg_for(args.file, None)
-            data["xrefs"] = xrefs_mod.analyze_xrefs(args.file, strings_mod.extract(args.file, max_items=3000)["strings"])
-        except ReaError as error:
-            data["missing"].append(f"CFG dan xref dilewati: {error.message}")
+    elf_target = args.file if info["type"] == "ELF" else None
+    tmp_so: str | None = None
+    try:
+        if info["type"] == "APK":
+            data["apk"] = apk_mod.summarize_apk(args.file)
+            tmp_so, so_entry = _extract_primary_apk_so(args.file)
+            if tmp_so and so_entry:
+                data["apk"]["primary_native_lib"] = so_entry
+                elf_target = tmp_so
+        elif info["type"] != "ELF":
+            data["missing"].append(f"Parser khusus untuk {info['type']} belum tersedia; laporan berisi identifikasi dan string.")
+
+        if elf_target:
+            data["elf"] = elf_mod.summarize(elf_target)
+            if tmp_so and "apk" in data:
+                data["elf"]["source_entry"] = data["apk"].get("primary_native_lib")
+            try:
+                symbol = "main" if any(f["name"] == "main" for f in data["elf"]["functions"]) else None
+                data["disasm"] = disasm_mod.disassemble(elf_target, symbol=symbol, count=40)
+            except ReaError as error:
+                data["missing"].append(f"Disassembly dilewati: {error.message}")
+
+        data["strings"] = strings_mod.extract(args.file, max_items=500)
+        data["entropy"] = {
+            "map": entropy_mod.entropy_map(args.file),
+            "sections": entropy_mod.section_entropy(elf_target, data["elf"]["sections"]) if elf_target and "elf" in data else [],
+        }
+        if elf_target:
+            try:
+                data["cfg"] = _cfg_for(elf_target, None)
+                data["xrefs"] = xrefs_mod.analyze_xrefs(elf_target, strings_mod.extract(elf_target, max_items=3000)["strings"])
+            except ReaError as error:
+                data["missing"].append(f"CFG dan xref dilewati: {error.message}")
+    finally:
+        if tmp_so and os.path.exists(tmp_so):
+            try:
+                os.remove(tmp_so)
+            except OSError:
+                pass
     plugin_result = Result(command="report")
     for hook in ("on_parse", "on_analyze"):
         _merge_plugin_results(data, hook, _run_plugins(plugin_result, hook, info["type"], args.file, data))
@@ -537,9 +645,23 @@ def _report(args: argparse.Namespace) -> Result:
 def _print_analysis(data: dict) -> None:
     info = data["identify"]
     print(f"{info['path']}  {info['type']} {info.get('arch', '')} {info.get('bits', '')}  {info['size']} bayt", file=sys.stderr)
+    apk = data.get("apk")
+    if apk:
+        manifest = apk["manifest"]
+        print(
+            f"  paket {manifest['package']} v{manifest['version_name']} ({manifest['version_code']})  "
+            f"sdk {manifest['min_sdk']}→{manifest['target_sdk']}  activity: {manifest['main_activity']}",
+            file=sys.stderr,
+        )
+        print(
+            f"  {len(manifest['permissions'])} izin, {len(apk['dex'])} DEX, "
+            f"native ABI: {', '.join(apk['native_libs'].keys()) or 'tidak ada'}",
+            file=sys.stderr,
+        )
     elf = data.get("elf")
     if elf:
-        print(f"  tipe {elf['type']}, mesin {elf['machine']}, entry 0x{elf['entry']:x}, "
+        src = f" [{elf['source_entry']}]" if elf.get("source_entry") else ""
+        print(f"  ELF{src}: tipe {elf['type']}, mesin {elf['machine']}, entry 0x{elf['entry']:x}, "
               f"{'di-strip' if elf['stripped'] else 'ada simbol'}", file=sys.stderr)
         if elf["needed"]:
             print("  bergantung pada: " + ", ".join(elf["needed"]), file=sys.stderr)

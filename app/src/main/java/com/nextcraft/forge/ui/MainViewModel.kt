@@ -169,12 +169,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         api = githubClient.asAccountApi(),
         saveToken = { token ->
             vault.put("GITHUB_TOKEN", token)
+            connectorStore.syncGitHubConnector()
             val login = preferences.githubLogin.ifBlank { "x-access-token" }
             runCatching { installer.configureGitHubAccess(token, login) }
+            loadConnectors()
         },
         clearToken = {
             vault.remove("GITHUB_TOKEN")
+            connectorStore.removeGitHubConnectorIfAuto()
             runCatching { installer.clearGitHubAccess() }
+            loadConnectors()
         },
         savedLogin = { preferences.githubLogin },
         saveLogin = { login ->
@@ -516,6 +520,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            val connectors = withContext(Dispatchers.IO) { runCatching { connectorStore.list() }.getOrDefault(emptyList()) }
+            val skills = withContext(Dispatchers.IO) { runCatching { skillStore()?.list() }.getOrNull().orEmpty() }
+
             _state.update {
                 it.copy(
                     arm64Supported = arm64,
@@ -537,6 +544,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     androidBuild = if (it.androidBuild.phase == AndroidBuildPhase.BUILDING) it.androidBuild else initialBuildRecord,
                     providerProfile = profile,
                     savedApiKeys = keys,
+                    connectors = connectors,
+                    skills = skills,
                     languageCode = AppStrings.languageCode(getApplication()),
                     interactiveHighRiskApprovals = preferences.interactiveHighRiskApprovals,
                     autoApproveAllTools = preferences.autoApproveAllTools,
@@ -559,9 +568,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (savedGitHubToken.isNotBlank()) {
                 val savedLogin = preferences.githubLogin.ifBlank { "x-access-token" }
                 withContext(Dispatchers.IO) {
+                    connectorStore.syncGitHubConnector()
                     runCatching { installer.configureGitHubAccess(savedGitHubToken, savedLogin) }
                         .onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
                 }
+                loadConnectors()
                 githubAuth.restoreRepos(savedGitHubToken)
                 if (preferences.autoSyncGitHub) {
                     projects.forEach { proj ->
@@ -882,9 +893,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (existingProjectBuild == null || existingProjectBuild.phase != AndroidBuildPhase.BUILDING) {
             viewModelScope.launch {
                 val buildRecord = withContext(Dispatchers.IO) {
-                    val ws = checkpoints.ensureWorkspace(project.id)
-                    val androidRoot = findAndroidProjectRoot(ws)
-                    val existingApk = androidRoot?.let { findDebugApk(it) }
+                    val existingApk = findExistingProjectApk(project, chatId)
                     if (existingApk != null) {
                         AndroidBuildRecord(
                             phase = AndroidBuildPhase.SUCCEEDED,
@@ -1157,6 +1166,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // A long chat's JSON is megabytes: parse it off the main thread, then show it if the chat is still open.
         if (run == null) loadChatMessagesAsync(project.id, chatId)
         if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated == true) refreshBranchStatus(chatId)
+        if (_state.value.androidBuild.phase != AndroidBuildPhase.BUILDING) {
+            viewModelScope.launch {
+                val existingApk = withContext(Dispatchers.IO) { findExistingProjectApk(project, chatId) }
+                if (_state.value.activeProjectId == project.id && _state.value.activeChatId == chatId && _state.value.androidBuild.phase != AndroidBuildPhase.BUILDING) {
+                    val buildRecord = if (existingApk != null) {
+                        AndroidBuildRecord(
+                            phase = AndroidBuildPhase.SUCCEEDED,
+                            stage = AndroidBuildStage.COMPLETE,
+                            apkPath = existingApk.absolutePath,
+                            apkSizeBytes = existingApk.length(),
+                            message = str(R.string.build_existing_apk, existingApk.name, existingApk.length() / 1024),
+                        )
+                    } else {
+                        AndroidBuildRecord()
+                    }
+                    _state.update {
+                        it.copy(
+                            androidBuild = buildRecord,
+                            projectBuilds = it.projectBuilds + (project.id to buildRecord),
+                        )
+                    }
+                }
+            }
+        }
+        refreshWorkspaceFilesAndChanges(project.id)
     }
 
     /** Chat whose saved messages are still being read; until then the state holds no messages for it. */
@@ -1203,21 +1237,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteChat(chatId: String) {
-        val project = _state.value.activeProject ?: return
-        if (runs.containsKey(runKey(project.id, chatId))) return
-        if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated != true) {
-            deleteChatNow(chatId)
-            return
-        }
-        // Deleting the chat discards its branch clone; never do that over commits that were not merged.
-        viewModelScope.launch {
-            if (branchHoldsUnmergedWork(project, chatId)) {
-                _state.update { it.copy(bannerMessage = UiText.res(R.string.branch_unmerged)) }
-            } else if (_state.value.activeProjectId == project.id) {
-                // The user may have opened another project during the check; "main" exists in every project.
-                deleteChatNow(chatId)
-            }
-        }
+        deleteChatNow(chatId)
     }
 
     /** True when the chat's clone exists and either has work not in the project or its state cannot be read. */
@@ -1496,6 +1516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     McpConnector(id, name.trim().take(40), transport, cleanTarget, secretName.trim(), existing?.enabled ?: true),
                     secret.takeIf { it.isNotBlank() },
                 )
+                installer.syncMcpConfigs()
             }
             _state.update { it.copy(bannerMessage = UiText.res(R.string.connector_saved)) }
             loadConnectors()
@@ -1505,15 +1526,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setConnectorEnabled(id: String, enabled: Boolean) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { connectorStore.setEnabled(id, enabled) }
+            withContext(Dispatchers.IO) {
+                connectorStore.setEnabled(id, enabled)
+                installer.syncMcpConfigs()
+            }
             loadConnectors()
         }
     }
 
     fun deleteConnector(id: String) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { connectorStore.delete(id) }
+            withContext(Dispatchers.IO) {
+                connectorStore.delete(id)
+                installer.syncMcpConfigs()
+            }
             loadConnectors()
+        }
+    }
+
+    /** Connects the official open-source Figma MCP server (`figma-developer-mcp`) with a Figma Personal Access Token. */
+    fun connectFigma(token: String) {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) return
+        saveConnector(
+            name = "Figma",
+            transport = McpTransport.COMMAND,
+            target = "npx -y figma-developer-mcp --stdio",
+            secretName = "FIGMA_API_KEY",
+            secret = cleanToken,
+        )
+    }
+
+    /** Disconnects the Figma MCP server and removes its stored token from the Android Keystore vault. */
+    fun disconnectFigma() {
+        deleteConnector("figma")
+    }
+
+    /** Imports a Figma frame/design URL into the active project (or a new Quick project) and starts a design-to-code turn. */
+    fun importFigmaDesignUrl(figmaUrl: String) {
+        val cleanUrl = figmaUrl.trim()
+        if (cleanUrl.isEmpty()) return
+        val prompt = "Implement the UI/UX design from this Figma link ($cleanUrl) using the Figma MCP / design tools, matching layout, typography, colors, spacing, and responsive components."
+        val active = _state.value.activeProject
+        if (active != null) {
+            _state.update {
+                it.copy(
+                    activeTab = ForgeTab.PROJECTS,
+                    projectView = ProjectView.CONVERSATION,
+                )
+            }
+            sendPrompt(prompt)
+        } else {
+            viewModelScope.launch {
+                val project = withContext(Dispatchers.IO) {
+                    val identity = generateQuickChatIdentity(_state.value.projects.map { it.slug }.toSet(), str(R.string.quick_project_name))
+                    val project = Project(
+                        name = identity.displayName,
+                        description = "Figma design project",
+                        language = "Multi-language",
+                        slug = identity.slug,
+                        kind = ProjectKind.QUICK_PROJECT,
+                    )
+                    checkpoints.ensureWorkspace(project.id)
+                    project
+                }
+                configureAllProjectRoots(prependProject(project))
+                leaveOpenFile {
+                    selectProject(project.id)
+                    openConversation()
+                    sendPrompt(prompt)
+                }
+            }
         }
     }
 
@@ -2674,6 +2757,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chatBranches.ensure(project, chatId) {
                             setRunStatus(run, UiText.res(R.string.msg_git_waiting_queue))
                             notifyGitWaitingInQueue()
+                        }.also { ensured ->
+                            if (attachments.isNotEmpty()) {
+                                withContext(Dispatchers.IO) {
+                                    val mainWs = checkpoints.ensureWorkspace(project.id)
+                                    attachments.forEach { att ->
+                                        runCatching {
+                                            val src = checkpoints.safeWorkspaceFile(mainWs, att.relativePath)
+                                            val dst = checkpoints.safeWorkspaceFile(ensured.cloneDir, att.relativePath)
+                                            if (src.isFile && (!dst.exists() || dst.length() != src.length())) {
+                                                dst.parentFile?.mkdirs()
+                                                src.copyTo(dst, overwrite = true)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -3024,8 +3123,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             is RuntimeEvent.FilesChanged -> {
                 if (event.changes.isNotEmpty()) run.changedFiles = true
-                // An isolated chat's changes live in its branch; the project's review list is not theirs.
-                if (!run.isolated && _state.value.activeProjectId == run.projectId) {
+                if (_state.value.activeProjectId == run.projectId && _state.value.activeChatId == run.chatId) {
                     _state.update { it.copy(changedItems = event.changes) }
                     refreshWorkspaceFilesAndChanges(run.projectId)
                 }
@@ -3151,10 +3249,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         publishRunningFlags()
         val projectIdle = runs.values.none { it.projectId == run.projectId }
-        if (preferences.autoKeepChanges && projectIdle) {
+        val checkpointId = projectOf(run.projectId)?.let { proj ->
+            if (run.isolated) chatBranches.branchFor(proj, run.chatId).pseudoProjectId else proj.id
+        } ?: run.projectId
+        if (preferences.autoKeepChanges && (projectIdle || run.isolated)) {
             // Auto-save: the agent's edits are kept right away instead of waiting in "Review changes".
             viewModelScope.launch {
-                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(run.projectId) } }
+                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(checkpointId) } }
                 if (_state.value.activeProjectId == run.projectId) refreshWorkspaceFilesAndChanges(run.projectId)
             }
         } else if (_state.value.activeProjectId == run.projectId) {
@@ -3197,6 +3298,95 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return below.isEmpty() || (below.size <= 3 && below[0] == "outputs" && (below.size == 1 || below[1] == "apk"))
     }
 
+    /**
+     * Returns the active chat's isolated branch directory when that chat is isolated and its clone exists on disk,
+     * otherwise the project's main workspace directory.
+     */
+    private fun activeWorkspaceRoot(project: Project, chatId: String = _state.value.activeChatId): File {
+        val chat = if (_state.value.activeProjectId == project.id) {
+            _state.value.chats.firstOrNull { it.id == chatId }
+        } else {
+            preferences.loadProjectChats(project.id).firstOrNull { it.id == chatId }
+        }
+        if (chat?.isolated == true) {
+            val cloneDir = chatBranches.branchFor(project, chatId).cloneDir
+            if (cloneDir.isDirectory) return cloneDir
+        }
+        return checkpoints.ensureWorkspace(project.id)
+    }
+
+    /**
+     * Returns the checkpoint project ID for [project] and [chatId] (the isolated branch's [ChatBranch.pseudoProjectId]
+     * when that branch clone exists on disk, otherwise [Project.id]).
+     */
+    private fun activeCheckpointProjectId(project: Project, chatId: String = _state.value.activeChatId): String {
+        val chat = if (_state.value.activeProjectId == project.id) {
+            _state.value.chats.firstOrNull { it.id == chatId }
+        } else {
+            preferences.loadProjectChats(project.id).firstOrNull { it.id == chatId }
+        }
+        if (chat?.isolated == true) {
+            val branch = chatBranches.branchFor(project, chatId)
+            if (branch.cloneDir.isDirectory) return branch.pseudoProjectId
+        }
+        return project.id
+    }
+
+    /**
+     * Returns the workspace directory and guest `/workspace/<slug>` name for [project] and [chatId] (the isolated
+     * branch's clone directory and slug when present on disk, otherwise the main project workspace and slug).
+     */
+    private fun activeWorkspaceTarget(project: Project, chatId: String = _state.value.activeChatId): Pair<File, String> {
+        val chat = if (_state.value.activeProjectId == project.id) {
+            _state.value.chats.firstOrNull { it.id == chatId }
+        } else {
+            preferences.loadProjectChats(project.id).firstOrNull { it.id == chatId }
+        }
+        if (chat?.isolated == true) {
+            val branch = chatBranches.branchFor(project, chatId)
+            if (branch.cloneDir.isDirectory) return branch.cloneDir to branch.slug
+        }
+        return checkpoints.ensureWorkspace(project.id) to project.slug
+    }
+
+    /**
+     * Resolves [relativePath] inside the active chat's isolated branch first (if it exists there), falling back
+     * to the project's main workspace directory.
+     */
+    private fun resolveWorkspaceFile(project: Project, relativePath: String, chatId: String = _state.value.activeChatId): File {
+        val clean = relativePath.trim().trimStart('/')
+        val primaryRoot = activeWorkspaceRoot(project, chatId)
+        val primary = checkpoints.safeWorkspaceFile(primaryRoot, clean)
+        if (primary.exists()) return primary
+        val fallbackRoot = checkpoints.ensureWorkspace(project.id)
+        if (fallbackRoot != primaryRoot) {
+            val fallback = checkpoints.safeWorkspaceFile(fallbackRoot, clean)
+            if (fallback.exists()) return fallback
+        }
+        return primary
+    }
+
+    /** Finds a built debug APK in the active chat's isolated branch or in the main project workspace. */
+    private fun findExistingProjectApk(project: Project, chatId: String = _state.value.activeChatId): File? {
+        val primaryRoot = activeWorkspaceRoot(project, chatId)
+        findAndroidProjectRoot(primaryRoot)?.let(::findDebugApk)?.let { return it }
+        val mainWs = checkpoints.ensureWorkspace(project.id)
+        if (mainWs != primaryRoot) {
+            findAndroidProjectRoot(mainWs)?.let(::findDebugApk)?.let { return it }
+        }
+        // Also scan any isolated chat branches of this project in case the APK was built in another chat tab.
+        val chats = if (_state.value.activeProjectId == project.id) _state.value.chats else preferences.loadProjectChats(project.id)
+        for (chat in chats) {
+            if (chat.isolated && chat.id != chatId) {
+                val cloneDir = chatBranches.branchFor(project, chat.id).cloneDir
+                if (cloneDir.isDirectory) {
+                    findAndroidProjectRoot(cloneDir)?.let(::findDebugApk)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
     /** Refreshes the file list of the open project (the REA file picker reads it). */
     fun refreshWorkspaceFiles() {
         _state.value.activeProject?.let { refreshWorkspaceFilesAndChanges(it.id) }
@@ -3206,7 +3396,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requestId = ++workspaceRefreshRequest
         viewModelScope.launch {
             val (entries, changes) = workspaceIo(str(R.string.err_ws_read)) {
-                val ws = checkpoints.ensureWorkspace(projectId)
+                val proj = _state.value.projects.firstOrNull { it.id == projectId }
+                val ws = if (proj != null) activeWorkspaceRoot(proj) else checkpoints.ensureWorkspace(projectId)
                 val rootCanonical = runCatching { ws.canonicalFile.toPath() }.getOrNull()
                 val ignored = setOf(".git", ".gradle", "build", "node_modules", "__pycache__")
                 val files = if (rootCanonical == null) {
@@ -3260,9 +3451,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             if (cmp != 0) cmp else aParts.size.compareTo(bParts.size)
                         }
                 }
-                val changedPaths = checkpoints.readChangedPaths(projectId)
+                val checkpointId = if (proj != null) activeCheckpointProjectId(proj) else projectId
+                val changedPaths = checkpoints.readChangedPaths(checkpointId)
                 val changeDetails = if (changedPaths.isNotEmpty()) {
-                    checkpoints.buildChangeDetails(projectId, ws, changedPaths)
+                    checkpoints.buildChangeDetails(checkpointId, ws, changedPaths)
                 } else {
                     emptyList()
                 }
@@ -3293,7 +3485,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return null
         return withContext(Dispatchers.IO) {
             runCatching {
-                val root = checkpoints.ensureWorkspace(project.id).canonicalFile
+                val root = activeWorkspaceRoot(project).canonicalFile
                 val clean = relativeDir.trim('/')
                 if (clean.split('/').any { it == ".." }) return@runCatching null
                 val dir = if (clean.isEmpty()) root else File(root, clean).canonicalFile
@@ -3451,8 +3643,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Saving a truncated, binary or unreadable file back as text would destroy it, so those open read-only.
             val (content, editable) = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
-                    val target = checkpoints.safeWorkspaceFile(ws, relativePath)
+                    val target = resolveWorkspaceFile(project, relativePath)
                     if (!target.isFile) {
                         "" to true
                     } else {
@@ -3505,7 +3696,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, path)
                     target.parentFile?.mkdirs()
                     target.writeText(content)
@@ -3538,7 +3729,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, cleanPath)
                     target.parentFile?.mkdirs()
                     if (!target.exists()) target.writeText(initialContent)
@@ -3559,7 +3750,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (cleanPath.isEmpty()) return
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching { checkpoints.safeWorkspaceFile(checkpoints.ensureWorkspace(project.id), cleanPath).mkdirs() }.getOrDefault(false)
+                runCatching { checkpoints.safeWorkspaceFile(activeWorkspaceRoot(project), cleanPath).mkdirs() }.getOrDefault(false)
             }
             if (ok) refreshWorkspaceFilesAndChanges(project.id)
         }
@@ -3580,7 +3771,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val from = checkpoints.safeWorkspaceFile(ws, cleanPath)
                     val to = checkpoints.safeWorkspaceFile(ws, newPath)
                     from.exists() && !to.exists() && from.renameTo(to)
@@ -3695,7 +3886,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun copyUrisIntoWorkspace(projectId: String, uris: List<android.net.Uri>, dir: String): List<ChatAttachment> {
         val resolver = getApplication<Application>().contentResolver
-        val ws = checkpoints.ensureWorkspace(projectId)
+        val proj = _state.value.projects.firstOrNull { it.id == projectId }
+        val ws = if (proj != null && dir != "attachments") activeWorkspaceRoot(proj) else checkpoints.ensureWorkspace(projectId)
         val out = mutableListOf<ChatAttachment>()
         uris.forEach { uri ->
             runCatching {
@@ -3738,7 +3930,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val count = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val ignored = setOf(".git", ".gradle", "build", "node_modules", "__pycache__")
                     val roots = if (paths.isEmpty()) listOf(ws) else paths.map { checkpoints.safeWorkspaceFile(ws, it) }
                     var written = 0
@@ -3776,8 +3968,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
-                    val source = checkpoints.safeWorkspaceFile(ws, relativePath.trim().trimStart('/'))
+                    val source = resolveWorkspaceFile(project, relativePath)
                     check(source.isFile && !Files.isSymbolicLink(source.toPath())) { "Not a regular file" }
                     getApplication<Application>().contentResolver.openOutputStream(target)?.use { os ->
                         source.inputStream().use { it.copyTo(os) }
@@ -3803,7 +3994,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val deleted = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, cleanPath)
                     target.exists() && target.deleteRecursivelyNoFollow()
                 }.getOrDefault(false)
@@ -3833,8 +4024,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_revert_file, path)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.revertHunk(project.id, ws, path, hunkIndex)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.revertHunk(checkpointId, ws, path, hunkIndex)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
             if (_state.value.selectedFilePath == path) {
@@ -3861,6 +4053,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun captureUiInspectorHierarchy() {
         if (_state.value.uiInspectorBusy) return
+        if (!RuntimeEngines.isRootEngine()) {
+            _state.update { it.copy(uiInspectorNodes = emptyList(), bannerMessage = UiText.res(R.string.mt_root_required)) }
+            return
+        }
         _state.update { it.copy(uiInspectorBusy = true) }
         viewModelScope.launch {
             val nodes = withContext(Dispatchers.IO) {
@@ -3870,7 +4066,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val proc = ProcessBuilder(
                         "su",
                         "-c",
-                        "uiautomator dump /sdcard/forge_ui_dump.xml >/dev/null 2>&1 && cat /sdcard/forge_ui_dump.xml; rm -f /sdcard/forge_ui_dump.xml",
+                        "uiautomator dump /data/local/tmp/forge_ui_dump.xml >/dev/null 2>&1 && cat /data/local/tmp/forge_ui_dump.xml; rm -f /data/local/tmp/forge_ui_dump.xml",
                     ).redirectErrorStream(true).redirectOutput(outFile).start()
                     runCatching { proc.outputStream.close() }
                     val finished = proc.waitFor(12, java.util.concurrent.TimeUnit.SECONDS)
@@ -3884,7 +4080,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     uiInspectorNodes = nodes,
                     uiInspectorBusy = false,
-                    bannerMessage = if (nodes.isEmpty()) UiText.res(R.string.mt_root_required) else it.bannerMessage,
+                    bannerMessage = if (nodes.isEmpty()) UiText.res(R.string.inspector_empty_hint) else it.bannerMessage,
                 )
             }
         }
@@ -3965,8 +4161,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_revert_file, path)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.revertFile(project.id, ws, path)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.revertFile(checkpointId, ws, path)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
             if (_state.value.selectedFilePath == path) {
@@ -3981,8 +4178,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_keep_file, path)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.acceptFile(project.id, ws, path)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.acceptFile(checkpointId, ws, path)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
         }
@@ -3992,7 +4190,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
-            workspaceIo(str(R.string.err_ws_keep)) { checkpoints.acceptAll(project.id) } ?: return@launch
+            workspaceIo(str(R.string.err_ws_keep)) { checkpoints.acceptAll(activeCheckpointProjectId(project)) } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
         }
     }
@@ -4002,8 +4200,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_revert)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.revertLatestTurn(project.id, ws)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.revertLatestTurn(checkpointId, ws)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
             _state.value.selectedFilePath?.let { loadWorkspaceFile(it) }
@@ -4223,10 +4422,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             put("COLORTERM", "truecolor")
             put("LANG", "C.UTF-8")
         }
-        val chroot = installer.isInstalled() && isRootAccessAvailable() && installer.installedRuntime().chrootExec.isFile
-        return if (chroot) {
-            // The guest environment (PATH, HOME, TERM, provider keys) travels in a one-shot env file sourced by su.
-            // /root is the chroot's home, so the shell is not tied to any project.
+        val runtimeAvailable = installer.isInstalled() && installer.isRuntimeAccessAvailable() && installer.installedRuntime().chrootExec.isFile
+        return if (runtimeAvailable) {
+            // The guest environment (PATH, HOME, TERM, provider keys) travels in a one-shot env file sourced by su / sh.
+            // /root is the runtime's home, so the shell is not tied to any project.
             // The general terminal is not tied to a project; a chat's terminal starts in that chat's folder.
             val folder = handle.chatId?.let { chatTerminalFolder(it) }
             handle.guestDir = folder?.let { "/workspace/${it.second}" }
@@ -4237,7 +4436,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 environment = activeChrootEnvironment(),
                 guestCommand = listOf("/bin/bash", "-l"),
             )
-            TerminalLaunchSpec("su", app.filesDir.absolutePath, arrayOf("su", "-mm", "-c", suCommand), env.toEnvArray(), inChroot = true)
+            val argv = installer.launchArgv(suCommand)
+            TerminalLaunchSpec(argv.first(), app.filesDir.absolutePath, argv.toTypedArray(), env.toEnvArray(), inChroot = true)
         } else {
             val folder = handle.chatId?.let { chatTerminalFolder(it) }
             handle.hostDir = folder?.first
@@ -4472,14 +4672,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var androidRoot: File? = null
 
             try {
-                val ws = withContext(Dispatchers.IO) { checkpoints.ensureWorkspace(project.id) }
+                val (ws, buildSlug) = withContext(Dispatchers.IO) { activeWorkspaceTarget(project) }
                 val root = withContext(Dispatchers.IO) { findAndroidProjectRoot(ws) ?: ws }
                 androidRoot = root
                 val cmd = androidGradleCommand(root, task, if (lowMemory) BuildVerification.LOW_MEMORY_FLAGS else "")
                 withContext(Dispatchers.IO) {
                     val relativeRoot = root.relativeTo(ws).invariantSeparatorsPath
                     val guestCommand = if (relativeRoot.isEmpty()) cmd else "cd ${shellSingleQuote(relativeRoot)} && $cmd"
-                    val process = startChrootProcess(project.slug, ws, guestCommand)
+                    val process = startChrootProcess(buildSlug, ws, guestCommand)
                     handle.process = process
                     if (!isActive) {
                         stopChrootProcess(process)
@@ -4638,9 +4838,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
             val apk = withContext(Dispatchers.IO) {
-                runCatching { checkpoints.safeWorkspaceFile(checkpoints.ensureWorkspace(project.id), relativePath) }.getOrNull()
+                runCatching { resolveWorkspaceFile(project, relativePath) }.getOrNull()
             }
             if (apk != null && apk.isFile) installBuiltApk(apk.absolutePath, project.id)
+        }
+    }
+
+    /** Copies the built (or existing debug) APK of the active project to a document URI chosen by the user. */
+    fun exportBuiltApk(target: android.net.Uri) {
+        val project = _state.value.activeProject ?: return
+        val currentApkPath = _state.value.androidBuild.apkPath
+        viewModelScope.launch {
+            val savedName = withContext(Dispatchers.IO) {
+                runCatching {
+                    val apkFile = currentApkPath?.let(::File)?.takeIf { it.isFile }
+                        ?: findExistingProjectApk(project)
+                        ?: error("APK not found")
+                    check(apkFile.isFile && !Files.isSymbolicLink(apkFile.toPath())) { "Not a regular APK file" }
+                    getApplication<Application>().contentResolver.openOutputStream(target)?.use { os ->
+                        apkFile.inputStream().use { it.copyTo(os) }
+                    } ?: error("Cannot open $target")
+                    apkFile.name
+                }.onFailure { Log.w("MainViewModel", "APK export failed", it) }.getOrNull()
+            }
+            val app = getApplication<Application>()
+            val msg = if (savedName != null) app.getString(R.string.msg_file_saved, savedName) else app.getString(R.string.msg_file_failed)
+            _state.update {
+                it.copy(
+                    fileSavedBanner = msg,
+                    bannerMessage = UiText.Raw(msg),
+                )
+            }
         }
     }
 

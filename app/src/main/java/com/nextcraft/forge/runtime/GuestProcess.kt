@@ -25,9 +25,11 @@ internal object GuestProcess {
         val pid = pidFile?.takeIf { it.isFile }?.let { runCatching { it.readText().trim().toInt() }.getOrNull() } ?: return
         if (pid <= 1) return
         val force = forceAfterSeconds?.let { "; sleep $it; kill -0 $pid 2>/dev/null && kill -s KILL $pid" }.orEmpty()
+        val cmd = "kill -s $signal $pid 2>/dev/null$force; true"
+        val argv = if (RuntimeEngines.isRootEngine()) listOf("su", "-c", cmd) else listOf("/system/bin/sh", "-c", cmd)
         Thread({
             runCatching {
-                val proc = ProcessBuilder("su", "-c", "kill -s $signal $pid 2>/dev/null$force; true")
+                val proc = ProcessBuilder(argv)
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.to(File("/dev/null")))
                     .start()

@@ -64,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -133,7 +134,12 @@ fun SettingsScreenModern(
                 onClick = { appearanceOpen = !appearanceOpen },
                 trailing = { Chevron(appearanceOpen) },
             )
-            AnimatedVisibility(visible = appearanceOpen) {
+            val reduceMotion = rememberReduceMotion()
+            AnimatedVisibility(
+                visible = appearanceOpen,
+                enter = ForgeMotion.expandEnter(reduceMotion),
+                exit = ForgeMotion.shrinkExit(reduceMotion),
+            ) {
                 Column {
                     ThemeModeGrid(active = activeThemeMode, onSelect = viewModel::setThemeMode)
                     if (activeThemeMode == ForgeThemeMode.GLASS) {
@@ -159,7 +165,11 @@ fun SettingsScreenModern(
                 onClick = { languageOpen = !languageOpen },
                 trailing = { Chevron(languageOpen) },
             )
-            AnimatedVisibility(visible = languageOpen) {
+            AnimatedVisibility(
+                visible = languageOpen,
+                enter = ForgeMotion.expandEnter(reduceMotion),
+                exit = ForgeMotion.shrinkExit(reduceMotion),
+            ) {
                 Column(modifier = Modifier.padding(bottom = 6.dp)) {
                     languages.forEach { lang ->
                         RadioRow(
@@ -184,7 +194,11 @@ fun SettingsScreenModern(
                 onClick = { engineOpen = !engineOpen },
                 trailing = { Chevron(engineOpen) },
             )
-            AnimatedVisibility(visible = engineOpen) {
+            AnimatedVisibility(
+                visible = engineOpen,
+                enter = ForgeMotion.expandEnter(reduceMotion),
+                exit = ForgeMotion.shrinkExit(reduceMotion),
+            ) {
                 Column(modifier = Modifier.padding(bottom = 6.dp)) {
                     engineChoices.forEach { choice ->
                         RadioRow(
@@ -437,6 +451,10 @@ fun SettingsScreenModern(
             ThinDivider()
             // What changed in this build: read here instead of a phone notification after each update.
             var whatsNewOpen by rememberSaveable { mutableStateOf(false) }
+            val dynamicNotes = remember(state.updateInfo, whatsNewOpen) {
+                state.updateInfo?.notes?.takeIf { it.isNotBlank() }
+                    ?: runCatching { com.nextcraft.forge.data.AppPreferences(context).latestReleaseNotes.takeIf { it.isNotBlank() } }.getOrNull()
+            }
             SettingsRow(
                 icon = ForgeGlyph.INFO,
                 title = stringResource(R.string.chg_notif_channel),
@@ -445,7 +463,7 @@ fun SettingsScreenModern(
             )
             if (whatsNewOpen) {
                 Text(
-                    stringResource(R.string.chg_notif_text),
+                    dynamicNotes ?: stringResource(R.string.chg_notif_text),
                     fontSize = ForgeType.secondary,
                     color = scheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
@@ -755,10 +773,17 @@ internal fun SettingsRow(
 ) {
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .forgePressScale(interaction, pressedScale = 0.985f)
+                        .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.Button, onClick = onClick)
+                } else Modifier,
+            )
             .heightIn(min = 60.dp)
             .padding(horizontal = horizontalPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -790,9 +815,14 @@ internal fun DisclosureCard(
     onToggle: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    val reduceMotion = rememberReduceMotion()
     ForgeThemedCard(modifier = Modifier.fillMaxWidth()) {
         SettingsRow(icon = icon, title = title, subtitle = subtitle, onClick = onToggle, trailing = { Chevron(expanded) })
-        AnimatedVisibility(visible = expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
             Column {
                 ThinDivider()
                 content()
@@ -803,10 +833,17 @@ internal fun DisclosureCard(
 
 @Composable
 internal fun Chevron(expanded: Boolean) {
+    val reduceMotion = rememberReduceMotion()
+    val rotation by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
+        label = "chevronRotation",
+    )
     Icon(
-        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+        imageVector = Icons.Default.KeyboardArrowDown,
         contentDescription = stringResource(if (expanded) R.string.projects_collapse else R.string.projects_expand),
         tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.graphicsLayer { rotationZ = rotation },
     )
 }
 
@@ -826,10 +863,12 @@ internal fun RadioRow(
     horizontalPadding: androidx.compose.ui.unit.Dp = 14.dp,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(role = Role.RadioButton, onClick = onClick)
+            .forgePressScale(interaction, pressedScale = 0.985f, haptic = true)
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.RadioButton, onClick = onClick)
             .forgeSelected(selected)
             .heightIn(min = 56.dp)
             .padding(horizontal = horizontalPadding, vertical = 8.dp),
@@ -884,6 +923,7 @@ internal fun SetupProgress(state: ForgeUiState, scope: SetupScope? = null) {
 internal fun ThemeModeGrid(active: ForgeThemeMode, onSelect: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val tokens = LocalForgeThemeTokens.current
+    val reduceMotion = rememberReduceMotion()
     Column(
         modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -893,16 +933,28 @@ internal fun ThemeModeGrid(active: ForgeThemeMode, onSelect: (String) -> Unit) {
             Row(modifier = Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 pair.forEach { mode ->
                     val selected = mode == active
+                    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    val tileBg = androidx.compose.animation.animateColorAsState(
+                        targetValue = if (selected) scheme.primary.copy(alpha = 0.12f) else tokens.cardElevatedColor,
+                        animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
+                        label = "themeTileBg",
+                    ).value
+                    val titleColor = androidx.compose.animation.animateColorAsState(
+                        targetValue = if (selected) scheme.primary else scheme.onSurface,
+                        animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else ForgeMotion.springSnappy(),
+                        label = "themeTileTitle",
+                    ).value
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = if (selected) scheme.primary.copy(alpha = 0.12f) else tokens.cardElevatedColor,
+                        color = tileBg,
                         border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, scheme.primary.copy(alpha = 0.6f)) else null,
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
                             .heightIn(min = 76.dp)
+                            .forgePressScale(interaction, pressedScale = 0.96f, haptic = true)
                             .clip(RoundedCornerShape(14.dp))
-                            .clickable(role = Role.RadioButton) { onSelect(mode.id) }
+                            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), role = Role.RadioButton) { onSelect(mode.id) }
                             .forgeSelected(selected),
                     ) {
                         Column(
@@ -913,7 +965,7 @@ internal fun ThemeModeGrid(active: ForgeThemeMode, onSelect: (String) -> Unit) {
                                 text = stringResource(mode.title),
                                 fontSize = ForgeType.body,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (selected) scheme.primary else scheme.onSurface,
+                                color = titleColor,
                             )
                             Text(
                                 text = stringResource(mode.subtitle),

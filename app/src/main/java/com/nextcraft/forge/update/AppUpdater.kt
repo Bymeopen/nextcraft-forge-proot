@@ -3,8 +3,10 @@ package com.nextcraft.forge.update
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import com.nextcraft.forge.data.AppPreferences
 import com.nextcraft.forge.model.stringOrEmpty
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -19,217 +21,206 @@ data class AppUpdateInfo(
     val notes: String,
 )
 
-/** The manifest URL answered 404: the project has not published an app release (or manifest) yet. */
-class NoPublishedReleaseException : java.io.IOException("No app release has been published yet.")
+class NoPublishedReleaseException : IOException("No app release has been published yet.")
 
 class AppUpdater(
     private val context: Context,
-    /**
-     * Optional manifest URL override. When non-empty, used in place of
-     * `BuildConfig.APP_UPDATE_MANIFEST_URL`, which defaults to the `update-manifest.json` asset of the latest
-     * GitHub release (see scripts/make-update-manifest.sh).
-     */
     private val manifestUrlOverride: String = "",
 ) {
     fun check(): AppUpdateInfo? {
-        val manifestUrl = manifestUrlOverride.ifBlank { defaultManifestUrl() }.trim()
-        check(manifestUrl.startsWith("https://")) { "No HTTPS update manifest URL is configured." }
-        val connection = URL(manifestUrl).openConnection() as HttpURLConnection
+        val targetManifestUrl = manifestUrlOverride.ifBlank { resolveDefaultManifestUrl() }.trim()
+        check(targetManifestUrl.startsWith("https://")) { "No HTTPS update manifest URL is configured." }
+        val conn = (URL(targetManifestUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 8_000
+            readTimeout = 10_000
+            instanceFollowRedirects = true
+            setRequestProperty("Accept", "application/json")
+        }
         return try {
-            connection.connectTimeout = 8_000
-            connection.readTimeout = 10_000
-            connection.instanceFollowRedirects = true
-            connection.setRequestProperty("Accept", "application/json")
-            val code = connection.responseCode
-            if (code == 404) throw NoPublishedReleaseException()
-            if (code !in 200..299) throw java.io.IOException("Update manifest request failed (HTTP $code)")
-            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                buildString {
-                    val buffer = CharArray(4 * 1024)
-                    while (length < Limits.MAX_MANIFEST_CHARS) {
-                        val count = reader.read(buffer, 0, minOf(buffer.size, Limits.MAX_MANIFEST_CHARS - length))
-                        if (count <= 0) break
-                        append(buffer, 0, count)
-                    }
-                }
+            val statusCode = conn.responseCode
+            check(conn.url.protocol.equals("https", ignoreCase = true)) {
+                "Update manifest redirect to non-HTTPS URL blocked."
             }
-            parseManifest(JSONObject(body), context.packageName, currentVersionCode(), appVariant())
+            if (statusCode == 404) throw NoPublishedReleaseException()
+            if (statusCode !in 200..299) throw IOException("Update manifest request failed (HTTP $statusCode)")
+            val payload = conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                val sb = StringBuilder()
+                val buf = CharArray(4096)
+                while (sb.length < MANIFEST_CHAR_CAP) {
+                    val n = reader.read(buf, 0, minOf(buf.size, MANIFEST_CHAR_CAP - sb.length))
+                    if (n <= 0) break
+                    sb.append(buf, 0, n)
+                }
+                sb.toString()
+            }
+            val manifest = JSONObject(payload)
+            val declaredPkg = manifest.stringOrEmpty("packageName")
+            if (declaredPkg.isNotBlank() && declaredPkg != context.packageName) return null
+            val releaseNotes = manifest.stringOrEmpty("notes").trim()
+            if (releaseNotes.isNotBlank()) {
+                runCatching { AppPreferences(context).latestReleaseNotes = releaseNotes }
+            }
+            val remoteCode = manifest.optLong("versionCode")
+            if (remoteCode <= installedVersionCode()) return null
+            val flavor = currentVariantName()
+            val entry = manifest.optJSONObject("artifacts")?.optJSONObject(flavor)
+                ?: manifest.optJSONObject(flavor)
+                ?: manifest
+            val downloadEndpoint = entry.stringOrEmpty("url").ifBlank { entry.stringOrEmpty("apkUrl") }.trim()
+            if (!downloadEndpoint.startsWith("https://")) return null
+            AppUpdateInfo(
+                versionCode = remoteCode,
+                versionName = manifest.stringOrEmpty("versionName", remoteCode.toString()),
+                apkUrl = downloadEndpoint,
+                sha256 = entry.stringOrEmpty("sha256").trim().lowercase(),
+                sizeBytes = entry.optLong("sizeBytes", -1L),
+                notes = manifest.stringOrEmpty("notes"),
+            )
         } finally {
-            connection.disconnect()
+            conn.disconnect()
         }
     }
 
     fun download(info: AppUpdateInfo, progress: (Long, Long) -> Unit): File {
         require(info.apkUrl.startsWith("https://")) { "Update APK URL must use HTTPS." }
-        val variant = appVariant()
-        val directory = File(context.filesDir, "updates").also { it.mkdirs() }
-        val partial = File(directory, "nextcraft-forge-$variant.apk.part")
-        val target = File(directory, "nextcraft-forge-$variant.apk")
+        val flavor = currentVariantName()
+        val stagingFolder = File(context.filesDir, "updates").apply { mkdirs() }
+        val tempPartFile = File(stagingFolder, "nextcraft-forge-$flavor.apk.part")
+        val finalApkFile = File(stagingFolder, "nextcraft-forge-$flavor.apk")
         try {
-            val connection = URL(info.apkUrl).openConnection() as HttpURLConnection
+            val conn = (URL(info.apkUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                instanceFollowRedirects = true
+            }
             try {
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 30_000
-                connection.instanceFollowRedirects = true
-                val code = connection.responseCode
-                check(code in 200..299) { "Update download failed (HTTP $code)." }
-                val total = connection.contentLengthLong.takeIf { it > 0 } ?: info.sizeBytes
-                val maxBytes = if (info.sizeBytes in 1..Limits.MAX_APK_BYTES) info.sizeBytes else Limits.MAX_APK_BYTES
-                check(total <= maxBytes) { "Update download exceeds the allowed size." }
-                connection.inputStream.use { input ->
-                    partial.outputStream().use { output ->
-                        val buffer = ByteArray(128 * 1024)
-                        var downloaded = 0L
+                val statusCode = conn.responseCode
+                check(conn.url.protocol.equals("https", ignoreCase = true)) {
+                    "Update download redirect to non-HTTPS URL blocked."
+                }
+                check(statusCode in 200..299) { "Update download failed (HTTP $statusCode)." }
+                val contentLen = conn.contentLengthLong.takeIf { it > 0L } ?: info.sizeBytes
+                val byteCeiling = if (info.sizeBytes in 1L..APK_BYTE_CAP) info.sizeBytes else APK_BYTE_CAP
+                check(contentLen <= byteCeiling) { "Update download exceeds the allowed size." }
+                conn.inputStream.use { netIn ->
+                    tempPartFile.outputStream().use { fileOut ->
+                        val chunk = ByteArray(131_072)
+                        var received = 0L
                         while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                            downloaded += count
-                            check(downloaded <= maxBytes) { "Update download exceeds the allowed size." }
-                            progress(downloaded, total)
+                            val readCount = netIn.read(chunk)
+                            if (readCount < 0) break
+                            fileOut.write(chunk, 0, readCount)
+                            received += readCount
+                            check(received <= byteCeiling) { "Update download exceeds the allowed size." }
+                            progress(received, contentLen)
                         }
                     }
                 }
             } finally {
-                connection.disconnect()
+                conn.disconnect()
             }
-            check(info.sha256.isNotBlank()) {
-                "Update manifest is missing SHA-256 checksum — refusing install."
-            }
-            val actual = sha256(partial)
-            check(actual.equals(info.sha256, ignoreCase = true)) {
+            check(info.sha256.isNotBlank()) { "Update manifest is missing SHA-256 checksum — refusing install." }
+            val computedDigest = computeFileSha256(tempPartFile)
+            check(computedDigest.equals(info.sha256, ignoreCase = true)) {
                 "Downloaded update failed SHA-256 checksum verification."
             }
-            verifyApk(partial, info.versionCode)
-            if (target.exists() && !target.delete()) {
+            validateDownloadedArchive(tempPartFile, info.versionCode)
+            if (finalApkFile.exists() && !finalApkFile.delete()) {
                 error("Could not replace previous staged update APK.")
             }
-            check(partial.renameTo(target)) { "Could not finalize downloaded update APK." }
-            return target
-        } catch (error: Throwable) {
-            partial.delete()
-            throw error
+            check(tempPartFile.renameTo(finalApkFile)) { "Could not finalize downloaded update APK." }
+            return finalApkFile
+        } catch (err: Throwable) {
+            tempPartFile.delete()
+            throw err
         }
     }
 
     @Suppress("DEPRECATION")
-    private fun verifyApk(apk: File, expectedVersionCode: Long) {
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    private fun validateDownloadedArchive(apkFile: File, targetVersionCode: Long) {
+        val certFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             PackageManager.GET_SIGNING_CERTIFICATES
         } else {
             PackageManager.GET_SIGNATURES
         }
-        val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, flags)
+        val pkgArchive = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, certFlags)
             ?: error("Downloaded file is not a valid Android APK archive.")
-        check(archive.packageName == context.packageName) {
-            "Downloaded APK package (${archive.packageName}) does not match installed app (${context.packageName})."
+        check(pkgArchive.packageName == context.packageName) {
+            "Downloaded APK package (${pkgArchive.packageName}) does not match installed app (${context.packageName})."
         }
-        val archiveVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            archive.longVersionCode
+        val pkgVer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkgArchive.longVersionCode
         } else {
-            archive.versionCode.toLong()
+            pkgArchive.versionCode.toLong()
         }
-        check(archiveVersion == expectedVersionCode && archiveVersion > currentVersionCode()) {
-            "Downloaded APK version ($archiveVersion) does not match expected update version ($expectedVersionCode)."
+        check(pkgVer == targetVersionCode && pkgVer > installedVersionCode()) {
+            "Downloaded APK version ($pkgVer) does not match expected update version ($targetVersionCode)."
         }
-        val installed = context.packageManager.getPackageInfo(context.packageName, flags)
-        val archiveSignatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            archive.signingInfo?.apkContentsSigners
+        val hostPkg = context.packageManager.getPackageInfo(context.packageName, certFlags)
+        val archiveSigners = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkgArchive.signingInfo?.apkContentsSigners
         } else {
-            archive.signatures
+            pkgArchive.signatures
         }
-        val installedSignatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            installed.signingInfo?.apkContentsSigners
+        val hostSigners = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            hostPkg.signingInfo?.apkContentsSigners
         } else {
-            installed.signatures
+            hostPkg.signatures
         }
-        check(
-            !archiveSignatures.isNullOrEmpty() &&
-                !installedSignatures.isNullOrEmpty() &&
-                archiveSignatures.map { sha256(it.toByteArray()) }.toSet() ==
-                installedSignatures.map { sha256(it.toByteArray()) }.toSet(),
-        ) {
+        val archiveHashes = archiveSigners?.map { computeBytesSha256(it.toByteArray()) }?.toSet().orEmpty()
+        val hostHashes = hostSigners?.map { computeBytesSha256(it.toByteArray()) }?.toSet().orEmpty()
+        check(archiveHashes.isNotEmpty() && hostHashes.isNotEmpty() && archiveHashes == hostHashes) {
             "Downloaded APK signing certificate does not match the installed app."
         }
     }
 
-    companion object {
-        /**
-         * Reads the update for [variant] out of a manifest, or null when there is none for this package/version/
-         * variant. The artifact must be listed under `artifacts.<variant>` (or a top-level `<variant>` object);
-         * an unknown variant never falls back to the root entry, which could hand a debug build a release APK.
-         */
-        internal fun parseManifest(root: JSONObject, packageName: String, currentVersionCode: Long, variant: String): AppUpdateInfo? {
-            // A manifest for another package is not an update for this app (older side-by-side builds used com.nextcraft.forge.x).
-            root.stringOrEmpty("packageName").takeIf { it.isNotBlank() }?.let { if (it != packageName) return null }
-            val versionCode = root.optLong("versionCode")
-            if (versionCode <= currentVersionCode) return null
-            val artifact = root.optJSONObject("artifacts")?.optJSONObject(variant)
-                ?: root.optJSONObject(variant)
-                ?: return null
-            val url = artifact.stringOrEmpty("url").ifBlank { artifact.stringOrEmpty("apkUrl") }.trim()
-            if (!url.startsWith("https://")) return null
-            return AppUpdateInfo(
-                versionCode = versionCode,
-                versionName = root.stringOrEmpty("versionName", versionCode.toString()),
-                apkUrl = url,
-                sha256 = artifact.stringOrEmpty("sha256").trim().lowercase(),
-                sizeBytes = artifact.optLong("sizeBytes", -1L),
-                notes = root.stringOrEmpty("notes"),
-            )
-        }
-    }
-
     @Suppress("DEPRECATION")
-    private fun currentVersionCode(): Long {
-        buildConfigLong("VERSION_CODE")?.let { return it }
+    private fun installedVersionCode(): Long {
+        readBuildConfigLong("VERSION_CODE")?.let { return it }
         return runCatching {
-            val info = context.packageManager.getPackageInfo(context.packageName, 0)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+            val pkg = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pkg.longVersionCode else pkg.versionCode.toLong()
         }.getOrDefault(1L)
     }
 
-    private fun appVariant(): String =
-        buildConfigString("APP_VARIANT")?.takeIf(String::isNotBlank) ?: "debug"
+    private fun currentVariantName(): String =
+        readBuildConfigString("APP_VARIANT")?.takeIf(String::isNotBlank) ?: "debug"
 
-    private fun defaultManifestUrl(): String =
-        buildConfigString("APP_UPDATE_MANIFEST_URL").orEmpty()
+    private fun resolveDefaultManifestUrl(): String =
+        readBuildConfigString("APP_UPDATE_MANIFEST_URL").orEmpty()
 
-    private fun resolveBuildConfigClass(): Class<*>? =
+    private fun loadBuildConfigClass(): Class<*>? =
         runCatching { Class.forName("${context.packageName}.BuildConfig") }.getOrNull()
             ?: runCatching { Class.forName("com.nextcraft.forge.BuildConfig") }.getOrNull()
 
-    private fun buildConfigString(fieldName: String): String? = runCatching {
-        val cls = resolveBuildConfigClass() ?: return@runCatching null
-        cls.getField(fieldName).get(null) as? String
+    private fun readBuildConfigString(key: String): String? = runCatching {
+        loadBuildConfigClass()?.getField(key)?.get(null) as? String
     }.getOrNull()
 
-    private fun buildConfigLong(fieldName: String): Long? = runCatching {
-        val cls = resolveBuildConfigClass() ?: return@runCatching null
-        when (val value = cls.getField(fieldName).get(null)) {
-            is Long -> value
-            is Int -> value.toLong()
+    private fun readBuildConfigLong(key: String): Long? = runCatching {
+        when (val raw = loadBuildConfigClass()?.getField(key)?.get(null)) {
+            is Long -> raw
+            is Int -> raw.toLong()
             else -> null
         }
     }.getOrNull()
 
-    private fun sha256(file: File): String = file.inputStream().use { input ->
-        val digest = MessageDigest.getInstance("SHA-256")
-        val buffer = ByteArray(128 * 1024)
+    private fun computeFileSha256(target: File): String = target.inputStream().use { stream ->
+        val md = MessageDigest.getInstance("SHA-256")
+        val chunk = ByteArray(131_072)
         while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            digest.update(buffer, 0, count)
+            val n = stream.read(chunk)
+            if (n < 0) break
+            md.update(chunk, 0, n)
         }
-        digest.digest().joinToString("") { "%02x".format(it) }
+        md.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
-        .digest(bytes)
-        .joinToString("") { "%02x".format(it) }
+    private fun computeBytesSha256(raw: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(raw).joinToString("") { "%02x".format(it) }
 
-    private object Limits {
-        const val MAX_MANIFEST_CHARS = 256 * 1024
-        const val MAX_APK_BYTES = 512L * 1024 * 1024
+    private companion object {
+        const val MANIFEST_CHAR_CAP = 256 * 1024
+        const val APK_BYTE_CAP = 512L * 1024 * 1024
     }
 }

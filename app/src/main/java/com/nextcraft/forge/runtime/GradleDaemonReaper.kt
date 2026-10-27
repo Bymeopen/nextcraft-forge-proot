@@ -31,10 +31,13 @@ internal object GradleDaemonReaper {
     internal fun shouldStop(level: Int, lowMemory: Boolean): Boolean =
         lowMemory || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
 
+    private fun shellArgv(): List<String> =
+        if (RuntimeEngines.isRootEngine()) listOf("su", "-c", STOP_IDLE_SCRIPT) else listOf("/system/bin/sh", "-c", STOP_IDLE_SCRIPT)
+
     fun stopIdleNow(onComplete: (() -> Unit)? = null) {
         Thread({
             runCatching {
-                val proc = ProcessBuilder("su", "-c", STOP_IDLE_SCRIPT)
+                val proc = ProcessBuilder(shellArgv())
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.to(java.io.File("/dev/null")))
                     .start()
@@ -53,7 +56,7 @@ internal object GradleDaemonReaper {
         lastRunAt = now
         Thread({
             runCatching {
-                val proc = ProcessBuilder("su", "-c", STOP_IDLE_SCRIPT)
+                val proc = ProcessBuilder(shellArgv())
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.to(java.io.File("/dev/null")))
                     .start()
