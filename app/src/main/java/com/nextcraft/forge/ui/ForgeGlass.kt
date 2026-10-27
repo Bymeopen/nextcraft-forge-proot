@@ -3,6 +3,11 @@ package com.nextcraft.forge.ui
 import androidx.compose.ui.unit.Dp
 import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.SheetValue
+import android.util.Log
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -121,10 +126,12 @@ internal fun ForgeModalSheet(
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val depth = LocalForgeSheetDepth.current
-    DisposableEffect(depth) {
-        depth?.let { it.intValue += 1 }
-        onDispose { depth?.let { it.intValue -= 1 } }
+    // Count the sheet only while it is really on screen (not just composed): a composed-but-hidden sheet used to keep the
+    // whole app blurred with nothing in front of it.
+    val tracker = rememberSheetDepthTracker()
+    LaunchedEffect(tracker, sheetState) {
+        snapshotFlow { sheetState.targetValue != SheetValue.Hidden || sheetState.currentValue != SheetValue.Hidden }
+            .collect { visible -> tracker.set(visible) }
     }
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -135,13 +142,37 @@ internal fun ForgeModalSheet(
     )
 }
 
+/**
+ * One open modal's share of [LocalForgeSheetDepth]. Idempotent (a repeated `set(true)` counts once), never lets the
+ * shared count go below zero, and releases its share when it leaves the composition.
+ */
+internal class SheetDepthTracker(private val depth: MutableIntState?) {
+    private var counted = false
+
+    fun set(visible: Boolean) {
+        val shared = depth ?: return
+        if (visible == counted) return
+        counted = visible
+        shared.intValue = (shared.intValue + if (visible) 1 else -1).coerceAtLeast(0)
+        Log.d("ForgeGlass", "modal depth -> ${shared.intValue} (visible=$visible)")
+    }
+}
+
+@Composable
+internal fun rememberSheetDepthTracker(): SheetDepthTracker {
+    val depth = LocalForgeSheetDepth.current
+    val tracker = remember(depth) { SheetDepthTracker(depth) }
+    DisposableEffect(tracker) { onDispose { tracker.set(false) } }
+    return tracker
+}
+
 /** Counts an open modal in [LocalForgeSheetDepth] so the root blurs the page behind it (Glass), like a sheet does. */
 @Composable
 internal fun CountAsOpenModal() {
-    val depth = LocalForgeSheetDepth.current
-    DisposableEffect(depth) {
-        depth?.let { it.intValue += 1 }
-        onDispose { depth?.let { it.intValue -= 1 } }
+    val tracker = rememberSheetDepthTracker()
+    DisposableEffect(tracker) {
+        tracker.set(true)
+        onDispose { tracker.set(false) }
     }
 }
 
