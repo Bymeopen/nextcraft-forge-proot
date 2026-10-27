@@ -62,6 +62,13 @@ fun ToolchainsScreen(state: ForgeUiState, viewModel: MainViewModel) {
             Text(stringResource(R.string.tool_runtime_missing), fontSize = ForgeType.control, color = scheme.error)
         }
         SetupProgress(state)
+        if (running) {
+            OutlinedButton(
+                shape = RoundedCornerShape(100),
+                onClick = viewModel::pauseRuntimeSetup,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+            ) { Text(stringResource(R.string.launch_pause)) }
+        }
         ToolSectionLabel(stringResource(R.string.tool_stacks))
         DevStack.entries.forEach { stack ->
             val installed = stack == DevStack.WEB || stack in state.installedDevStacks

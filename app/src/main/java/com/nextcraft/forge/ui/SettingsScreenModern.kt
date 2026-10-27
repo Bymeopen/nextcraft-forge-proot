@@ -79,7 +79,6 @@ import androidx.compose.ui.unit.dp
 import com.nextcraft.forge.BuildConfig
 import com.nextcraft.forge.R
 import com.nextcraft.forge.model.AgentKind
-import com.nextcraft.forge.model.DevStack
 import com.nextcraft.forge.model.ProviderKind
 import com.nextcraft.forge.model.providersForAgent
 import com.nextcraft.forge.runtime.AntigravityAuthStatus
@@ -296,60 +295,8 @@ fun SettingsScreenModern(
             }
         }
 
-        // ───────────────────────── Developer tools ─────────────────────────
+        // The toolchain manager (dev stacks + agents) lives in Tools > Toolchains.
         ForgeSectionLabel(stringResource(R.string.settings_runtime), horizontalPadding = 6.dp, topPadding = 8.dp)
-        var toolsOpen by rememberSaveable { mutableStateOf(true) }
-        val optionalInstalled = state.installedDevStacks.count { it != DevStack.WEB }
-        DisclosureCard(
-            icon = ForgeGlyph.CODE,
-            title = stringResource(R.string.settings_developer_tools),
-            subtitle = quantityStringResource(R.plurals.settings_core_plus_optional, optionalInstalled, optionalInstalled),
-            expanded = toolsOpen,
-            onToggle = { toolsOpen = !toolsOpen },
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                DevStack.entries.forEach { stack ->
-                    val installed = stack in state.installedDevStacks
-                    Row(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(stack.displayLabel(), fontSize = ForgeType.rowTitle, fontWeight = FontWeight.Medium)
-                            Text(stack.displayDescription(), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        when {
-                            stack == DevStack.WEB -> Text(stringResource(R.string.settings_included), fontSize = ForgeType.control, color = scheme.onSurfaceVariant)
-                            installed -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                ForgeStatusIcon(ForgeStatus.DONE, iconSize = 16.dp)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(stringResource(R.string.settings_agent_installed), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
-                                UninstallConfirmed(name = stack.displayLabel(), onConfirm = { viewModel.removeStack(stack) }) { ask ->
-                                    ForgeTextButton(onClick = ask, enabled = !runtimeBusy) {
-                                        Text(stringResource(R.string.settings_remove), color = tokens.dangerText)
-                                    }
-                                }
-                            }
-                            else -> OutlinedButton(
-                                shape = RoundedCornerShape(100),
-                                onClick = { viewModel.installStack(stack) },
-                                enabled = !isProvisioning,
-                                modifier = Modifier.heightIn(min = 40.dp),
-                            ) { Text(stringResource(R.string.settings_add)) }
-                        }
-                    }
-                }
-                SetupProgress(state, SetupScope.RUNTIME)
-                if (isProvisioning) {
-                    OutlinedButton(
-                        shape = RoundedCornerShape(100),
-                        onClick = viewModel::pauseRuntimeSetup,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
-                    ) { Text(stringResource(R.string.launch_pause)) }
-                }
-            }
-        }
 
         // ───────────────────────── Linux runtime ─────────────────────────
         var runtimeOpen by rememberSaveable { mutableStateOf(false) }
