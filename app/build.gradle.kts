@@ -76,8 +76,9 @@ android {
         }
     }
 
-    if ((project.findProperty("nextcraft.sideBySideSuffix") as String?).isNullOrBlank().not()) {
-        sourceSets.getByName("debug").res.srcDir("src/sideBySide/res")
+    (project.findProperty("nextcraft.sideBySideSuffix") as String?)?.takeIf { it.isNotBlank() }?.let { suffix ->
+        // The PRoot edition (com.nextcraft.forge.proot) has its own name; any other suffix is a throw-away test build.
+        sourceSets.getByName("debug").res.srcDir(if (suffix == "proot") "src/proot/res" else "src/sideBySide/res")
     }
 
     compileOptions {
