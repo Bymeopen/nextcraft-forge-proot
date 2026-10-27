@@ -134,7 +134,7 @@ fun FilesAndDiffScreen(
     val sort = FileSort.entries.firstOrNull { it.name == sortName } ?: FileSort.NAME
     // Listed from disk one folder at a time, so a folder's item count is its real one. state.workspaceFiles changes
     // whenever the agent, terminal or a revert touches the workspace, which re-lists the open folder.
-    val dirLoad by produceState<DirLoad>(DirLoad.Loading, state.activeProjectId, browseDir, state.workspaceFiles, refreshTick) {
+    val dirLoad by produceState<DirLoad>(DirLoad.Loading, state.activeProjectId, state.activeChatId, browseDir, state.workspaceFiles, refreshTick) {
         val dir = browseDir
         value = viewModel.listWorkspaceDirectory(dir)?.let { DirLoad.Ready(dir, it) } ?: DirLoad.Missing(dir)
     }

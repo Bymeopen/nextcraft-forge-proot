@@ -1166,6 +1166,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // A long chat's JSON is megabytes: parse it off the main thread, then show it if the chat is still open.
         if (run == null) loadChatMessagesAsync(project.id, chatId)
         if (_state.value.chats.firstOrNull { it.id == chatId }?.isolated == true) refreshBranchStatus(chatId)
+        if (_state.value.androidBuild.phase != AndroidBuildPhase.BUILDING) {
+            viewModelScope.launch {
+                val existingApk = withContext(Dispatchers.IO) { findExistingProjectApk(project, chatId) }
+                if (_state.value.activeProjectId == project.id && _state.value.activeChatId == chatId && _state.value.androidBuild.phase != AndroidBuildPhase.BUILDING) {
+                    val buildRecord = if (existingApk != null) {
+                        AndroidBuildRecord(
+                            phase = AndroidBuildPhase.SUCCEEDED,
+                            stage = AndroidBuildStage.COMPLETE,
+                            apkPath = existingApk.absolutePath,
+                            apkSizeBytes = existingApk.length(),
+                            message = str(R.string.build_existing_apk, existingApk.name, existingApk.length() / 1024),
+                        )
+                    } else {
+                        AndroidBuildRecord()
+                    }
+                    _state.update {
+                        it.copy(
+                            androidBuild = buildRecord,
+                            projectBuilds = it.projectBuilds + (project.id to buildRecord),
+                        )
+                    }
+                }
+            }
+        }
         refreshWorkspaceFilesAndChanges(project.id)
     }
 
@@ -3092,8 +3116,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             is RuntimeEvent.FilesChanged -> {
                 if (event.changes.isNotEmpty()) run.changedFiles = true
-                // An isolated chat's changes live in its branch; the project's review list is not theirs.
-                if (!run.isolated && _state.value.activeProjectId == run.projectId) {
+                if (_state.value.activeProjectId == run.projectId && _state.value.activeChatId == run.chatId) {
                     _state.update { it.copy(changedItems = event.changes) }
                     refreshWorkspaceFilesAndChanges(run.projectId)
                 }
@@ -3219,10 +3242,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         publishRunningFlags()
         val projectIdle = runs.values.none { it.projectId == run.projectId }
-        if (preferences.autoKeepChanges && projectIdle) {
+        val checkpointId = projectOf(run.projectId)?.let { proj ->
+            if (run.isolated) chatBranches.branchFor(proj, run.chatId).pseudoProjectId else proj.id
+        } ?: run.projectId
+        if (preferences.autoKeepChanges && (projectIdle || run.isolated)) {
             // Auto-save: the agent's edits are kept right away instead of waiting in "Review changes".
             viewModelScope.launch {
-                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(run.projectId) } }
+                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(checkpointId) } }
                 if (_state.value.activeProjectId == run.projectId) refreshWorkspaceFilesAndChanges(run.projectId)
             }
         } else if (_state.value.activeProjectId == run.projectId) {
@@ -3280,6 +3306,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (cloneDir.isDirectory) return cloneDir
         }
         return checkpoints.ensureWorkspace(project.id)
+    }
+
+    /**
+     * Returns the checkpoint project ID for [project] and [chatId] (the isolated branch's [ChatBranch.pseudoProjectId]
+     * when that branch clone exists on disk, otherwise [Project.id]).
+     */
+    private fun activeCheckpointProjectId(project: Project, chatId: String = _state.value.activeChatId): String {
+        val chat = if (_state.value.activeProjectId == project.id) {
+            _state.value.chats.firstOrNull { it.id == chatId }
+        } else {
+            preferences.loadProjectChats(project.id).firstOrNull { it.id == chatId }
+        }
+        if (chat?.isolated == true) {
+            val branch = chatBranches.branchFor(project, chatId)
+            if (branch.cloneDir.isDirectory) return branch.pseudoProjectId
+        }
+        return project.id
+    }
+
+    /**
+     * Returns the workspace directory and guest `/workspace/<slug>` name for [project] and [chatId] (the isolated
+     * branch's clone directory and slug when present on disk, otherwise the main project workspace and slug).
+     */
+    private fun activeWorkspaceTarget(project: Project, chatId: String = _state.value.activeChatId): Pair<File, String> {
+        val chat = if (_state.value.activeProjectId == project.id) {
+            _state.value.chats.firstOrNull { it.id == chatId }
+        } else {
+            preferences.loadProjectChats(project.id).firstOrNull { it.id == chatId }
+        }
+        if (chat?.isolated == true) {
+            val branch = chatBranches.branchFor(project, chatId)
+            if (branch.cloneDir.isDirectory) return branch.cloneDir to branch.slug
+        }
+        return checkpoints.ensureWorkspace(project.id) to project.slug
     }
 
     /**
@@ -3384,9 +3444,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             if (cmp != 0) cmp else aParts.size.compareTo(bParts.size)
                         }
                 }
-                val changedPaths = checkpoints.readChangedPaths(projectId)
+                val checkpointId = if (proj != null) activeCheckpointProjectId(proj) else projectId
+                val changedPaths = checkpoints.readChangedPaths(checkpointId)
                 val changeDetails = if (changedPaths.isNotEmpty()) {
-                    checkpoints.buildChangeDetails(projectId, ws, changedPaths)
+                    checkpoints.buildChangeDetails(checkpointId, ws, changedPaths)
                 } else {
                     emptyList()
                 }
@@ -3628,7 +3689,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, path)
                     target.parentFile?.mkdirs()
                     target.writeText(content)
@@ -3661,7 +3722,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, cleanPath)
                     target.parentFile?.mkdirs()
                     if (!target.exists()) target.writeText(initialContent)
@@ -3682,7 +3743,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (cleanPath.isEmpty()) return
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching { checkpoints.safeWorkspaceFile(checkpoints.ensureWorkspace(project.id), cleanPath).mkdirs() }.getOrDefault(false)
+                runCatching { checkpoints.safeWorkspaceFile(activeWorkspaceRoot(project), cleanPath).mkdirs() }.getOrDefault(false)
             }
             if (ok) refreshWorkspaceFilesAndChanges(project.id)
         }
@@ -3703,7 +3764,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val from = checkpoints.safeWorkspaceFile(ws, cleanPath)
                     val to = checkpoints.safeWorkspaceFile(ws, newPath)
                     from.exists() && !to.exists() && from.renameTo(to)
@@ -3818,7 +3879,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun copyUrisIntoWorkspace(projectId: String, uris: List<android.net.Uri>, dir: String): List<ChatAttachment> {
         val resolver = getApplication<Application>().contentResolver
-        val ws = checkpoints.ensureWorkspace(projectId)
+        val proj = _state.value.projects.firstOrNull { it.id == projectId }
+        val ws = if (proj != null && dir != "attachments") activeWorkspaceRoot(proj) else checkpoints.ensureWorkspace(projectId)
         val out = mutableListOf<ChatAttachment>()
         uris.forEach { uri ->
             runCatching {
@@ -3925,7 +3987,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val deleted = withContext(Dispatchers.IO) {
                 runCatching {
-                    val ws = checkpoints.ensureWorkspace(project.id)
+                    val ws = activeWorkspaceRoot(project)
                     val target = checkpoints.safeWorkspaceFile(ws, cleanPath)
                     target.exists() && target.deleteRecursivelyNoFollow()
                 }.getOrDefault(false)
@@ -3955,8 +4017,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_revert_file, path)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.revertHunk(project.id, ws, path, hunkIndex)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.revertHunk(checkpointId, ws, path, hunkIndex)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
             if (_state.value.selectedFilePath == path) {
@@ -4091,8 +4154,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_revert_file, path)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.revertFile(project.id, ws, path)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.revertFile(checkpointId, ws, path)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
             if (_state.value.selectedFilePath == path) {
@@ -4107,8 +4171,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_keep_file, path)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.acceptFile(project.id, ws, path)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.acceptFile(checkpointId, ws, path)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
         }
@@ -4118,7 +4183,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
-            workspaceIo(str(R.string.err_ws_keep)) { checkpoints.acceptAll(project.id) } ?: return@launch
+            workspaceIo(str(R.string.err_ws_keep)) { checkpoints.acceptAll(activeCheckpointProjectId(project)) } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
         }
     }
@@ -4128,8 +4193,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (runs.keys.any { it.projectId == project.id }) return
         viewModelScope.launch {
             workspaceIo(str(R.string.err_ws_revert)) {
-                val ws = checkpoints.ensureWorkspace(project.id)
-                checkpoints.revertLatestTurn(project.id, ws)
+                val ws = activeWorkspaceRoot(project)
+                val checkpointId = activeCheckpointProjectId(project)
+                checkpoints.revertLatestTurn(checkpointId, ws)
             } ?: return@launch
             refreshWorkspaceFilesAndChanges(project.id)
             _state.value.selectedFilePath?.let { loadWorkspaceFile(it) }
@@ -4599,14 +4665,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var androidRoot: File? = null
 
             try {
-                val ws = withContext(Dispatchers.IO) { checkpoints.ensureWorkspace(project.id) }
+                val (ws, buildSlug) = withContext(Dispatchers.IO) { activeWorkspaceTarget(project) }
                 val root = withContext(Dispatchers.IO) { findAndroidProjectRoot(ws) ?: ws }
                 androidRoot = root
                 val cmd = androidGradleCommand(root, task, if (lowMemory) BuildVerification.LOW_MEMORY_FLAGS else "")
                 withContext(Dispatchers.IO) {
                     val relativeRoot = root.relativeTo(ws).invariantSeparatorsPath
                     val guestCommand = if (relativeRoot.isEmpty()) cmd else "cd ${shellSingleQuote(relativeRoot)} && $cmd"
-                    val process = startChrootProcess(project.slug, ws, guestCommand)
+                    val process = startChrootProcess(buildSlug, ws, guestCommand)
                     handle.process = process
                     if (!isActive) {
                         stopChrootProcess(process)
