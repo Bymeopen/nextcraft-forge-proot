@@ -2373,6 +2373,17 @@ echo "started pid ${'$'}! (log: ${'$'}log)"
         }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
     }
 
+    /** Synchronizes enabled MCP connectors into Antigravity (`mcp_config.json`), DeepSeek Harness (`cordis.patch.yml`), and Claude Code (`~/.claude.json`). */
+    fun syncMcpConfigs() {
+        runCatching {
+            val managedMcp = ConnectorStore(context).mcpServersJson()
+            AntigravityCustomizations.apply(rootfs, mcpServers = managedMcp) { file, body -> writeRootfsFileAtomically(file, body, mode = 0b110100100) }
+            val dshPatch = File(rootfs, "root/.dsh/cordis.patch.yml")
+            writeRootfsFileAtomically(dshPatch, ForgeMcpServer.toDshCordisPatchYaml(managedMcp), mode = 0b110000000)
+            ensureWorkspaceTrust("/workspace", mcpServers = managedMcp)
+        }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", it) }
+    }
+
     private fun ensureWorkspaceTrust(
         workspacePath: String,
         environment: Map<String, String> = emptyMap(),

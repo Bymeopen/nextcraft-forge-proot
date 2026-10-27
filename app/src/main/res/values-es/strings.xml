@@ -1574,4 +1574,14 @@
     <string name="composer_agent_claude">Claude Code CLI en Root Chroot</string>
     <string name="composer_agent_agy">Google Antigravity CLI (agy)</string>
     <string name="composer_agent_deepseek">DeepSeek Harness JSON-RPC</string>
+    <string name="projects_connect_figma">Conectar Figma</string>
+    <string name="projects_figma_connected">Conectado a Figma MCP · listo para importar diseños</string>
+    <string name="projects_figma_description">Conecta tu token de acceso personal de Figma (figd_…) para activar Figma MCP en todos los agentes, o pega un enlace de Figma para generar código UI.</string>
+    <string name="projects_figma_import_url">Importar diseño de Figma al proyecto</string>
+    <string name="projects_figma_open_settings">Abrir ajustes de token de Figma</string>
+    <string name="projects_figma_subtitle">Importar diseños UI/UX y tokens desde Figma</string>
+    <string name="projects_figma_token_hint">Pegar token de acceso personal de Figma (figd_…)</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="composer_cmd_mcp">Abrir gestor de conectores MCP y habilidades</string>
+    <string name="composer_badge_mcp">MCP</string>
 </resources>

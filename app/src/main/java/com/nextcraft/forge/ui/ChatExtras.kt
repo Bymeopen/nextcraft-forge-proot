@@ -149,10 +149,11 @@ internal fun ToolStepGroup(items: List<ActivityItem>, modifier: Modifier = Modif
             }
             Chevron(open)
         }
+        val reduceMotion = rememberReduceMotion()
         AnimatedVisibility(
             visible = open,
-            enter = expandVertically(androidx.compose.animation.core.tween(ForgeMotion.EXPAND_MS)) + fadeIn(androidx.compose.animation.core.tween(ForgeMotion.FADE_MS)),
-            exit = shrinkVertically(androidx.compose.animation.core.tween(ForgeMotion.FADE_MS)) + fadeOut(androidx.compose.animation.core.tween(ForgeMotion.FADE_MS / 2)),
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
         ) {
             Column(modifier = Modifier.padding(start = 12.dp)) {
                 items.forEach { ToolCallRow(it) }
@@ -335,7 +336,12 @@ private fun ChangedFileRow(
             Spacer(modifier = Modifier.width(2.dp))
             Chevron(open)
         }
-        AnimatedVisibility(visible = open) {
+        val reduceMotion = rememberReduceMotion()
+        AnimatedVisibility(
+            visible = open,
+            enter = ForgeMotion.expandEnter(reduceMotion),
+            exit = ForgeMotion.shrinkExit(reduceMotion),
+        ) {
             Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
                 if (change.binary || change.diffLines.isEmpty()) {
                     Text(
@@ -559,9 +565,11 @@ internal fun ChatComposer(
     onToggleHandsFree: (() -> Unit)? = null,
     /** "Create image" entry of the attach menu (Nano Banana); null hides it. */
     onGenerateImage: (() -> Unit)? = null,
-    /** Workspace files and ready agents for inline `@file`, `@agent`, and `/slash` autocomplete popover. */
+    /** Workspace files, ready agents, and MCP connectors for inline `@file`, `@agent`, `@mcp`, and `/slash` autocomplete popover. */
     workspaceFiles: List<com.nextcraft.forge.model.WorkspaceEntry> = emptyList(),
     readyAgents: Set<com.nextcraft.forge.model.AgentKind> = emptySet(),
+    connectors: List<com.nextcraft.forge.runtime.McpConnector> = emptyList(),
+    onOpenConnectors: (() -> Unit)? = null,
     onExecuteSlashCommand: ((String) -> Unit)? = null,
     onSelectAgentTag: (() -> Unit)? = null,
 ) {
@@ -621,6 +629,8 @@ internal fun ChatComposer(
         promptInput = promptInput,
         workspaceFiles = workspaceFiles,
         readyAgents = readyAgents,
+        connectors = connectors,
+        onOpenConnectors = onOpenConnectors,
         onReplacePrompt = onPromptChange,
         onExecuteSlash = onExecuteSlashCommand,
         onSelectAgentTag = onSelectAgentTag,
@@ -731,6 +741,25 @@ internal fun ChatComposer(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.widthIn(max = 110.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                if (onOpenConnectors != null) {
+                    val activeMcpCount = connectors.count { it.enabled }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (activeMcpCount > 0) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(role = Role.Button, onClick = onOpenConnectors),
+                    ) {
+                        Text(
+                            text = if (activeMcpCount > 0) "MCP · $activeMcpCount" else "MCP",
+                            fontSize = ForgeType.secondary,
+                            fontWeight = FontWeight.Medium,
+                            color = if (activeMcpCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         )
                     }
                 }
@@ -858,6 +887,8 @@ private fun ComposerAutocompletePopover(
     promptInput: String,
     workspaceFiles: List<com.nextcraft.forge.model.WorkspaceEntry>,
     readyAgents: Set<com.nextcraft.forge.model.AgentKind>,
+    connectors: List<com.nextcraft.forge.runtime.McpConnector> = emptyList(),
+    onOpenConnectors: (() -> Unit)? = null,
     onReplacePrompt: (String) -> Unit,
     onExecuteSlash: ((String) -> Unit)?,
     onSelectAgentTag: (() -> Unit)? = null,
@@ -886,10 +917,11 @@ private fun ComposerAutocompletePopover(
 
     // Resolved outside remember so the catalogue follows the active locale; passed in as a key.
     val res = LocalContext.current.resources
-    val suggestions = remember(slashMatch, atMatch, workspaceFiles, readyAgents, res) {
+    val suggestions = remember(slashMatch, atMatch, workspaceFiles, readyAgents, connectors, res) {
         when {
             slashMatch != null -> {
                 val commands = listOf(
+                    ComposerSuggestion("cmd-mcp", "/mcp", res.getString(R.string.composer_cmd_mcp), ForgeGlyph.LINK, res.getString(R.string.composer_badge_mcp), "/mcp", executeImmediately = true),
                     ComposerSuggestion("cmd-build", "/build", res.getString(R.string.composer_cmd_build), ForgeGlyph.BUILD, res.getString(R.string.composer_badge_action), "/build", executeImmediately = true),
                     ComposerSuggestion("cmd-review", "/review", res.getString(R.string.composer_cmd_review), ForgeGlyph.SPARK, res.getString(R.string.composer_badge_swarm), "/review", executeImmediately = true),
                     ComposerSuggestion("cmd-memory", "/memory", res.getString(R.string.composer_cmd_memory), ForgeGlyph.FILE, res.getString(R.string.composer_badge_memory), "/memory", executeImmediately = true),
@@ -906,6 +938,35 @@ private fun ComposerAutocompletePopover(
             atMatch != null -> {
                 val (atIndex, query) = atMatch
                 val list = mutableListOf<ComposerSuggestion>()
+                val enabledMcp = connectors.filter { it.enabled }
+                for (mcp in enabledMcp) {
+                    val tag = "mcp:${mcp.id}"
+                    if (query.isEmpty() ||
+                        "mcp".startsWith(query) ||
+                        tag.startsWith(query) ||
+                        mcp.id.startsWith(query) ||
+                        mcp.name.lowercase().contains(query)
+                    ) {
+                        list += ComposerSuggestion(
+                            id = "mcp-${mcp.id}",
+                            title = "@$tag",
+                            subtitle = "Use ${mcp.name} MCP tools (${mcp.key})",
+                            glyph = ForgeGlyph.LINK,
+                            badge = "MCP",
+                            insertText = "Using the ${mcp.name} MCP server (`${mcp.key}`), ",
+                        )
+                    }
+                }
+                if (query.isEmpty() || "mcp".startsWith(query) || "connectors".startsWith(query)) {
+                    list += ComposerSuggestion(
+                        id = "mcp-manage",
+                        title = "@mcp:settings",
+                        subtitle = "Configure or add MCP servers (GitHub, Figma, Context7, Design…)",
+                        glyph = ForgeGlyph.LINK,
+                        badge = "Setup",
+                        insertText = "",
+                    )
+                }
                 if (atIndex == 0) {
                     val agentEntries = listOf(
                         Triple("claude", com.nextcraft.forge.model.AgentKind.CLAUDE_CODE, res.getString(R.string.composer_agent_claude)),
@@ -942,7 +1003,7 @@ private fun ComposerAutocompletePopover(
                         )
                     }
                 list.addAll(matchingFiles)
-                list.take(7)
+                list.take(8)
             }
             else -> emptyList()
         }
@@ -969,18 +1030,30 @@ private fun ComposerAutocompletePopover(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable(role = Role.Button) {
-                                if (item.executeImmediately && onExecuteSlash != null) {
+                                if (item.id == "mcp-manage") {
+                                    val (atIdx, _) = atMatch ?: (0 to "")
+                                    onReplacePrompt(promptInput.substring(0, atIdx))
+                                    onOpenConnectors?.invoke()
+                                } else if (item.executeImmediately && onExecuteSlash != null) {
                                     onReplacePrompt("")
-                                    onExecuteSlash(item.insertText)
+                                    if (item.id == "cmd-mcp" && onOpenConnectors != null) {
+                                        onOpenConnectors()
+                                    } else {
+                                        onExecuteSlash(item.insertText)
+                                    }
                                 } else if (slashMatch != null) {
                                     onReplacePrompt(item.insertText)
                                 } else if (atMatch != null) {
                                     val (atIdx, _) = atMatch
                                     val prefix = promptInput.substring(0, atIdx)
-                                    val replacement = if (item.id.startsWith("agent-")) {
-                                        onSelectAgentTag?.invoke()
-                                        item.insertText
-                                    } else "@${item.insertText}"
+                                    val replacement = when {
+                                        item.id.startsWith("agent-") -> {
+                                            onSelectAgentTag?.invoke()
+                                            item.insertText
+                                        }
+                                        item.id.startsWith("mcp-") -> item.insertText
+                                        else -> "@${item.insertText}"
+                                    }
                                     onReplacePrompt(prefix + replacement)
                                 }
                             }
@@ -989,7 +1062,7 @@ private fun ComposerAutocompletePopover(
                     ) {
                         ForgeIcon(
                             glyph = item.glyph,
-                            tint = if (item.id.startsWith("agent-") || item.id.startsWith("cmd-")) scheme.primary else scheme.onSurfaceVariant,
+                            tint = if (item.id.startsWith("agent-") || item.id.startsWith("cmd-") || item.id.startsWith("mcp-")) scheme.primary else scheme.onSurfaceVariant,
                             size = 18.dp,
                         )
                         Spacer(modifier = Modifier.width(10.dp))

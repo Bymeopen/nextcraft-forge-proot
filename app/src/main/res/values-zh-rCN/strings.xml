@@ -1534,4 +1534,14 @@
     <string name="composer_agent_claude">Root Chroot 中的 Claude Code CLI</string>
     <string name="composer_agent_agy">Google Antigravity CLI (agy)</string>
     <string name="composer_agent_deepseek">DeepSeek Harness JSON-RPC</string>
+    <string name="projects_connect_figma">连接 Figma</string>
+    <string name="projects_figma_connected">已连接 Figma MCP · 可随时导入设计</string>
+    <string name="projects_figma_description">连接您的 Figma 个人访问令牌 (figd_…) 以在所有编码智能体中启用 Figma MCP，或粘贴 Figma 设计链接以生成 UI 代码。</string>
+    <string name="projects_figma_import_url">将 Figma 设计导入项目</string>
+    <string name="projects_figma_open_settings">打开 Figma 令牌设置</string>
+    <string name="projects_figma_subtitle">从 Figma 导入 UI/UX 设计与令牌</string>
+    <string name="projects_figma_token_hint">粘贴 Figma 个人访问令牌 (figd_…)</string>
+    <string name="projects_figma_url_hint">https://www.figma.com/design/…</string>
+    <string name="composer_cmd_mcp">打开 MCP 连接器与技能管理器</string>
+    <string name="composer_badge_mcp">MCP</string>
 </resources>
