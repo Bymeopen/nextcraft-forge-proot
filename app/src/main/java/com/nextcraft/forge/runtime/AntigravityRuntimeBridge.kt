@@ -39,8 +39,9 @@ internal sealed interface AntigravityParsedEvent {
     data class Initialized(val conversationId: String) : AntigravityParsedEvent
     data class Text(val value: String, val done: Boolean = false) : AntigravityParsedEvent
     data object ResponseDone : AntigravityParsedEvent
-    data class ToolStarted(val name: String, val detail: String) : AntigravityParsedEvent
-    data class ToolCompleted(val name: String, val detail: String) : AntigravityParsedEvent
+    data class ToolStarted(val name: String, val detail: String, val rawName: String = name) : AntigravityParsedEvent
+    data class ToolCompleted(val name: String, val detail: String, val rawName: String = name) : AntigravityParsedEvent
+    data class ScheduledWakeup(val intervalMinutes: Int, val prompt: String) : AntigravityParsedEvent
     data class Result(
         val conversationId: String?,
         val status: String,
@@ -74,6 +75,15 @@ internal object AntigravityEventParser {
                     val rawName = step.stringOrEmpty("tool_name").ifBlank {
                         step.optJSONObject("tool_info")?.stringOrEmpty("name").orEmpty()
                     }.ifBlank { type.ifBlank { "Tool" } }
+                    if (rawName.equals("schedule", ignoreCase = true)) {
+                        val params = step.optJSONObject("tool_info")?.optJSONObject("parameters")
+                        val prompt = params?.stringOrEmpty("Prompt")?.trim()?.removeSurrounding("\"")?.trim().orEmpty()
+                        val seconds = params?.opt("DurationSeconds")?.toString()?.trim()?.toLongOrNull() ?: 0L
+                        if (prompt.isNotBlank() && seconds >= 60L) {
+                            val minutes = ((seconds + 59L) / 60L).coerceIn(5L, 7L * 24L * 60L).toInt()
+                            return AntigravityParsedEvent.ScheduledWakeup(minutes, prompt)
+                        }
+                    }
                     val name = antigravityToolDisplayName(rawName)
                     val detail = antigravityToolDetail(step, rawName).ifBlank { name }
                     if (state in setOf("DONE", "ERROR")) {
@@ -86,9 +96,9 @@ internal object AntigravityEventParser {
                             ?.stringOrEmpty("message")
                             ?.takeIf(String::isNotBlank)
                             ?.let(::redactToolDetail)
-                        AntigravityParsedEvent.ToolCompleted(name, output ?: error ?: detail)
+                        AntigravityParsedEvent.ToolCompleted(name, output ?: error ?: detail, rawName)
                     } else {
-                        AntigravityParsedEvent.ToolStarted(name, detail)
+                        AntigravityParsedEvent.ToolStarted(name, detail, rawName)
                     }
                 } else null
             }
@@ -587,6 +597,8 @@ class AntigravityRuntimeBridge(
             var lastToolProgressAtMillis = 0L
             var lastRetryCheckAtMillis = 0L
             var lastRetryStatus: String? = null
+            var scheduledWakeup: AntigravityParsedEvent.ScheduledWakeup? = null
+            var scheduleGraceSinceMillis = 0L
             suspend fun handleLine(rawLine: String) {
                 val line = rawLine.trimEnd('\r')
                 if (line.isBlank()) return
@@ -598,11 +610,26 @@ class AntigravityRuntimeBridge(
                     is AntigravityParsedEvent.Text -> {
                         assistantTextSeen = true
                         lastAgentResponseDone = event.done
+                        if (scheduledWakeup != null && event.done) resultSeen = true
                         pushForegroundProgress("Antigravity is working…")
                         eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, event.value))
                     }
                     is AntigravityParsedEvent.ResponseDone -> {
                         if (assistantTextSeen) lastAgentResponseDone = true
+                        if (scheduledWakeup != null) resultSeen = true
+                    }
+                    is AntigravityParsedEvent.ScheduledWakeup -> {
+                        scheduledWakeup = event
+                        scheduleGraceSinceMillis = System.currentTimeMillis()
+                        val detail = "Scheduled in ${event.intervalMinutes}m: ${event.prompt}"
+                        eventBus.emit(RuntimeEvent.ToolStarted(sessionId, "Schedule", detail))
+                        eventBus.emit(RuntimeEvent.ToolCompleted(sessionId, "Schedule", detail))
+                        eventBus.emit(
+                            RuntimeEvent.AssistantDelta(
+                                sessionId,
+                                "\n\n[[schedule: ${event.intervalMinutes}m | ${event.prompt}]]",
+                            ),
+                        )
                     }
                     is AntigravityParsedEvent.ToolStarted -> {
                         lastAgentResponseDone = false
@@ -628,7 +655,7 @@ class AntigravityRuntimeBridge(
                             }
                             resultSeen = true
                         } else throw AntigravitySessionException(
-                            friendlyError(event.error ?: event.status, System.currentTimeMillis() - sessionStartedAtMillis),
+                            friendlyError(event.error ?: event.status, recentAntigravityDiagnostic(sessionStartedAtMillis), System.currentTimeMillis() - sessionStartedAtMillis),
                         )
                     }
                     null -> Unit
@@ -639,6 +666,12 @@ class AntigravityRuntimeBridge(
                     val lines = tailer.readLines(timeoutMs = 250L)
                     if (lines.isEmpty()) {
                         val now = System.currentTimeMillis()
+                        if (scheduledWakeup != null && now - scheduleGraceSinceMillis >= 3_500L) {
+                            // agy's internal `schedule` timer stays running in-process for 15+ minutes; once the final
+                            // reply text has settled, end the turn cleanly so NextCraft's app-level ScheduleStore takes over.
+                            resultSeen = true
+                            break@outputLoop
+                        }
                         if (stdinOpen && !eventSeen && now - promptSentAtMillis >= WARM_PROBE_MS) {
                             if (reuse != null) {
                                 // A kept-alive agy can think for a long time before its first event on a heavy prompt, so 20 s of
@@ -700,7 +733,9 @@ class AntigravityRuntimeBridge(
                     }
                 }
             }
-            if (resultSeen && stdinOpen && process.isAlive) {
+            if (scheduledWakeup != null) {
+                stopAfterTerminalResult(process)
+            } else if (resultSeen && stdinOpen && process.isAlive) {
                 // agy answered without end of input and is still running: keep it for the next message.
                 rememberWarmMode(true)
                 val entry = WarmAgy(
@@ -721,6 +756,7 @@ class AntigravityRuntimeBridge(
                 check(exit == 0 && resultSeen) {
                     friendlyError(
                         lastDiagnostic.ifBlank { "Antigravity exited with code $exit" },
+                        recentAntigravityDiagnostic(sessionStartedAtMillis),
                         System.currentTimeMillis() - sessionStartedAtMillis,
                     )
                 }
@@ -831,8 +867,8 @@ class AntigravityRuntimeBridge(
 
     private fun cancelForegroundRuntime() = foreground.cancel()
 
-    private fun friendlyError(raw: String, elapsedMs: Long = 0L): String =
-        antigravityFriendlyError(raw, elapsedMs = elapsedMs)
+    private fun friendlyError(raw: String, diagnostic: String = "", elapsedMs: Long = 0L): String =
+        antigravityFriendlyError(raw, diagnostic, elapsedMs = elapsedMs)
 
     /** True when agy wrote to its own log in the last 45 s: it is alive and busy (a retry, a stream), not stuck. */
     private fun agyLogActive(nowMillis: Long): Boolean = runCatching {
@@ -889,6 +925,10 @@ private fun classifyAntigravityError(value: String, allowTimeout: Boolean): Stri
         "Antigravity could not reach Google. Check your internet or DNS connection, then try again."
     ANTIGRAVITY_SERVER_ERRORS.any { value.contains(it, ignoreCase = true) } ->
         "Google's Antigravity server returned an error. Wait a moment and try again; your files were kept."
+    // When `loadCodeAssist` fails on startup (e.g. brief DNS/network drop), agy's `availableModels` cache stays empty
+    // and `model_config_manager.go` logs `invalid model selection (...): model <id> is not recognized as a known model`.
+    value.contains("invalid model selection", true) || value.contains("not recognized as a known model", true) ->
+        "Antigravity could not fetch the model catalog from Google (network/DNS timeout). Check your connection and try again."
     // Google's stream sent nothing for 5 minutes (a long think on a big context): agy gives up on that request.
     value.contains("stream idle timeout", true) || value.contains("context deadline exceeded", true) ->
         "Google sent nothing for 5 minutes while the model was thinking, so Antigravity dropped the request. Your files were kept."
@@ -1016,6 +1056,7 @@ internal fun antigravityWorkspacePrompt(projectSlug: String, prompt: String): St
       `timeout 5m gradle --offline --init-script ${AndroidToolchain.GRADLE_INIT_SCRIPT_GUEST_PATH} -Pandroid.aapt2FromMavenOverride=${AndroidToolchain.AAPT2_GUEST_PATH} assembleDebug --console=plain --stacktrace`
     NextCraft Forge bundles the standard Android dependencies locally (AGP ${AndroidToolchain.AGP_VERSION}, Kotlin ${AndroidToolchain.KOTLIN_VERSION}, compileSdk ${AndroidToolchain.COMPILE_SDK}, JDK ${AndroidToolchain.JDK_MAJOR}). New projects must use these versions and the AGP 9 DSL (built-in Kotlin, no org.jetbrains.kotlin.android plugin, no kotlinOptions, Compose via org.jetbrains.kotlin.plugin.compose). Projects made with AGP 8.x / Kotlin 1.9 are not cached offline anymore: migrate them or build them online once. If and only if the cached build finishes with a clear missing-cached-dependency error, retry once online with `timeout 15m`, removing only `--offline` and retaining all other flags. Do not retry a timed-out or resource-failed build unchanged.
     Start the optimized Android build with `run_command` normally inside the Root Chroot workspace. If Antigravity moves the command into a managed task, immediately use `manage_task` to check its status and obtain its log path. Poll that managed task and tail its log with short commands about every 10 seconds so the user receives progress, then read the final output and exit status. Never wait silently on a long foreground command.
+    When scheduling a delayed or periodic follow-up (such as a 15-minute GitHub CI/PR check), prefer ending your reply with `[[schedule: 15m | <prompt>]]` (or `[[unschedule]]` once complete) instead of keeping an in-process timer running, so the current agent turn stops cleanly and NextCraft Forge's app-level scheduler wakes up the chat after the delay.
     Operate with the precision, speed, and surgical execution style of Claude Code: target under 10 seconds per turn, combine related operations into a single tool step whenever possible, and deliver concise, high-signal responses.
     ${ANTI_HALLUCINATION_RULES.joinToString("\n    ")}
     </nextcraft_workspace>
