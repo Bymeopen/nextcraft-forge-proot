@@ -80,4 +80,21 @@ class AntigravityErrorTest {
         val ev3 = AntigravityEventParser.parse(doneNoDelta)
         assertTrue(ev3 is AntigravityParsedEvent.ResponseDone)
     }
+
+    @Test
+    fun eventParser_convertsScheduleToolIntoAppLevelScheduledWakeup() {
+        val scheduleStep = """{"event":"step_update","step_update":{"step_index":20,"state":"ACTIVE","step_type":"tool_call","tool_name":"schedule","tool_info":{"name":"schedule","parameters":{"DurationSeconds":"900","Prompt":"Check CI status and merge PR #157"}}}}"""
+        val ev = AntigravityEventParser.parse(scheduleStep) as AntigravityParsedEvent.ScheduledWakeup
+        assertEquals(15, ev.intervalMinutes)
+        assertEquals("Check CI status and merge PR #157", ev.prompt)
+    }
+
+    @Test
+    fun invalidModelSelection_fromStartupDnsDrop_isClassifiedAndTransient() {
+        val raw = """invalid model selection (--model "gemini-4-argon-low" --effort ""): model gemini-4-argon-low is not recognized as a known model or custom model in settings"""
+        val friendly = antigravityFriendlyError(raw, "", 24_000L)
+        assertTrue(friendly, friendly.contains("could not fetch the model catalog") || friendly.contains("could not reach Google"))
+        assertTrue(com.nextcraft.forge.ui.isTransientAgentFailure(friendly))
+        assertTrue(com.nextcraft.forge.ui.isTransientAgentFailure(raw))
+    }
 }
