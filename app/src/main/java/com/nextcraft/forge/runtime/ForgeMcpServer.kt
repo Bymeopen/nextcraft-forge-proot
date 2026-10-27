@@ -228,7 +228,7 @@ def _clean_hex(value, fallback):
 def _safe_workspace_path(path_str):
     if not path_str or not isinstance(path_str, str):
         return None
-    abs_path = os.path.abspath(path_str)
+    abs_path = os.path.realpath(path_str)
     if abs_path.startswith("/workspace/") or abs_path.startswith("/tmp/"):
         return abs_path
     return None
@@ -541,6 +541,13 @@ def _preview_url_allowed(url):
     return True
 
 
+class _SafePreviewRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _preview_url_allowed(newurl):
+            raise urllib.error.URLError("Redirect to disallowed host blocked")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def handle_web_preview_inspect(args):
     url = str(args.get("url") or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
@@ -548,8 +555,9 @@ def handle_web_preview_inspect(args):
     if not _preview_url_allowed(url):
         return "Invalid URL: only http(s) to localhost or public hosts is allowed"
     req = urllib.request.Request(url, headers={"User-Agent": "NextCraft-Forge-Inspector/1.0"})
+    opener = urllib.request.build_opener(_SafePreviewRedirectHandler())
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with opener.open(req, timeout=10) as resp:
             status = resp.status
             ctype = resp.headers.get("Content-Type", "")
             raw = resp.read(256 * 1024).decode("utf-8", errors="replace")

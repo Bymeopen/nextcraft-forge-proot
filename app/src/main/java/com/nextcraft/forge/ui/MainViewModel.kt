@@ -1387,10 +1387,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Clears pending checkpoint manifests for the main project and any isolated chat branches that are already synchronized (0 uncommitted & 0 ahead). */
+    private suspend fun acceptSyncedCheckpoints(project: Project, includeMain: Boolean = false) {
+        withContext(Dispatchers.IO) {
+            if (includeMain) {
+                runCatching { checkpoints.acceptAll(project.id) }
+            }
+            val chats = if (_state.value.activeProjectId == project.id) _state.value.chats else preferences.loadProjectChats(project.id)
+            for (chat in chats) {
+                if (!chat.isolated) continue
+                val st = _state.value.branchStatus[chat.id]
+                if (st != null && st.commits == 0 && st.uncommitted == 0 && st.conflicts.isEmpty()) {
+                    runCatching { checkpoints.acceptAll(chatBranches.branchFor(project, chat.id).pseudoProjectId) }
+                }
+            }
+        }
+    }
+
     fun refreshBranchStatus(chatId: String) {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
             val status = runCatching { chatBranches.status(project, chatId) }.getOrNull()
+            if (status != null && status.commits == 0 && status.uncommitted == 0 && status.conflicts.isEmpty() &&
+                !runs.containsKey(runKey(project.id, chatId))
+            ) {
+                val cpId = chatBranches.branchFor(project, chatId).pseudoProjectId
+                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(cpId) } }
+                if (_state.value.activeProjectId == project.id && _state.value.activeChatId == chatId && _state.value.changedItems.isNotEmpty()) {
+                    refreshWorkspaceFilesAndChanges(project.id)
+                }
+            }
             if (_state.value.activeProjectId == project.id) {
                 _state.update { st ->
                     st.copy(branchStatus = if (status != null) st.branchStatus + (chatId to status) else st.branchStatus - chatId)
@@ -1820,6 +1846,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(repoBusy = true) }
         viewModelScope.launch {
             val info = runCatching { chatBranches.repoInfo(project) }.getOrNull()
+            if (info != null && info.isRepo && info.uncommitted == 0 &&
+                runs.values.none { it.projectId == project.id && !it.isolated }
+            ) {
+                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(project.id) } }
+                val activeChat = _state.value.chats.firstOrNull { it.id == _state.value.activeChatId }
+                if (activeChat?.isolated != true && _state.value.changedItems.isNotEmpty()) {
+                    refreshWorkspaceFilesAndChanges(project.id)
+                }
+            }
             _state.update { st -> st.copy(projectRepo = info ?: st.projectRepo, repoBusy = false) }
             _state.value.chats.filter { it.isolated }.forEach { refreshBranchStatus(it.id) }
         }
@@ -1875,6 +1910,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val result = runCatching { chatBranches.commitProject(project, clean, ::notifyGitWaitingInQueue) }
             val failure = result.exceptionOrNull()?.message ?: result.getOrNull()?.takeIf { !it.ok }?.output?.trim()?.takeLast(200)
+            if (failure == null) {
+                acceptSyncedCheckpoints(project, includeMain = true)
+                refreshWorkspaceFilesAndChanges(project.id)
+            }
             _state.update {
                 it.copy(
                     repoBusy = false,
@@ -1892,7 +1931,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (clean.isEmpty()) return
         withBranchBusy(chatId) {
             branchLock(chatId).withLock { chatBranches.commitNow(project, chatId, clean, ::notifyGitWaitingInQueue) }
+            val cpId = chatBranches.branchFor(project, chatId).pseudoProjectId
+            withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(cpId) } }
             _state.update { it.copy(bannerMessage = UiText.res(R.string.branch_committed)) }
+            if (_state.value.activeChatId == chatId) {
+                refreshWorkspaceFilesAndChanges(project.id)
+            }
             refreshBranchStatus(chatId)
         }
     }
@@ -1925,6 +1969,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update { it.copy(bannerMessage = message) }
             if (result == BranchMergeResult.Done) {
+                val cpId = chatBranches.branchFor(project, chatId).pseudoProjectId
+                withContext(Dispatchers.IO) {
+                    runCatching { checkpoints.acceptAll(cpId) }
+                    runCatching { checkpoints.acceptAll(project.id) }
+                }
                 refreshWorkspaceFilesAndChanges(project.id)
                 refreshProjectRepo()
             }
@@ -1941,6 +1990,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 BranchMergeResult.Done -> UiText.res(R.string.branch_updated)
                 is BranchMergeResult.Conflict -> UiText.res(R.string.branch_update_conflict, result.files.joinToString(", ").take(200))
                 is BranchMergeResult.Failed -> UiText.res(R.string.branch_failed, result.message)
+            }
+            if (result == BranchMergeResult.Done) {
+                val cpId = chatBranches.branchFor(project, chatId).pseudoProjectId
+                withContext(Dispatchers.IO) { runCatching { checkpoints.acceptAll(cpId) } }
+                if (_state.value.activeChatId == chatId) {
+                    refreshWorkspaceFilesAndChanges(project.id)
+                }
             }
             _state.update { it.copy(bannerMessage = message) }
             refreshBranchStatus(chatId)
@@ -5406,7 +5462,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
             }
+            if (result.isSuccess) {
+                acceptSyncedCheckpoints(project, includeMain = true)
+            }
             if (_state.value.activeProjectId == project.id) {
+                refreshWorkspaceFilesAndChanges(project.id)
                 refreshProjectRepo()
             }
             if (reportStatus) {
@@ -5451,6 +5511,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         runCheckedCommand(project.slug, ws, pullCmd)
                     }
                 }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("MainViewModel", it) }
+            }
+            if (result.isSuccess) {
+                acceptSyncedCheckpoints(project, includeMain = true)
             }
             refreshWorkspaceFilesAndChanges(project.id)
             if (_state.value.activeProjectId == project.id) {

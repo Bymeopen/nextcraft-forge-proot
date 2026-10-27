@@ -36,4 +36,17 @@ class WorkspaceCheckpointsTest {
         assertEquals(setOf("src/Main.kt"), snapshot.keys)
         checkpoints.createCheckpoint("p1", ws)
     }
+
+    @Test
+    fun buildChangeDetailsPrunesAlreadySyncedPaths() {
+        val ws = workspace()
+        val checkpoints = WorkspaceCheckpoints(temp.newFolder("files"))
+        checkpoints.createCheckpoint("p1", ws)
+        // Record a pending path whose live file already matches the checkpoint baseline.
+        checkpoints.saveChangedPaths("p1", listOf("src/Main.kt"))
+        assertEquals(listOf("src/Main.kt"), checkpoints.readChangedPaths("p1"))
+        val details = checkpoints.buildChangeDetails("p1", ws, checkpoints.readChangedPaths("p1"))
+        assertTrue(details.isEmpty())
+        assertTrue(checkpoints.readChangedPaths("p1").isEmpty())
+    }
 }

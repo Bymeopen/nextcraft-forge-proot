@@ -346,13 +346,25 @@ class WorkspaceCheckpoints(
     }
 
     fun buildChangeDetails(projectId: String, workspace: File, paths: List<String>): List<ChangeItem> {
-        val baselineRoot = File(checkpointDir(projectId), "project")
-        return paths.map { relPath ->
+        val token = validateProjectToken(projectId)
+        val baselineRoot = File(checkpointDir(token), "project")
+        val noOpPaths = ArrayList<String>()
+        val items = paths.mapNotNull { relPath ->
             val oldFile = safeWorkspaceFile(baselineRoot, relPath).takeIf { it.isFile }
             val newFile = safeWorkspaceFile(workspace, relPath).takeIf { it.isFile }
+            if (oldFile == null && newFile == null) {
+                noOpPaths.add(relPath)
+                return@mapNotNull null
+            }
+            if (oldFile != null && newFile != null && oldFile.length() == newFile.length() &&
+                runCatching { computeSha256(oldFile) == computeSha256(newFile) }.getOrDefault(false)
+            ) {
+                noOpPaths.add(relPath)
+                return@mapNotNull null
+            }
             val exceedsSizeCap = (oldFile?.length() ?: 0L) > DIFF_BYTE_CAP || (newFile?.length() ?: 0L) > DIFF_BYTE_CAP
             if (exceedsSizeCap) {
-                return@map ChangeItem(
+                return@mapNotNull ChangeItem(
                     path = relPath,
                     additions = 0,
                     deletions = 0,
@@ -363,6 +375,10 @@ class WorkspaceCheckpoints(
             }
             val oldBytes = oldFile?.readBytes() ?: ByteArray(0)
             val newBytes = newFile?.readBytes() ?: ByteArray(0)
+            if (oldBytes.contentEquals(newBytes)) {
+                noOpPaths.add(relPath)
+                return@mapNotNull null
+            }
             val isBinary = !isTextPayload(oldBytes) || !isTextPayload(newBytes)
             val (addedCount, deletedCount) = countLineDelta(oldBytes, newBytes)
             ChangeItem(
@@ -373,6 +389,13 @@ class WorkspaceCheckpoints(
                 binary = isBinary,
             )
         }
+        if (noOpPaths.isNotEmpty()) {
+            synchronized(acquireMutex(token)) {
+                val remaining = loadPendingListUnlocked(token).filterNot { it in noOpPaths }
+                updateOrClearPendingManifest(token, remaining)
+            }
+        }
+        return items
     }
 
     fun buildDiffLines(beforeBytes: ByteArray, afterBytes: ByteArray): List<DiffLine> {

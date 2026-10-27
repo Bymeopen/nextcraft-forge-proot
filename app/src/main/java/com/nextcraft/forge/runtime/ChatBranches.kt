@@ -516,10 +516,28 @@ class ChatBranches(context: Context) {
             done
             G add -A
             if ! G diff --cached --quiet; then G commit -q -m "§MSG"; fi
+            if [ -z "§(G diff --name-only --diff-filter=U)" ] && [ -d "§M/.git" ] && G fetch -q "§M" HEAD >/dev/null 2>&1; then
+              if G merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null || G diff --quiet HEAD FETCH_HEAD -- 2>/dev/null; then
+                G reset -q --hard FETCH_HEAD && G tag -f forge-base FETCH_HEAD >/dev/null 2>&1 || true
+              fi
+            fi
         """)
 
         private val STATUS_SCRIPT = script("""
             cd "§C"
+            # Auto-reconcile when the isolated branch is already synchronized with the main project repository (§M),
+            # so redundant commit/merge prompts are cleared automatically.
+            if [ -z "§(G diff --name-only --diff-filter=U)" ] && [ -d "§M/.git" ] && G fetch -q "§M" HEAD >/dev/null 2>&1; then
+              if [ -z "§(G status --porcelain)" ]; then
+                if G merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null || G diff --quiet HEAD FETCH_HEAD -- 2>/dev/null; then
+                  G reset -q --hard FETCH_HEAD && G tag -f forge-base FETCH_HEAD >/dev/null 2>&1 || true
+                elif G merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
+                  G tag -f forge-base FETCH_HEAD >/dev/null 2>&1 || true
+                fi
+              elif [ -z "§(G ls-files --others --exclude-standard)" ] && G diff --quiet FETCH_HEAD -- 2>/dev/null; then
+                G reset -q --hard FETCH_HEAD && G tag -f forge-base FETCH_HEAD >/dev/null 2>&1 || true
+              fi
+            fi
             echo "ahead=§(G rev-list --count forge-base..HEAD)"
             echo "uncommitted=§(G status --porcelain | wc -l)"
             echo "conflicts=§(G diff --name-only --diff-filter=U | tr '\n' ',')"
