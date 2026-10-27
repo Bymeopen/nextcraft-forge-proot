@@ -1,48 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Package the pinned DeepSeek Harness installation from NextCraft Forge's
-# Ubuntu 24.04 Root Chroot runtime. Only the npm payload, launcher symlink, and
-# version marker are exported; provider settings, API keys, sessions, chats, and
-# workspaces are never included.
-ADB_SERIAL="${ADB_SERIAL:-}"
-PACKAGE="${NEXTCRAFT_PACKAGE:-com.nextcraft.forge}"
-VERSION="${NEXTCRAFT_DSH_BUNDLE_VERSION:-2026.09.1}"
-DSH_VERSION="${NEXTCRAFT_DSH_VERSION:-0.2.1-rc.2}"
-ARCHIVE="nextcraft-dsh-arm64-${VERSION}.tar.zst"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-APP_DATA="/data/data/${PACKAGE}"
-APP_ROOTFS="${APP_DATA}/files/runtime/ubuntu"
+# NextCraft Forge — Export pinned DeepSeek Harness (dsh) runtime from device chroot.
+TARGET_SERIAL="${ADB_SERIAL:-}"
+APP_ID="${NEXTCRAFT_PACKAGE:-com.nextcraft.forge}"
+RELEASE_TAG="${NEXTCRAFT_DSH_BUNDLE_VERSION:-2026.09.1}"
+EXPECTED_DSH_VER="${NEXTCRAFT_DSH_VERSION:-0.2.1-rc.2}"
+OUT_FILENAME="nextcraft-dsh-arm64-${RELEASE_TAG}.tar.zst"
 
-adb_cmd() {
-  if [[ -n "$ADB_SERIAL" ]]; then adb -s "$ADB_SERIAL" "$@"; else adb "$@"; fi
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
+GUEST_ROOT="/data/data/${APP_ID}/files/runtime/ubuntu"
+DIST_FOLDER="${REPO_ROOT}/dist/runtime-bundles"
+DEVICE_TMP_TAR="/data/local/tmp/nextcraft-dsh-stage.tar"
+
+run_adb() {
+  if [[ -n "${TARGET_SERIAL}" ]]; then
+    adb -s "${TARGET_SERIAL}" "$@"
+  else
+    adb "$@"
+  fi
 }
 
-command -v zstd >/dev/null || { echo "zstd is required" >&2; exit 1; }
-adb_cmd wait-for-device
-adb_cmd shell "su -c 'test -f ${APP_ROOTFS}/usr/local/lib/dsh/node_modules/.bin/dsh'"
-actual_version="$(adb_cmd exec-out "su -c 'cat ${APP_ROOTFS}/.nextcraft-dsh-version 2>/dev/null || cat ${APP_ROOTFS}/.pocket-dsh-version'" | tr -d '\r\n')"
-[[ "$actual_version" == "$DSH_VERSION" ]] || {
-  echo "Expected DeepSeek Harness $DSH_VERSION, found $actual_version" >&2
+if ! command -v zstd >/dev/null 2>&1; then
+  echo "Error: zstd compression utility is missing." >&2
   exit 1
+fi
+
+run_adb wait-for-device
+run_adb shell "su -c 'test -f ${GUEST_ROOT}/usr/local/lib/dsh/node_modules/.bin/dsh'"
+
+detected_ver="$(run_adb exec-out "su -c 'cat ${GUEST_ROOT}/.nextcraft-dsh-version 2>/dev/null'" | tr -d '\r\n')"
+if [[ "${detected_ver}" != "${EXPECTED_DSH_VER}" ]]; then
+  echo "Fatal: DeepSeek Harness version mismatch (want ${EXPECTED_DSH_VER}, got ${detected_ver})" >&2
+  exit 1
+fi
+
+WORK_STAGE="$(mktemp -d)"
+cleanup_stage() {
+  rm -rf "${WORK_STAGE}"
+  run_adb shell "su -c 'rm -f ${DEVICE_TMP_TAR}'" >/dev/null 2>&1 || true
 }
+trap cleanup_stage EXIT
 
-temp_dir="$(mktemp -d)"
-trap 'rm -rf "$temp_dir"; adb_cmd shell "su -c \"rm -f /data/local/tmp/nextcraft-dsh-export.tar\"" >/dev/null 2>&1 || true' EXIT
-mkdir -p "$temp_dir/payload" "$ROOT_DIR/dist/runtime-bundles"
+mkdir -p "${WORK_STAGE}/rootfs" "${DIST_FOLDER}"
 
-adb_cmd shell "su -c 'tar -cf /data/local/tmp/nextcraft-dsh-export.tar -C ${APP_ROOTFS} usr/local/lib/dsh usr/local/bin/dsh'"
-adb_cmd exec-out "su -c 'cat /data/local/tmp/nextcraft-dsh-export.tar'" > "$temp_dir/source.tar"
-tar -xf "$temp_dir/source.tar" -C "$temp_dir/payload"
-printf '%s\n' "$DSH_VERSION" > "$temp_dir/payload/.nextcraft-dsh-version"
-printf '%s\n' "$DSH_VERSION" > "$temp_dir/payload/.nextcraft-dsh-version"
+run_adb shell "su -c 'tar -cf ${DEVICE_TMP_TAR} -C ${GUEST_ROOT} usr/local/lib/dsh usr/local/bin/dsh'"
+run_adb exec-out "su -c 'cat ${DEVICE_TMP_TAR}'" > "${WORK_STAGE}/pulled.tar"
+tar -xf "${WORK_STAGE}/pulled.tar" -C "${WORK_STAGE}/rootfs"
+printf '%s\n' "${EXPECTED_DSH_VER}" > "${WORK_STAGE}/rootfs/.nextcraft-dsh-version"
 
-[[ -L "$temp_dir/payload/usr/local/bin/dsh" ]]
-[[ -f "$temp_dir/payload/usr/local/lib/dsh/node_modules/.bin/dsh" ]]
-python3 "$SCRIPT_DIR/create_deterministic_tar.py" "$temp_dir/payload" "$temp_dir/payload.tar"
-zstd -19 -T0 -f "$temp_dir/payload.tar" -o "$ROOT_DIR/dist/runtime-bundles/$ARCHIVE"
+test -L "${WORK_STAGE}/rootfs/usr/local/bin/dsh"
+test -f "${WORK_STAGE}/rootfs/usr/local/lib/dsh/node_modules/.bin/dsh"
 
-shasum -a 256 "$ROOT_DIR/dist/runtime-bundles/$ARCHIVE"
-wc -c "$ROOT_DIR/dist/runtime-bundles/$ARCHIVE" "$temp_dir/payload.tar"
-echo "DeepSeek Harness bundle created: dist/runtime-bundles/$ARCHIVE"
+python3 "${HERE}/create_deterministic_tar.py" "${WORK_STAGE}/rootfs" "${WORK_STAGE}/bundle.tar"
+zstd -19 -T0 -f "${WORK_STAGE}/bundle.tar" -o "${DIST_FOLDER}/${OUT_FILENAME}"
+shasum -a 256 "${DIST_FOLDER}/${OUT_FILENAME}"
+wc -c "${DIST_FOLDER}/${OUT_FILENAME}" "${WORK_STAGE}/bundle.tar"
+echo "Packaged NextCraft DeepSeek overlay -> dist/runtime-bundles/${OUT_FILENAME}"

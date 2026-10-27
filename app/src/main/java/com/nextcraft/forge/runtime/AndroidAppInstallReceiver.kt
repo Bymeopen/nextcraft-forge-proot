@@ -10,42 +10,81 @@ import android.widget.Toast
 class AndroidAppInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != AndroidAppInstaller.ACTION_INSTALL_RESULT) return
-        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
-        val operationId = intent.getStringExtra(AndroidAppInstaller.EXTRA_OPERATION_ID).orEmpty()
-        val launchAfterInstall = intent.getBooleanExtra(AndroidAppInstaller.EXTRA_LAUNCH_AFTER_INSTALL, true)
-        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-            val userAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_INTENT)
-            }
-            if (userAction != null) {
-                // Prevent untrusted broadcast extras from targeting internal app components
-                if (userAction.`package` == context.packageName || userAction.component?.packageName == context.packageName) {
-                    return
-                }
-                userAction.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                runCatching { context.startActivity(userAction) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("AndroidAppInstallReceiver", it) }
-            }
-            return
+
+        val opId = intent.getStringExtra(AndroidAppInstaller.EXTRA_OPERATION_ID).orEmpty()
+        val autoLaunch = intent.getBooleanExtra(AndroidAppInstaller.EXTRA_LAUNCH_AFTER_INSTALL, true)
+        val statusCode = intent.getIntExtra(
+            PackageInstaller.EXTRA_STATUS,
+            PackageInstaller.STATUS_FAILURE,
+        )
+
+        when (statusCode) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> dispatchConfirmationIntent(context, intent)
+            PackageInstaller.STATUS_SUCCESS -> completeSuccessfulInstall(context, intent, opId, autoLaunch)
+            else -> reportFailedInstall(context, intent, opId)
         }
-        if (status != PackageInstaller.STATUS_SUCCESS) {
-            val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-                ?.takeIf(String::isNotBlank)
-                ?: "APK installation failed."
-            AndroidAppInstaller.publish(AndroidInstallEvent(operationId, null, false, false, message))
-            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-            return
+    }
+
+    private fun dispatchConfirmationIntent(context: Context, callbackIntent: Intent) {
+        val confirmation: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            callbackIntent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            callbackIntent.getParcelableExtra(Intent.EXTRA_INTENT)
         }
-        val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME) ?: return
-        intent.getStringExtra(AndroidAppInstaller.EXTRA_APK_FINGERPRINT)?.let { fingerprint ->
-            AndroidAppInstaller.rememberInstalled(context, packageName, fingerprint)
+        val targetIntent = confirmation ?: return
+        val selfPkg = context.packageName
+        val targetsSelf = targetIntent.`package` == selfPkg || targetIntent.component?.packageName == selfPkg
+        if (targetsSelf) return
+
+        targetIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(targetIntent) }
+            .onFailure { ErrorLog.swallowed("AndroidAppInstallReceiver", it) }
+    }
+
+    private fun completeSuccessfulInstall(
+        context: Context,
+        callbackIntent: Intent,
+        opId: String,
+        autoLaunch: Boolean,
+    ) {
+        val installedPkg = callbackIntent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME) ?: return
+        val sha256 = callbackIntent.getStringExtra(AndroidAppInstaller.EXTRA_APK_FINGERPRINT)
+        if (!sha256.isNullOrBlank()) {
+            AndroidAppInstaller.rememberInstalled(context, installedPkg, sha256)
         }
-        val launched = launchAfterInstall && AndroidAppInstaller.launch(context, packageName)
-        AndroidAppInstaller.publish(AndroidInstallEvent(operationId, packageName, true, launched))
-        if (launchAfterInstall && !launched) {
-            Toast.makeText(context, "Installed $packageName. Open it from the launcher.", Toast.LENGTH_LONG).show()
+        val didLaunch = autoLaunch && AndroidAppInstaller.launch(context, installedPkg)
+        AndroidAppInstaller.publish(
+            AndroidInstallEvent(
+                operationId = opId,
+                packageName = installedPkg,
+                success = true,
+                launched = didLaunch,
+            ),
+        )
+        if (autoLaunch && !didLaunch) {
+            Toast.makeText(
+                context,
+                "Installed $installedPkg. Open it from the launcher.",
+                Toast.LENGTH_LONG,
+            ).show()
         }
+    }
+
+    private fun reportFailedInstall(context: Context, callbackIntent: Intent, opId: String) {
+        val detail = callbackIntent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: "APK installation failed."
+        AndroidAppInstaller.publish(
+            AndroidInstallEvent(
+                operationId = opId,
+                packageName = null,
+                success = false,
+                launched = false,
+                message = detail,
+            ),
+        )
+        Toast.makeText(context, detail, Toast.LENGTH_LONG).show()
     }
 }
