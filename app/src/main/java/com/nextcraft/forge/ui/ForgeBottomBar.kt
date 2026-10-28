@@ -152,8 +152,15 @@ internal fun ForgeBottomBar(
     )
 
     val isFloatingCapsule = themeTokens.isGlass
+    val rawBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val adjustedBottomPad = if (rawBottomInset <= GESTURE_BAR_HEIGHT_THRESHOLD) {
+        (rawBottomInset - GESTURE_BAR_OVERLAP_REDUCTION).coerceAtLeast(0.dp)
+    } else {
+        rawBottomInset
+    }
+    // Floating capsule: the system inset sits outside the capsule so icon + label stay centred inside it.
     val barMargin = if (isFloatingCapsule) {
-        PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)
+        PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp + adjustedBottomPad)
     } else {
         PaddingValues(0.dp)
     }
@@ -174,16 +181,9 @@ internal fun ForgeBottomBar(
             .padding(barMargin)
             .forgeGlassSurface(glassBackdrop, themeTokens.bottomBarContainerColor),
     ) {
-        val rawBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        val adjustedBottomPad = if (rawBottomInset <= GESTURE_BAR_HEIGHT_THRESHOLD) {
-            (rawBottomInset - GESTURE_BAR_OVERLAP_REDUCTION).coerceAtLeast(0.dp)
-        } else {
-            rawBottomInset
-        }
-
         Column(
             modifier = Modifier
-                .padding(bottom = adjustedBottomPad)
+                .padding(bottom = if (isFloatingCapsule) 0.dp else adjustedBottomPad)
                 .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
                 .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
         ) {
