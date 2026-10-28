@@ -10,7 +10,9 @@ set -uo pipefail
 # A and B failing is what makes C meaningful: it proves the harness reproduces the failure.
 #
 #   test-proot-android-seccomp.sh <patched-proot> <patched-loader> <plain-proot> <glibc-proot> <core-ubuntu.tar.zst>
-PATCHED="${1:?patched proot}"; LOADER="${2:?loader}"; PLAIN="${3:?plain musl proot}"; GLIBC="${4:?glibc proot}"; CORE="${5:?core tar.zst}"
+# Absolute paths: proot changes directory inside the guest, so a relative PROOT_LOADER would stop resolving.
+PATCHED="$(realpath "${1:?patched proot}")"; LOADER="$(realpath "${2:?loader}")"; PLAIN="$(realpath "${3:?plain musl proot}")"
+GLIBC="$(realpath "${4:?glibc proot}")"; CORE="$(realpath "${5:?core tar.zst}")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
@@ -21,7 +23,7 @@ mkdir -p "$work/rootfs" "$work/tmp"
 zstd -dc "$CORE" | tar -x -C "$work/rootfs"
 
 export PROOT_TMP_DIR="$work/tmp" PROOT_LOADER="$LOADER" PROOT_NO_SECCOMP=1
-guest_args=(--kill-on-exit --link2symlink -0 -r "$work/rootfs" -b /dev -b /proc -b /sys)
+guest_args=(--kill-on-exit --link2symlink -0 -r "$work/rootfs" -b /dev -b /proc -b /sys -w /)
 
 check() { # check <label> <expect: ok|die> <command...>
   local label="$1" expect="$2"; shift 2
@@ -29,7 +31,7 @@ check() { # check <label> <expect: ok|die> <command...>
   local verdict="FAIL"
   if [[ "$expect" == ok && $rc -eq 0 ]] || [[ "$expect" == die && $rc -ne 0 ]]; then verdict="ok"; fi
   printf '[%s] %-58s expected %-3s rc=%s\n' "$verdict" "$label" "$expect" "$rc"
-  if [[ "$verdict" == FAIL ]]; then fail=1; tail -n 6 "$work/out.txt" | sed 's/^/        /'; fi
+  if [[ "$verdict" == FAIL ]]; then fail=1; tail -n 12 "$work/out.txt" | sed 's/^/        /'; fi
 }
 HARN=("$work/run" "$work/allow.txt")
 
