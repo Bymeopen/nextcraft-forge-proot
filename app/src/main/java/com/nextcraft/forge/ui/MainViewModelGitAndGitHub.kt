@@ -273,8 +273,17 @@ fun MainViewModel.refreshProjectRepo() {
 
 /** Notifies the user when a Git operation is waiting in queue behind another Git process in the same repository. */
 internal fun MainViewModel.notifyGitWaitingInQueue() {
+    // Callers fire once per output chunk / run; without a cool-down the 3 s auto-dismiss would be undone at once.
+    val now = android.os.SystemClock.elapsedRealtime()
+    if (now - lastGitWaitNoticeAt < GIT_WAIT_NOTICE_COOLDOWN_MS) return
+    lastGitWaitNoticeAt = now
     _state.update { it.copy(bannerMessage = UiText.res(R.string.msg_git_waiting_queue)) }
 }
+
+private const val GIT_WAIT_NOTICE_COOLDOWN_MS = 30_000L
+
+@Volatile
+private var lastGitWaitNoticeAt = 0L
 
 /** Runs a branch operation on the project repository; refused while a chat writes in the project folder. */
 internal fun MainViewModel.repoBranchOp(success: Int, op: suspend (Project) -> RepoOpResult) {

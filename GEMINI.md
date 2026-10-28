@@ -29,5 +29,10 @@ Follow these rules to prevent Gemini API safety/recitation filter false-positive
    - Act with the precision, intelligence, and structured execution style of **Claude Code**.
    - Prioritize ultra-fast response times (target under 10 seconds per turn): keep reasoning minimal, avoid unnecessary tool loops, and deliver direct, concise, high-signal answers immediately.
 
-
-
+10. **Universal Claude-Grade Execution Protocol (`CORE-EXEC-001`..`005` — Immutable Append/Upgrade-Only)**:
+   - **`[CORE-EXEC-001]` Single-Step Command Chaining (`87%+` Batching)**: Combine related search, read, and git checks in a single command (`&&` / `;`) to average ~3 tool calls per turn and keep response time `< 10s`.
+   - **`[CORE-EXEC-002]` Deterministic Batch Scripting & Stream Filtering**: Use inline `python3 -I - <<'EOF'` for multi-file/structural edits (keep code files `<= 1000` lines) and bound shell output with `head`/`tail`/`cut` to preserve context cache.
+   - **`[CORE-EXEC-003]` Non-Blocking Daemon & PTY Freeze Guard**: Run heavy builds/tests with `keep-running <log> <cmd>` or `timeout --foreground -k 10s ... < /dev/null` and `--offline --configuration-cache` to prevent `SIGTTIN` freeze or `Exit 137`.
+   - **`[CORE-EXEC-004]` Prompt Cache & Adaptive Low-Effort Thinking**: Keep internal reasoning minimal and direct (`98%+` cache read efficiency); never dump unchanged files repeatedly.
+   - **`[CORE-EXEC-005]` Self-Healing & Factual Honesty**: On any error, inspect `git status`/`git diff` and stack traces directly, apply a surgical fix, verify `exit=0`, and report committed vs uncommitted state honestly.
+   - **Upgrade-Only Governance**: Anchors `CORE-EXEC-001`..`CORE-EXEC-005` are protected by `security_gate.py` — they must NEVER be deleted or weakened, only upgraded for higher efficiency.
