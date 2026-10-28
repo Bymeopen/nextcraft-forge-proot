@@ -34,13 +34,13 @@ run() { # run <label> <command string run by bash inside the guest>
   n=$((n + 1))
   echo "== $1"
   chroot "$rootfs" /usr/bin/env -i HOME=/root LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin:/sbin \
+    UV_USE_IO_URING=0 LD_PRELOAD=/opt/nextcraft/lib/libnextcraft-compat.so \
     /usr/bin/strace -f -qq -o "/trace/$n.strace" /bin/bash -c "$2" 2>&1 | tail -n 4 || true
   mv "$rootfs/trace/$n.strace" "$logs/$n-$1.strace"
 }
 
-# One command per run, so a blocked syscall names the tool that issued it. UV_USE_IO_URING=0 is what proot-exec.sh sets for
-# the guest: libuv (Node) otherwise calls io_uring_setup, which Android refuses.
-export UV_USE_IO_URING=0
+# One command per run, so a blocked syscall names the tool that issued it. The environment above is what proot-exec.sh gives
+# the guest: UV_USE_IO_URING=0 (libuv would call io_uring_setup) and the faccessat shim (seccomp-compat.c).
 run shell 'ls / >/dev/null; cat /etc/passwd >/dev/null; id; uname -a; env true'
 run bash-test '[ -x /bin/sh ] && [ -f /etc/passwd ] && [ -d / ]; type ls'
 run bash-files 'set -e; d=$(mktemp -d); echo hi > $d/f; cp $d/f $d/g; mv $d/g $d/h; ln -s f $d/l; chmod 600 $d/f; stat $d/f >/dev/null; find $d | sort; rm -rf $d'
@@ -53,7 +53,6 @@ run jq 'jq -n 1'
 run rg 'rg --version | head -1'
 run zstd 'zstd --version'
 run unzip 'unzip -v | head -1'
-run xz 'xz --version | head -1'
 run awk 'awk "BEGIN{print 1}"'
 
 python3 "$SCRIPT_DIR/audit-android-seccomp.py" "$logs"/*.strace

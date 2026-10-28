@@ -25,7 +25,8 @@ ARCHIVE="nextcraft-core-alpine-arm64-$VERSION.tar.zst"
 
 # Tools every guest shell, agent and project template relies on. Node comes from Alpine (v24 on 3.24), npm separately.
 PACKAGES="alpine-baselayout alpine-keys apk-tools busybox busybox-binsh musl-utils bash coreutils findutils grep sed gawk \
-  git curl ca-certificates jq ripgrep zstd unzip zip xz tar nodejs npm"
+  git curl ca-certificates jq ripgrep zstd unzip zip tar nodejs npm"
+# xz is left out on purpose: its CLI calls landlock_create_ruleset, which Android refuses (busybox still unpacks .xz).
 
 [[ "$(uname -m)" == "aarch64" ]] || { echo "Run this on an ARM64 Linux host." >&2; exit 1; }
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
@@ -37,17 +38,23 @@ rootfs="$work/rootfs"
 mkdir -p "$rootfs"
 
 echo "Assembling Alpine ${BRANCH} rootfs with apk --root in $IMAGE"
-docker run --rm -v "$rootfs:/target" -e BRANCH="$BRANCH" -e PACKAGES="$PACKAGES" "$IMAGE" sh -euc '
+docker run --rm -v "$rootfs:/target" -v "$SCRIPT_DIR:/src:ro" -e BRANCH="$BRANCH" -e PACKAGES="$PACKAGES" "$IMAGE" sh -euc '
   mkdir -p /target/etc/apk
   printf "https://dl-cdn.alpinelinux.org/alpine/%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/%s/community\n" "$BRANCH" "$BRANCH" > /target/etc/apk/repositories
   apk add --root /target --initdb --arch aarch64 --keys-dir /etc/apk/keys --no-cache $PACKAGES
   rm -rf /target/var/cache/apk/*
+  # The faccessat shim (seccomp-compat.c), compiled against the same musl as the guest.
+  apk add --no-cache build-base >/dev/null
+  mkdir -p /target/opt/nextcraft/lib
+  gcc -O2 -shared -fPIC -o /target/opt/nextcraft/lib/libnextcraft-compat.so /src/seccomp-compat.c
 '
 
 echo "Configuring the guest"
 docker run --rm -v "$rootfs:/target" -e VERSION="$VERSION" "$IMAGE" chroot /target /bin/sh -euc '
   # Root logs in with bash; the Android networking groups mirror the Ubuntu Core bundle (AID_INET 3003, AID_NET_RAW 3004).
   sed -i "s#^root:.*#root:x:0:0:root:/root:/bin/bash#" /etc/passwd
+  # Alpine is not usr-merged; the installer and Ubuntu-era scripts look for /usr/bin/bash.
+  ln -sfn ../../bin/bash /usr/bin/bash
   grep -q "^aid_inet:" /etc/group || printf "aid_inet:x:3003:root\naid_net_raw:x:3004:root\n" >> /etc/group
   mkdir -p /workspace/nextcraft /nextcraft-bridge /nextcraft-bridge-responses /opt/nextcraft/bin /root/.gradle/init.d \
     /system /apex /vendor /product /tmp /dev /proc /sys /root

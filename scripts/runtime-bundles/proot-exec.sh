@@ -83,6 +83,11 @@ export TMPDIR="/tmp"
 export GLIBC_TUNABLES="glibc.pthread.rseq=0"
 # Android refuses io_uring_setup (SIGSYS); libuv (Node) would try it on Linux 5.1+. Harmless for glibc guests.
 export UV_USE_IO_URING=0
+# Alpine guests: replace faccessat (musl uses faccessat2, refused by Android's seccomp) with the plain syscall. Ubuntu guests do
+# not ship the library, and glibc would complain about a missing preload, so it is set only when present.
+if [ -f "$ROOTFS/opt/nextcraft/lib/libnextcraft-compat.so" ]; then
+    export LD_PRELOAD="/opt/nextcraft/lib/libnextcraft-compat.so"
+fi
 # Same bridge variables as chroot-exec.sh; the pocket* names are kept for scripts from older builds.
 export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
 export POCKETDEV_BRIDGE_DIR="/nextcraft-bridge"
