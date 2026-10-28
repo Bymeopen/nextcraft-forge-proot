@@ -239,7 +239,6 @@ fun AgentScreen(
         ChatTopBar(
             state = state,
             onOpenDrawer = { scope.launch { drawerState.open() } },
-            onOpenChanges = { viewModel.selectProjectPane(ProjectPane.FILES) },
             onRename = { renameOpen = true },
             onUsage = { usageOpen = true },
             onSchedule = { scheduleOpen = true },

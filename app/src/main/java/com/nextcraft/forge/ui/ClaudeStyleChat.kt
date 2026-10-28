@@ -76,7 +76,6 @@ import com.nextcraft.forge.runtime.CLAUDE_EFFORT_LEVELS
 internal fun ChatTopBar(
     state: ForgeUiState,
     onOpenDrawer: () -> Unit,
-    onOpenChanges: () -> Unit,
     onRename: () -> Unit,
     onUsage: () -> Unit,
     onSchedule: () -> Unit,
@@ -94,7 +93,6 @@ internal fun ChatTopBar(
     var confirmClear by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
     val activeChat = state.chats.firstOrNull { it.id == state.activeChatId }
-    val pending = state.changedItems.count { it.accepted == null }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -144,28 +142,6 @@ internal fun ChatTopBar(
             )
         }
         ForgeActionPill {
-            // Changes made by the agent: opens the workspace diff.
-            Box(contentAlignment = Alignment.TopEnd) {
-                ForgeGlyphPillIcon(
-                    glyph = ForgeGlyph.CODE,
-                    description = stringResource(R.string.chat_menu_changes),
-                    onClick = onOpenChanges,
-                )
-                if (pending > 0) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = scheme.primary,
-                        modifier = Modifier.padding(top = 6.dp, end = 6.dp),
-                    ) {
-                        Text(
-                            text = pending.toString(),
-                            fontSize = ForgeType.caption,
-                            color = scheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 5.dp),
-                        )
-                    }
-                }
-            }
             Box {
                 ForgePillIcon(
                     icon = Icons.Default.MoreVert,
