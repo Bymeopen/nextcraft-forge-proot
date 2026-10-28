@@ -9,4 +9,3 @@ widget bawaan Android, Java, tanpa dependensi tambahan.
 - NIS unik; hapus siswa ikut menghapus nilainya (ON DELETE CASCADE).
 
 Build: `gradle --no-daemon :app:assembleDebug` di folder ini. APK ada di `app/build/outputs/apk/debug/`.
-`make-project.sh` membuat ulang seluruh proyek ini dari satu berkas (dibuat oleh `scripts/make-mini-sekolah-script.py`).
