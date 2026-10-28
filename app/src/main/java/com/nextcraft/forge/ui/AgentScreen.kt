@@ -1175,7 +1175,7 @@ private fun AttachmentChip(name: String, size: Long, onRemove: (() -> Unit)?, sh
         Text(name, fontSize = ForgeType.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
         if (showSize) Spacer(modifier = Modifier.width(6.dp))
         if (showSize) Text(
-            text = if (size < 1024 * 1024) "${(size / 1024).coerceAtLeast(1)} KB" else String.format(java.util.Locale.getDefault(), "%.1f MB", size / (1024.0 * 1024.0)),
+            text = if (size < 1024 * 1024) "${(size / 1024).coerceAtLeast(1)} KB" else String.format(androidx.compose.ui.text.intl.Locale.current.platformLocale, "%.1f MB", size / (1024.0 * 1024.0)),
             fontSize = ForgeType.caption,
             color = scheme.onSurfaceVariant,
         )
