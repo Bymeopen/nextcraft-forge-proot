@@ -1,3 +1,3 @@
 [allowlist]
 description = "Test fixtures with fake keys"
-paths = ["scripts/verify-core-fixes.sh"]
+paths = ["scripts/verify-core-fixes.sh", "scripts/verify-core-fixes\\.d/.*"]

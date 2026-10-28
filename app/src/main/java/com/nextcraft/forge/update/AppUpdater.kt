@@ -2,7 +2,6 @@ package com.nextcraft.forge.update
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import com.nextcraft.forge.model.stringOrEmpty
 import java.io.File
 import java.net.HttpURLConnection
@@ -114,35 +113,19 @@ class AppUpdater(
 
     @Suppress("DEPRECATION")
     private fun verifyApk(apk: File, expectedVersionCode: Long) {
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            PackageManager.GET_SIGNING_CERTIFICATES
-        } else {
-            PackageManager.GET_SIGNATURES
-        }
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES
         val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, flags)
             ?: error("Downloaded file is not a valid Android APK archive.")
         check(archive.packageName == context.packageName) {
             "Downloaded APK package (${archive.packageName}) does not match installed app (${context.packageName})."
         }
-        val archiveVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            archive.longVersionCode
-        } else {
-            archive.versionCode.toLong()
-        }
+        val archiveVersion = archive.longVersionCode
         check(archiveVersion == expectedVersionCode && archiveVersion > currentVersionCode()) {
             "Downloaded APK version ($archiveVersion) does not match expected update version ($expectedVersionCode)."
         }
         val installed = context.packageManager.getPackageInfo(context.packageName, flags)
-        val archiveSignatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            archive.signingInfo?.apkContentsSigners
-        } else {
-            archive.signatures
-        }
-        val installedSignatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            installed.signingInfo?.apkContentsSigners
-        } else {
-            installed.signatures
-        }
+        val archiveSignatures = archive.signingInfo?.apkContentsSigners
+        val installedSignatures = installed.signingInfo?.apkContentsSigners
         check(
             !archiveSignatures.isNullOrEmpty() &&
                 !installedSignatures.isNullOrEmpty() &&
@@ -185,7 +168,7 @@ class AppUpdater(
         buildConfigLong("VERSION_CODE")?.let { return it }
         return runCatching {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
+            info.longVersionCode
         }.getOrDefault(1L)
     }
 

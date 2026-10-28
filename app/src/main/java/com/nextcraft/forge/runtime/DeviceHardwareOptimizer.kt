@@ -420,8 +420,8 @@ object DeviceHardwareOptimizer {
             return existing
         }
 
-        val socMan = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MANUFACTURER.orEmpty() else ""
-        val socMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL.orEmpty() else ""
+        val socMan = Build.SOC_MANUFACTURER.orEmpty()
+        val socMod = Build.SOC_MODEL.orEmpty()
         val hardware = Build.HARDWARE.orEmpty()
         val board = Build.BOARD.orEmpty()
         val cpuInfo = runCatching { File("/proc/cpuinfo").readText() }.getOrDefault("")

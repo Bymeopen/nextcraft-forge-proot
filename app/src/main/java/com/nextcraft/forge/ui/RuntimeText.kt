@@ -63,6 +63,7 @@ internal object RuntimeText {
 
 /** [raw] in the app language when it is a known installer sentence, else unchanged. */
 @Composable
+@Suppress("LocalContextGetResourceValueCall") // remember() is keyed on the configuration below
 internal fun runtimeText(raw: String): String {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current // re-read when the language changes

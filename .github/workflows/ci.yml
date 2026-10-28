@@ -30,9 +30,8 @@ jobs:
           gradle-version: "9.8.2"
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
-      # Soft gate: existing lint findings are not yet fixed, so this reports without failing the build.
+      # Lint errors fail the build (the 4 existing ones are fixed); warnings are reported only.
       - name: Android Lint
-        continue-on-error: true
         run: gradle --no-daemon :app:lintDebug
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug

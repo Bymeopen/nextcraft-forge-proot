@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import androidx.core.content.edit
 import android.content.Context
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -223,7 +224,7 @@ class SshController(
 
     private fun writeHosts(hosts: List<SshHost>) {
         val array = JSONArray(hosts.map { JSONObject().put("id", it.id).put("alias", it.alias).put("user", it.user).put("host", it.host).put("port", it.port).put("forward", it.forward) })
-        prefs.edit().putString("ssh_hosts", array.toString()).apply()
+        prefs.edit {putString("ssh_hosts", array.toString())}
     }
 
     private companion object {

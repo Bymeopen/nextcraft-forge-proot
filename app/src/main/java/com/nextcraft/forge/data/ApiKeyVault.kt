@@ -1,5 +1,6 @@
 package com.nextcraft.forge.data
 
+import androidx.core.content.edit
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
@@ -157,7 +158,7 @@ class ApiKeyVault(context: Context) {
         removeEncrypted(secretKey(providerId, keyId))
         savePool(providerId, remaining)
         if (activeId(providerId) == keyId) {
-            preferences.edit().remove(activeKey(providerId)).apply()
+            preferences.edit {remove(activeKey(providerId))}
             remaining.firstOrNull()?.let { setActiveId(providerId, it.id) }
         }
     }
@@ -187,12 +188,12 @@ class ApiKeyVault(context: Context) {
     @Synchronized
     fun remove(providerId: String) {
         ensurePool(providerId).forEach { removeEncrypted(secretKey(providerId, it.id)) }
-        preferences.edit()
-            .remove("$providerId.iv")
-            .remove("$providerId.value")
-            .remove(poolKey(providerId))
-            .remove(activeKey(providerId))
-            .apply()
+        preferences.edit {
+                remove("$providerId.iv")
+                .remove("$providerId.value")
+                .remove(poolKey(providerId))
+                .remove(activeKey(providerId))
+            }
     }
 
     @Synchronized
@@ -229,7 +230,7 @@ class ApiKeyVault(context: Context) {
     }
 
     private fun removeEncrypted(storageId: String) {
-        preferences.edit().remove("$storageId.iv").remove("$storageId.value").apply()
+        preferences.edit {remove("$storageId.iv").remove("$storageId.value")}
     }
 
     private fun ensurePool(providerId: String): List<ApiKeyInfo> {
@@ -258,11 +259,11 @@ class ApiKeyVault(context: Context) {
     private fun savePool(providerId: String, entries: List<ApiKeyInfo>) {
         val array = JSONArray()
         entries.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name)) }
-        preferences.edit().putString(poolKey(providerId), array.toString()).commit()
+        preferences.edit(commit = true) {putString(poolKey(providerId), array.toString())}
     }
 
     private fun activeId(providerId: String): String? = preferences.getString(activeKey(providerId), null)
-    private fun setActiveId(providerId: String, id: String) = preferences.edit().putString(activeKey(providerId), id).commit()
+    private fun setActiveId(providerId: String, id: String) = preferences.edit(commit = true) {putString(activeKey(providerId), id)}
     private fun poolKey(providerId: String) = "$providerId.pool"
     private fun activeKey(providerId: String) = "$providerId.active"
     private fun secretKey(providerId: String, id: String) = "$providerId.pool.$id"

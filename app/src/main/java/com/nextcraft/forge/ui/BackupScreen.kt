@@ -74,13 +74,32 @@ class BackupController(private val app: Application, private val scope: Coroutin
                 AutoBackupUiState(
                     interval = autoSettings.interval,
                     targetLabel = autoSettings.targetLabel,
-                    hasTarget = autoSettings.target != null,
+                    hasTarget = autoSettings.target != null || autoSettings.folder != null,
                     includeApiKeys = autoSettings.includeApiKeys,
                     hasPassword = autoSettings.password.isNotEmpty(),
                     lastRunAt = autoSettings.lastRunAt,
                     lastError = autoSettings.lastError,
                 )
             }
+        }
+    }
+
+    /** Keeps write access to the picked folder (e.g. on Drive); auto backups then keep the newest versions there. */
+    fun setAutoFolder(uri: Uri) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                runCatching { app.contentResolver.takePersistableUriPermission(uri, flags) }
+                autoSettings.folder?.takeIf { it != uri }?.let { old ->
+                    runCatching { app.contentResolver.releasePersistableUriPermission(old, flags) }
+                }
+                autoSettings.target?.let { old -> runCatching { app.contentResolver.releasePersistableUriPermission(old, flags) } }
+                autoSettings.target = null
+                autoSettings.folder = uri
+                autoSettings.targetLabel = uri.lastPathSegment.orEmpty().substringAfterLast('/')
+                com.nextcraft.forge.data.AutoBackupWorker.sync(app)
+            }
+            refreshAuto()
         }
     }
 
@@ -98,6 +117,8 @@ class BackupController(private val app: Application, private val scope: Coroutin
                         if (it.moveToFirst()) it.getString(0) else null
                     }
                 }.getOrNull()
+                autoSettings.folder?.let { old -> runCatching { app.contentResolver.releasePersistableUriPermission(old, flags) } }
+                autoSettings.folder = null
                 autoSettings.target = uri
                 autoSettings.targetLabel = name ?: uri.lastPathSegment.orEmpty()
                 com.nextcraft.forge.data.AutoBackupWorker.sync(app)
@@ -248,6 +269,10 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
         if (uri != null) viewModel.backup.setAutoTarget(uri)
     }
 
+    val pickAutoFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) viewModel.backup.setAutoFolder(uri)
+    }
+
     ToolScaffold(
         title = stringResource(R.string.tools_backup),
         subtitle = stringResource(R.string.tools_backup_desc),
@@ -310,6 +335,11 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
                 onClick = { pickAutoTarget.launch("nextcraft-auto-backup.ncbak") },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(stringResource(R.string.auto_backup_choose_target)) }
+            OutlinedButton(
+                shape = RoundedCornerShape(100),
+                onClick = { pickAutoFolder.launch(null) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.auto_backup_choose_folder)) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 com.nextcraft.forge.data.AutoBackupSettings.Interval.entries.forEach { option ->
                     androidx.compose.material3.FilterChip(

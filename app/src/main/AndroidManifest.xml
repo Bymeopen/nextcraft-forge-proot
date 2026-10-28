@@ -26,6 +26,7 @@
 
     <application
         android:name=".ForgeApplication"
+        tools:ignore="UnusedAttribute"
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"

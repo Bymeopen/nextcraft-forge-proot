@@ -1,5 +1,7 @@
 package com.nextcraft.forge.ui
 
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -53,7 +55,7 @@ internal suspend fun captureWindow(window: Window, maxWidth: Int = 720): Bitmap?
         continuation.resume(null)
         return@suspendCancellableCoroutine
     }
-    val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+    val full = createBitmap(view.width, view.height)
     PixelCopy.request(
         window,
         full,
@@ -69,7 +71,7 @@ internal suspend fun captureWindow(window: Window, maxWidth: Int = 720): Bitmap?
                 continuation.resume(full)
             } else {
                 val height = (full.height.toLong() * maxWidth / full.width).toInt().coerceAtLeast(1)
-                val scaled = Bitmap.createScaledBitmap(full, maxWidth, height, true)
+                val scaled = full.scale(maxWidth, height)
                 if (scaled !== full) full.recycle()
                 continuation.resume(scaled)
             }
