@@ -65,6 +65,7 @@ import com.nextcraft.forge.R
 private const val MAX_NAV_TEXT_SCALE = 1.3f
 private val GESTURE_BAR_HEIGHT_THRESHOLD = 34.dp
 private val GESTURE_BAR_OVERLAP_REDUCTION = 10.dp
+private val INDICATOR_VERTICAL_INSET = 1.dp
 
 internal data class NavEntry(
     val tab: ForgeTab,
@@ -192,14 +193,14 @@ internal fun ForgeBottomBar(
             val currentDensity = LocalDensity.current
             val cappedFontScale = currentDensity.fontScale.coerceAtMost(MAX_NAV_TEXT_SCALE)
             val isCompactViewport = rememberCompactHeight()
-            val baseHeight = if (isCompactViewport) 56.dp else 66.dp
+            val baseHeight = if (isCompactViewport) 58.dp else 66.dp
             val totalBarHeight = baseHeight + (16.dp * (cappedFontScale - 1f).coerceAtLeast(0f))
 
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(totalBarHeight)
-                    .padding(horizontal = 6.dp, vertical = if (isCompactViewport) 2.dp else 6.dp),
+                    .padding(horizontal = 6.dp, vertical = if (isCompactViewport) 2.dp else 4.dp),
             ) {
                 val itemWidth = maxWidth / entries.size
                 val localizedLabels = entries.map { stringResource(it.label) }
@@ -231,7 +232,9 @@ internal fun ForgeBottomBar(
                     Box(
                         modifier = Modifier
                             .matchParentSize()
-                            .padding(indicatorPadding)
+                            // Horizontal inset only gives the pill breathing room; vertical stays minimal so the
+                            // 24dp glyph + label (~44dp) always sit fully inside the pill.
+                            .padding(horizontal = indicatorPadding, vertical = INDICATOR_VERTICAL_INSET)
                             .clip(indicatorCornerShape)
                             .background(indicatorFill)
                             .border(1.dp, indicatorBorder, indicatorCornerShape),
@@ -303,7 +306,7 @@ internal fun ForgeBottomBar(
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
-                                            .offset(x = 3.dp, y = (-2).dp)
+                                            .offset(x = 5.dp, y = (-3).dp)
                                             .size(7.dp)
                                             .clip(CircleShape)
                                             .background(palette.primary),
