@@ -81,12 +81,14 @@ exec npx -y @playwright/mcp@latest --headless --no-sandbox "${'$'}@"
 
     val FORGE_MCP_SERVER_PY: String = """#!/usr/bin/env python3
 import html.parser
+import http.client
 import ipaddress
 import json
 import os
 import socket
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import urllib.error
@@ -541,6 +543,57 @@ def _preview_url_allowed(url):
     return True
 
 
+def _preview_ip_allowed(ip):
+    return ip.is_loopback or not (ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
+
+
+def _connect_pinned(host, port, timeout):
+    # Resolve once, validate every address, then connect to that validated address: a second DNS answer (rebinding)
+    # can no longer swap in a private or metadata IP between the check and the connection.
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not infos:
+        raise OSError("No address for " + host)
+    for info in infos:
+        try:
+            allowed = _preview_ip_allowed(ipaddress.ip_address(info[4][0]))
+        except ValueError:
+            allowed = False
+        if not allowed:
+            raise urllib.error.URLError("Address of host is not allowed")
+    last_error = OSError("Connection failed")
+    for family, socktype, proto, _canon, sockaddr in infos:
+        sock = socket.socket(family, socktype, proto)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            sock.close()
+            last_error = exc
+    raise last_error
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = _connect_pinned(self.host, self.port, self.timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        sock = _connect_pinned(self.host, self.port, self.timeout)
+        self.sock = ssl.create_default_context().wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req)
+
+
 class _SafePreviewRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not _preview_url_allowed(newurl):
@@ -555,7 +608,10 @@ def handle_web_preview_inspect(args):
     if not _preview_url_allowed(url):
         return "Invalid URL: only http(s) to localhost or public hosts is allowed"
     req = urllib.request.Request(url, headers={"User-Agent": "NextCraft-Forge-Inspector/1.0"})
-    opener = urllib.request.build_opener(_SafePreviewRedirectHandler())
+    # No proxy: a proxy would resolve the host itself and bypass the pinned-address check.
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _PinnedHTTPHandler(), _PinnedHTTPSHandler(), _SafePreviewRedirectHandler()
+    )
     try:
         with opener.open(req, timeout=10) as resp:
             status = resp.status
