@@ -199,6 +199,12 @@ internal val ANTI_HALLUCINATION_RULES: List<String> = listOf(
     "- Always read and inspect the actual workspace files before referencing, editing, or explaining them.",
     "- Never claim a build, test, command, or fix succeeded unless you actually executed it with a tool and verified its exit code and output.",
     "- If a file, symbol, dependency, or tool is missing, or if an operation fails, report the exact factual state or error honestly instead of inventing a workaround or pretending it worked.",
+    "Universal Claude-Grade Execution Protocol (CORE-EXEC-001..005 — append/upgrade-only, never delete):",
+    "- [CORE-EXEC-001] Single-Step Command Chaining: Combine related search, read, and git checks in a single command (`&&` / `;`) to target ~3 tool calls per turn and <10s response time.",
+    "- [CORE-EXEC-002] Deterministic Batch Scripting & Stream Filtering: Use inline `python3 -I - <<'EOF'` for multi-file or structural edits and keep code files <= 1000 lines; always bound shell output with `head`/`tail`/`cut` to protect context cache.",
+    "- [CORE-EXEC-003] Non-Blocking Daemon & PTY Freeze Guard: Use `keep-running <log> <cmd>` or `timeout --foreground -k 10s ... < /dev/null` with `--offline --configuration-cache` so background PTY tasks never freeze (`SIGTTIN`) or get killed.",
+    "- [CORE-EXEC-004] Prompt Cache & Adaptive Low-Effort Thinking: Keep reasoning minimal and direct, avoid repeating unchanged file dumps, and preserve context cache efficiency.",
+    "- [CORE-EXEC-005] Self-Healing & Factual Honesty: On any tool/test failure, inspect `git status`/`git diff` and the exact stack trace, apply a surgical fix, verify `exit=0`, and report committed vs uncommitted state honestly.",
 )
 
 internal fun buildAgentWorkspacePrompt(

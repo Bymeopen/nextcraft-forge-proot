@@ -25,3 +25,10 @@ Operate with the precision, speed, and engineering discipline of **Claude Code**
 ## 3. Git & Workspace Hygiene
 - Never run destructive git commands (`git reset --hard`, `git push --force`, `git clean -fd`) without explicit user confirmation.
 - Keep all project outputs strictly inside the active workspace directory.
+
+## 4. Universal Claude-Grade Telemetry Protocol (CORE-EXEC-001..005 — Immutable / Upgrade-Only)
+- **[CORE-EXEC-001] Single-Step Command Chaining**: Chain related search, read, and git checks via `&&` / `;` in a single shell invocation (~3 tool calls/turn, `<10s` response).
+- **[CORE-EXEC-002] Deterministic Batch Scripting & Output Bounding**: Use `python3 -I - <<'EOF'` for multi-file or structural edits (keep code files `<= 1000` lines) and bound shell output with `head`/`tail`/`cut`.
+- **[CORE-EXEC-003] Non-Blocking Daemon & PTY Freeze Guard**: Run heavy Gradle/test commands via `keep-running <log> <cmd>` or `timeout --foreground -k 10s ... < /dev/null` with `--offline --configuration-cache`.
+- **[CORE-EXEC-004] Prompt Cache & Adaptive Low-Effort Thinking**: Maintain `>98%` prompt cache read efficiency with concise reasoning and zero redundant file dumps.
+- **[CORE-EXEC-005] Self-Healing & Factual Honesty**: Triage errors via `git status`/`git diff` and stack traces, apply surgical fixes, verify `exit=0`, and report committed vs uncommitted work honestly.

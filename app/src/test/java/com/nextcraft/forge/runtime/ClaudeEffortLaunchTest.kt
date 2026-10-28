@@ -45,6 +45,12 @@ class ClaudeEffortLaunchTest {
         assertTrue(AntigravityCustomizations.GLOBAL_GEMINI_MD.contains("Strict Anti-Hallucination & Factual Accuracy Policy"))
         assertTrue(AntigravityCustomizations.GLOBAL_GEMINI_MD.contains("Hermes-Lite Cognitive Architecture"))
         assertTrue(AntigravityCustomizations.SKILLS.containsKey("skill-creator"))
+        listOf("CORE-EXEC-001", "CORE-EXEC-002", "CORE-EXEC-003", "CORE-EXEC-004", "CORE-EXEC-005").forEach { anchor ->
+            assertTrue("Missing $anchor in Claude/DSH prompt", claudeAndDshPrompt.contains(anchor))
+            assertTrue("Missing $anchor in Antigravity prompt", agyPrompt.contains(anchor))
+            assertTrue("Missing $anchor in GLOBAL_GEMINI_MD", AntigravityCustomizations.GLOBAL_GEMINI_MD.contains(anchor))
+            assertTrue("Missing $anchor in claude-code-core skill", AntigravitySkills.SKILLS["claude-code-core"]!!.contains(anchor))
+        }
     }
 
     @Test
