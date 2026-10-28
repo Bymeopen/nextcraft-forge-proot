@@ -38,12 +38,22 @@ run() { # run <label> <command string run by bash inside the guest>
   mv "$rootfs/trace/$n.strace" "$logs/$n-$1.strace"
 }
 
-run shell 'ls / >/dev/null; cat /etc/passwd >/dev/null; [ -x /bin/sh ]; id; uname -a; env true; type ls'
-run bash-features 'set -e; d=$(mktemp -d); echo hi > $d/f; cp $d/f $d/g; mv $d/g $d/h; ln -s f $d/l; chmod 600 $d/f; stat $d/f >/dev/null; find $d | sort; rm -rf $d'
+# One command per run, so a blocked syscall names the tool that issued it. UV_USE_IO_URING=0 is what proot-exec.sh sets for
+# the guest: libuv (Node) otherwise calls io_uring_setup, which Android refuses.
+export UV_USE_IO_URING=0
+run shell 'ls / >/dev/null; cat /etc/passwd >/dev/null; id; uname -a; env true'
+run bash-test '[ -x /bin/sh ] && [ -f /etc/passwd ] && [ -d / ]; type ls'
+run bash-files 'set -e; d=$(mktemp -d); echo hi > $d/f; cp $d/f $d/g; mv $d/g $d/h; ln -s f $d/l; chmod 600 $d/f; stat $d/f >/dev/null; find $d | sort; rm -rf $d'
 run node-fs-net 'node -e "const fs=require(\"fs\");fs.accessSync(\"/etc/passwd\");fs.readdirSync(\"/\");fs.statSync(\"/\");require(\"os\").cpus();require(\"dns\").lookup(\"localhost\",()=>{});require(\"net\").createServer().listen(0,\"127.0.0.1\",function(){this.close()})"'
 run node-worker 'node -e "new (require(\"worker_threads\").Worker)(\"1\",{eval:true}).on(\"exit\",()=>{})"'
 run npm 'npm --version; npm config get registry'
 run git 'git --version; d=$(mktemp -d); git init -q $d; git -C $d status >/dev/null; rm -rf $d'
-run tools 'curl --version | head -1; jq -n 1; rg --version | head -1; zstd --version; unzip -v | head -1; xz --version | head -1; awk "BEGIN{print 1}"'
+run curl 'curl --version | head -1'
+run jq 'jq -n 1'
+run rg 'rg --version | head -1'
+run zstd 'zstd --version'
+run unzip 'unzip -v | head -1'
+run xz 'xz --version | head -1'
+run awk 'awk "BEGIN{print 1}"'
 
 python3 "$SCRIPT_DIR/audit-android-seccomp.py" "$logs"/*.strace

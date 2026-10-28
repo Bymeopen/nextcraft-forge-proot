@@ -532,6 +532,8 @@ internal val PROOT_EXEC_SCRIPT = """
     export LANG="${'$'}{LANG:-C.UTF-8}"
     export TMPDIR="/tmp"
     export GLIBC_TUNABLES="glibc.pthread.rseq=0"
+    # Android refuses io_uring_setup (SIGSYS); libuv (Node) would try it on Linux 5.1+. Harmless for glibc guests.
+    export UV_USE_IO_URING=0
     # Same bridge variables as chroot-exec.sh; the pocket* names are kept for scripts from older builds.
     export NEXTCRAFT_BRIDGE_DIR="/nextcraft-bridge"
     export POCKETDEV_BRIDGE_DIR="/nextcraft-bridge"
