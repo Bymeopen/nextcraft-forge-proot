@@ -104,6 +104,18 @@ tidak berubah; `aapt2` statis membuat build Android tidak lagi bergantung pada `
 activity_manager max_phantom_processes 2147483647` bisa dilakukan manual), `chroot-health.sh` bagian *Mount* (ERR wajar).
 Bila `proot` gagal dengan `seccomp`/`ptrace` di kernel tertentu, coba `PROOT_NO_SECCOMP=1` lewat environment agen.
 
+**Exit 159 (signal 31).** `159 = 128 + 31` = `SIGSYS`: satu syscall ditolak filter seccomp (filter app Android atau
+filter proot). Terlihat saat `npm install @anthropic-ai/claude-code` dan verifikasi bundel Antigravity. Untuk
+menemukan syscall pelakunya, jalankan di tab Terminal:
+
+```bash
+sh scripts/runtime-bundles/proot-diag.sh      # laporan di ~/proot-diag.log, log npm verbose di ~/proot-diag.log.npm
+android-shell logcat -d | grep -iE 'SIGSYS|seccomp|audit.*syscall'   # nomor syscall (arm64)
+```
+
+Probe pertama yang berstatus `[159]` menunjukkan komponen yang memicu (Node biasa, `fs`, `worker_threads`, atau
+`npm` saja). Belum ada perbaikan permanen: nomor syscall dari logcat diperlukan sebelum bisa dibuat penanganannya.
+
 **Belum diuji di perangkat.** Sandbox hanya bisa membangun binernya; `ptrace` tidak tersedia di bawah `qemu-user`.
 
 ## Belum terverifikasi
