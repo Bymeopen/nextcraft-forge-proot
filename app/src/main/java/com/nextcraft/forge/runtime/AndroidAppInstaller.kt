@@ -178,12 +178,10 @@ object AndroidAppInstaller {
                 setInstallLocation(PackageInfo.INSTALL_LOCATION_AUTO)
                 setInstallReason(PackageManager.INSTALL_REASON_USER)
                 setOriginatingUid(Process.myUid())
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    setRequireUserAction(
-                        if (isUpdate) PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED
-                        else PackageInstaller.SessionParams.USER_ACTION_REQUIRED,
-                    )
-                }
+                setRequireUserAction(
+                    if (isUpdate) PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED
+                    else PackageInstaller.SessionParams.USER_ACTION_REQUIRED,
+                )
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     setPackageSource(PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE)
                 }
@@ -205,11 +203,7 @@ object AndroidAppInstaller {
                     .putExtra(EXTRA_APK_FINGERPRINT, apkHash)
                     .putExtra(EXTRA_OPERATION_ID, operationId)
                     .putExtra(EXTRA_LAUNCH_AFTER_INSTALL, launchAfterInstall)
-                val mutabilityFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    PendingIntent.FLAG_MUTABLE
-                } else {
-                    0
-                }
+                val mutabilityFlag = PendingIntent.FLAG_MUTABLE
                 val pending = PendingIntent.getBroadcast(
                     context,
                     sessionId,

@@ -6,7 +6,6 @@ import android.content.ContextWrapper
 import android.content.res.AssetManager
 import android.content.res.Configuration
 import android.content.res.Resources
-import android.os.Build
 import android.os.LocaleList
 import androidx.annotation.StringRes
 import java.util.Locale
@@ -47,12 +46,7 @@ object LocaleHelper {
         val resolvedLocale = getLocale(languageCode) ?: resolveSystemDefaultLocale() ?: return context
         Locale.setDefault(resolvedLocale)
         val updatedCfg = Configuration(context.resources.configuration).apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                setLocales(LocaleList(resolvedLocale))
-            } else {
-                @Suppress("DEPRECATION")
-                locale = resolvedLocale
-            }
+            setLocales(LocaleList(resolvedLocale))
             setLayoutDirection(resolvedLocale)
         }
         return LocalizedContext(context, context.createConfigurationContext(updatedCfg))
@@ -60,12 +54,7 @@ object LocaleHelper {
 
     private fun resolveSystemDefaultLocale(): Locale? {
         val sysCfg = Resources.getSystem().configuration
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            sysCfg.locales[0]
-        } else {
-            @Suppress("DEPRECATION")
-            sysCfg.locale
-        }
+        return sysCfg.locales[0]
     }
 }
 

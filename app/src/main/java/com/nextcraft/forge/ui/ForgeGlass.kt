@@ -51,7 +51,7 @@ internal var glassReducedEffects: Boolean by androidx.compose.runtime.mutableSta
 /** The user's own "solid Glass" choice (Settings > Appearance); a state, so flipping it updates the open screen at once. */
 internal var glassUserSolid: Boolean by androidx.compose.runtime.mutableStateOf(false)
 
-internal val glassBlurSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !glassReducedEffects && !glassUserSolid
+internal val glassBlurSupported: Boolean get() = !glassReducedEffects && !glassUserSolid
 
 internal fun detectReducedEffects(context: android.content.Context): Boolean {
     val lowRam = context.getSystemService(android.app.ActivityManager::class.java)?.isLowRamDevice == true
