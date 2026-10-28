@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.CLAUDE_STATE_LOCK
 import android.net.ConnectivityManager
 import android.os.Process as AndroidProcess
 import android.system.Os

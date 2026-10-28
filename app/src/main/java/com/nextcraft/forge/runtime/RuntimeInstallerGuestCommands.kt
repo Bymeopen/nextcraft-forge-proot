@@ -1,5 +1,9 @@
 package com.nextcraft.forge.runtime
 
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.ANSI_ESCAPE
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.MAX_COLLECTED_OUTPUT
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.MAX_PROCESS_OUTPUT_BYTES
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.MAX_TERMINAL_LINE
 import android.system.Os
 import android.util.Log
 import java.io.File

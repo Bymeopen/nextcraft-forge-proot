@@ -10,6 +10,8 @@ import java.net.URL
 import java.security.MessageDigest
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.resolveSafeSymlinkTarget
+import com.nextcraft.forge.runtime.RuntimeInstaller.Companion.safeChild
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
