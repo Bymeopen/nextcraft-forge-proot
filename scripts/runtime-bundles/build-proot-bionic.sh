@@ -73,6 +73,7 @@ Checking simple C program: OK
 rpath library support: OK
 -Wl,--version-script support: FAIL
 Checking getconf LFS_CFLAGS: OK
+Checking getconf large file support flags work: OK
 Checking for large file support without additional flags: OK
 Checking for -D_FILE_OFFSET_BITS=64: OK
 Checking for -D_LARGE_FILES: OK
