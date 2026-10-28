@@ -109,7 +109,9 @@ echo "Building proot (bionic)"
 # LDFLAGS), which a command-line override would replace. --build-id=none and the prefix map keep builds repeatable.
 (
   cd "$work/proot/src"
-  CPPFLAGS="-I$talloc_src" CFLAGS="-O2 -ffile-prefix-map=$work=." \
+  # Termux's fork was written for an older clang: some files (ashmem_memfd.c) call strcmp/memset without <string.h>, which
+  # NDK r27's clang rejects. Include it everywhere and keep any similar implicit declaration a warning, not an error.
+  CPPFLAGS="-I$talloc_src" CFLAGS="-O2 -include string.h -Wno-error=implicit-function-declaration -ffile-prefix-map=$work=." \
     LDFLAGS="-L$work/talloc-prefix/lib -Wl,--build-id=none" \
     make -j"$(nproc)" V=1 proot loader/loader >/dev/null
   "$STRIP" --strip-all proot loader/loader
