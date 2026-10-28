@@ -46,8 +46,10 @@ jobs:
             # The PRoot repo mirrors this one but ships its own app (com.nextcraft.forge.proot). Its manifest must name that
             # package and point at this repo's release, or the updater ignores it. versionCode starts above 1200, the
             # last build of the earlier PRoot fork (1.0.0-proot.200), so an installed copy still updates in place.
+            # The offset is 5000 because a build installed from an earlier run counter reached versionCode 2211
+            # (1.0.211-forge) while this repo's counter restarted lower (run 73 -> 2073), which the updater rejected.
             echo "PACKAGE=com.nextcraft.forge.proot" >> "$GITHUB_ENV"
-            echo "VERSION_CODE=$((2000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+            echo "VERSION_CODE=$((5000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
             echo "ASSET_PREFIX=nextcraft-forge-proot-debug" >> "$GITHUB_ENV"
             echo "RELEASE_TITLE=NextCraft Forge PRoot debug" >> "$GITHUB_ENV"
             echo "EXTRA_GRADLE_ARGS=-Pnextcraft.sideBySideSuffix=proot -PappUpdateManifestUrl=https://github.com/$GITHUB_REPOSITORY/releases/latest/download/update-manifest.json" >> "$GITHUB_ENV"
