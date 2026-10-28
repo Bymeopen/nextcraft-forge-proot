@@ -30,6 +30,9 @@ check() { # check <label> <command run by bash in the guest>
 }
 
 echo "== libc patch marker: $(cat "$work/rootfs/.nextcraft-libc-patch-version" 2>/dev/null || echo none)"
+echo "== static scan: which refused syscalls can this guest's libc and ld.so still issue?"
+python3 "$SCRIPT_DIR/scan-syscall-numbers.py" "$work/rootfs/usr/lib/aarch64-linux-gnu/libc.so.6" \
+  "$work/rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" || true
 check "bash: command lookup, files"       'ls / >/dev/null && [ -x /bin/sh ] && d=$(mktemp -d) && echo hi > $d/f && cp $d/f $d/g && chmod 600 $d/f && rm -rf $d && echo ok'
 check "coreutils, id, uname"              'id && uname -a && env true'
 check "node: fs, os, net"                 'node -e "require(\"fs\").accessSync(\"/etc/passwd\");require(\"fs\").readdirSync(\"/\");require(\"os\").cpus();require(\"net\").createServer().listen(0,\"127.0.0.1\",function(){this.close()})"'
@@ -37,6 +40,16 @@ check "node: worker thread"               'node -e "new (require(\"worker_thread
 check "npm --version"                     'npm --version'
 check "git"                               'git --version && d=$(mktemp -d) && git init -q $d && git -C $d status >/dev/null && rm -rf $d'
 check "curl, jq, rg"                      'curl --version | head -1 && jq -n 1 && rg --version | head -1'
+
+if [[ $fail -ne 0 && "$EXPECT" == ok ]]; then
+  # Why does it die? proot's own trace of the same guest, without and with the filter, and without the preload shim.
+  plain_env=(UV_USE_IO_URING=0 HOME=/root LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin)
+  base=("$PROOT" -v 3 --kill-on-exit --link2symlink -0 -r "$work/rootfs" -b /dev -b /proc -b /sys -w /)
+  echo "== diagnostics: /bin/true WITHOUT the filter"
+  "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 12; echo "rc=${PIPESTATUS[0]}"
+  echo "== diagnostics: /bin/true WITH the filter, no preload shim"
+  "$work/run" "$work/allow.txt" "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 30; echo "rc=${PIPESTATUS[0]}"
+fi
 
 if [[ $fail -eq 0 ]]; then echo "RESULT: as expected ($EXPECT)"; else echo "RESULT: NOT as expected"; fi
 exit $fail
