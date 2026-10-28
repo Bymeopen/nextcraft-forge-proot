@@ -38,6 +38,9 @@
 int main(int argc, char **argv)
 {
 	const char *root = NULL;
+	unsigned deny = SECCOMP_RET_TRAP; /* NEXTCRAFT_FILTER_ERRNO=1: refuse with ENOSYS instead, so a tracer's log names the syscall */
+	if (getenv("NEXTCRAFT_FILTER_ERRNO"))
+		deny = SECCOMP_RET_ERRNO | ENOSYS;
 	if (argc >= 3 && strcmp(argv[1], "--root") == 0) { /* chroot happens after the allowlist is read, below */
 		root = argv[2];
 		argc -= 2;
@@ -71,11 +74,11 @@ int main(int argc, char **argv)
 	int n = 0;
 	prog[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
 	prog[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NATIVE_AUDIT_ARCH, 1, 0);
-	prog[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP);
+	prog[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, deny);
 	prog[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
 	for (int i = 0; i < m; i++) /* a match jumps over the remaining entries and the TRAP, onto ALLOW */
 		prog[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, nr[i], (unsigned char)(m - i), 0);
-	prog[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP);
+	prog[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, deny);
 	prog[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
 
 	struct sock_fprog fprog = { .len = (unsigned short)n, .filter = prog };
