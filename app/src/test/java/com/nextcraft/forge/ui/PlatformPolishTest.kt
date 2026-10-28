@@ -20,7 +20,7 @@ class PlatformPolishTest {
     @Test
     fun launcherIcons_haveMonochromeLayer() {
         listOf("ic_launcher", "ic_launcher_round").forEach { name ->
-            val xml = File(main, "res/mipmap-anydpi-v26/$name.xml").readText()
+            val xml = File(main, "res/mipmap-anydpi/$name.xml").readText()
             assertTrue("$name needs <monochrome> for themed icons", "<monochrome" in xml)
         }
     }

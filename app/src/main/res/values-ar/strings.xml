@@ -1467,6 +1467,7 @@
     <string name="auto_backup_target">الوجهة: %1$s</string>
     <string name="auto_backup_no_target">لم يُختر ملف وجهة بعد</string>
     <string name="auto_backup_choose_target">اختر ملف الوجهة (Drive، مجلد…)</string>
+    <string name="auto_backup_choose_folder">اختر مجلد الوجهة (Drive، يحتفظ بآخر 5 نسخ)</string>
     <string name="auto_backup_off">إيقاف</string>
     <string name="auto_backup_daily">يوميًا</string>
     <string name="auto_backup_weekly">أسبوعيًا</string>

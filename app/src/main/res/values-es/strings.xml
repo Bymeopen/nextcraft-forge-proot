@@ -1410,6 +1410,7 @@
     <string name="auto_backup_target">Destino: %1$s</string>
     <string name="auto_backup_no_target">Aún no hay archivo de destino</string>
     <string name="auto_backup_choose_target">Elegir archivo de destino (Drive, carpeta…)</string>
+    <string name="auto_backup_choose_folder">Elegir carpeta de destino (Drive, conserva las últimas 5)</string>
     <string name="auto_backup_off">Desactivada</string>
     <string name="auto_backup_daily">Diaria</string>
     <string name="auto_backup_weekly">Semanal</string>

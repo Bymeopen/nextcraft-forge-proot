@@ -1429,6 +1429,7 @@
     <string name="auto_backup_target">Назначение: %1$s</string>
     <string name="auto_backup_no_target">Файл назначения ещё не выбран</string>
     <string name="auto_backup_choose_target">Выбрать файл назначения (Диск, папка…)</string>
+    <string name="auto_backup_choose_folder">Выбрать папку назначения (Drive, хранит последние 5)</string>
     <string name="auto_backup_off">Выкл.</string>
     <string name="auto_backup_daily">Ежедневно</string>
     <string name="auto_backup_weekly">Еженедельно</string>

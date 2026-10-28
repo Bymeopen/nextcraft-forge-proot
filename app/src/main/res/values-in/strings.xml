@@ -1378,6 +1378,7 @@
     <string name="auto_backup_target">Tujuan: %1$s</string>
     <string name="auto_backup_no_target">Belum ada file tujuan</string>
     <string name="auto_backup_choose_target">Pilih file tujuan (Drive, folder…)</string>
+    <string name="auto_backup_choose_folder">Pilih folder tujuan (Drive, simpan 5 terakhir)</string>
     <string name="auto_backup_off">Mati</string>
     <string name="auto_backup_daily">Harian</string>
     <string name="auto_backup_weekly">Mingguan</string>

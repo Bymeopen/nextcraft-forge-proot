@@ -1391,6 +1391,7 @@
     <string name="auto_backup_target">गंतव्य: %1$s</string>
     <string name="auto_backup_no_target">अभी कोई गंतव्य फ़ाइल नहीं चुनी गई</string>
     <string name="auto_backup_choose_target">गंतव्य फ़ाइल चुनें (Drive, फ़ोल्डर…)</string>
+    <string name="auto_backup_choose_folder">गंतव्य फ़ोल्डर चुनें (Drive, अंतिम 5 रखता है)</string>
     <string name="auto_backup_off">बंद</string>
     <string name="auto_backup_daily">रोज़</string>
     <string name="auto_backup_weekly">हर हफ़्ते</string>
