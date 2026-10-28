@@ -11,6 +11,10 @@ on:
       - ".github/workflows/proot-musl.yml"
       - "scripts/runtime-bundles/build-proot-musl.sh"
       - "scripts/runtime-bundles/audit-android-seccomp.py"
+      - "scripts/runtime-bundles/proot-android-seccomp.patch"
+      - "scripts/runtime-bundles/android-seccomp-run.c"
+      - "scripts/runtime-bundles/gen-android-allowlist.py"
+      - "scripts/runtime-bundles/test-proot-android-seccomp.sh"
 
 permissions:
   contents: read
@@ -22,8 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update && sudo apt-get install -y strace file
-      - name: Build static musl proot
+      - name: Build static musl proot (patched)
         run: NEXTCRAFT_OUT_DIR="$PWD/out" scripts/runtime-bundles/build-proot-musl.sh
+      - name: Build plain musl proot (control for the test below)
+        run: NEXTCRAFT_PROOT_PATCH=0 NEXTCRAFT_OUT_DIR="$PWD/out-plain" scripts/runtime-bundles/build-proot-musl.sh
       - name: Start-up and launch under strace
         # Without -f: proot ptraces its guests, and a process cannot have two tracers. This records proot's own syscalls,
         # which is what dies first on Android.
@@ -35,6 +41,12 @@ jobs:
           strace -qq -o launch.strace out/libproot.so --kill-on-exit --link2symlink -0 -r rootfs /bin/sh -c 'echo guest-ok; id -u; test -x /bin/sh && echo access-ok'
       - name: Android seccomp audit of proot's own syscalls
         run: python3 scripts/runtime-bundles/audit-android-seccomp.py version.strace launch.strace
+      - name: Ubuntu guest under an Android-shaped seccomp filter
+        # Core Ubuntu bundle: the same file the app downloads (RuntimeInstaller.CORE_BUNDLE), checked against its SHA-256.
+        run: |
+          curl -fL --retry 3 -o core.tar.zst https://github.com/bymeopen/nextcraft-forge/releases/download/runtime-2026.10.2/nextcraft-core-arm64-2026.10.2.tar.zst
+          echo "c2dab14270aae62b21243109a5a6e75af7d0c6821fda6264b91f973e18f3ddfb  core.tar.zst" | sha256sum -c -
+          scripts/runtime-bundles/test-proot-android-seccomp.sh out/libproot.so out/libproot_loader.so out-plain/libproot.so app/src/main/jniLibs/arm64-v8a/libproot.so core.tar.zst
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -42,6 +54,7 @@ jobs:
           path: |
             out/libproot.so
             out/libproot_loader.so
+            out-plain/libproot.so
             version.strace
             launch.strace
           compression-level: 0

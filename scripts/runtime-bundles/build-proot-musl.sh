@@ -13,10 +13,12 @@ set -euo pipefail
 #
 #   NEXTCRAFT_OUT_DIR=dist/runtime-bundles scripts/runtime-bundles/build-proot-musl.sh
 #
-# Environment: NEXTCRAFT_OUT_DIR (default dist/runtime-bundles), NEXTCRAFT_ALPINE_IMAGE (default alpine:3.24).
+# Environment: NEXTCRAFT_OUT_DIR (default dist/runtime-bundles), NEXTCRAFT_ALPINE_IMAGE (default alpine:3.24),
+# NEXTCRAFT_PROOT_PATCH (default 1; 0 builds plain proot, only useful as the control in test-proot-android-seccomp.sh).
 PROOT_TAG="v5.5.0"
 PROOT_COMMIT="${NEXTCRAFT_PROOT_COMMIT:-25dc6a3134891f98a79f57ce1c2c1b23ff15cad1}"   # commit behind the tag
 ALPINE_IMAGE="${NEXTCRAFT_ALPINE_IMAGE:-alpine:3.24}"
+APPLY_PATCH="${NEXTCRAFT_PROOT_PATCH:-1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUT_DIR="${NEXTCRAFT_OUT_DIR:-$ROOT_DIR/dist/runtime-bundles}"
@@ -29,12 +31,16 @@ trap 'rm -rf -- "$work"' EXIT
 mkdir -p "$OUT_DIR" "$work/out"
 
 echo "Building proot $PROOT_TAG against musl in $ALPINE_IMAGE"
-docker run --rm -e PROOT_TAG="$PROOT_TAG" -e PROOT_COMMIT="$PROOT_COMMIT" -v "$work/out:/out" "$ALPINE_IMAGE" sh -euc '
-  apk add --no-cache build-base git linux-headers bsd-compat-headers pkgconf talloc-dev talloc-static >/dev/null
+docker run --rm -e PROOT_TAG="$PROOT_TAG" -e PROOT_COMMIT="$PROOT_COMMIT" -e APPLY_PATCH="$APPLY_PATCH" \
+  -v "$work/out:/out" -v "$SCRIPT_DIR:/src:ro" "$ALPINE_IMAGE" sh -euc '
+  apk add --no-cache build-base git patch linux-headers bsd-compat-headers pkgconf talloc-dev talloc-static >/dev/null
   git clone -q --depth 1 --branch "$PROOT_TAG" https://github.com/proot-me/proot /build/proot
   actual="$(git -C /build/proot rev-parse HEAD)"
   [ "$actual" = "$PROOT_COMMIT" ] || { echo "proot $PROOT_TAG resolved to $actual, expected $PROOT_COMMIT" >&2; exit 1; }
   echo "proot $PROOT_TAG = $actual"
+  # Answer syscalls that the Android seccomp filter refuses with ENOSYS before the kernel evaluates the filter, so guests
+  # (glibc included) survive. See the comment in the patch and test-proot-android-seccomp.sh.
+  if [ "$APPLY_PATCH" = "1" ]; then patch -p1 -d /build/proot < /src/proot-android-seccomp.patch; fi
   cd /build/proot/src
   # Environment, not make arguments: the GNUmakefile appends `pkg-config --libs talloc` with `+=` and a command-line
   # LDFLAGS would override it. --build-id=none and the prefix map keep the binary reproducible.

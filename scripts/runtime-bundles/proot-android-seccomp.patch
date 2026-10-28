@@ -1,0 +1,57 @@
+--- a/src/syscall/syscall.c	2026-10-28 05:32:13.649831852 +0000
++++ b/src/syscall/syscall.c	2026-10-28 05:32:13.678885566 +0000
+@@ -31,6 +31,42 @@
+ #include "tracee/tracee.h"
+ #include "tracee/reg.h"
+ #include "tracee/mem.h"
++#include "arch.h"
++
++#if defined(ARCH_ARM64)
++/*
++ * Android's per-app seccomp filter answers every syscall outside bionic's list with SIGSYS, which kills the tracee.
++ * The kernel reports a syscall to the tracer (ptrace) before it evaluates seccomp, so a syscall that is turned into "avoid
++ * it, return -ENOSYS" here never reaches the filter. glibc, musl and the common tools all fall back cleanly on ENOSYS for
++ * these (verified against the device with scripts/runtime-bundles/sigsys-probe.c).
++ * Only relevant when seccomp acceleration is off (PROOT_NO_SECCOMP=1), because only then every syscall reaches us.
++ */
++static bool is_refused_by_android(word_t sysnum)
++{
++    switch (sysnum) {
++    case 40:  /* mount */
++    case 51:  /* chroot */
++    case 99:  /* set_robust_list */
++    case 144: /* setgid */
++    case 146: /* setuid */
++    case 159: /* setgroups */
++    case 293: /* rseq */
++    case 425: /* io_uring_setup */
++    case 426: /* io_uring_enter */
++    case 427: /* io_uring_register */
++    case 437: /* openat2 */
++    case 439: /* faccessat2 */
++    case 444: /* landlock_create_ruleset */
++    case 445: /* landlock_add_rule */
++    case 446: /* landlock_restrict_self */
++    case 449: /* futex_waitv */
++    case 452: /* fchmodat2 */
++	return true;
++    default:
++	return false;
++    }
++}
++#endif
+ 
+ /**
+  * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
+@@ -124,6 +160,11 @@
+ 	if (tracee->chain.syscalls == NULL) {
+ 	    save_current_regs(tracee, ORIGINAL);
+ 	    status = translate_syscall_enter(tracee);
++#if defined(ARCH_ARM64)
++	    /* Not handled by PRoot (fake-root already turned setuid & co. into no-ops): never let it reach the filter. */
++	    if (status == 0 && is_refused_by_android(peek_reg(tracee, CURRENT, SYSARG_NUM)))
++		status = -ENOSYS;
++#endif
+ 	    save_current_regs(tracee, MODIFIED);
+ 	} else {
+ 	    status =
