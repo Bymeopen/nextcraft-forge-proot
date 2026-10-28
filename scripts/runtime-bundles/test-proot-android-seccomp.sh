@@ -50,5 +50,15 @@ check "guest node" ok "${HARN[@]}" "$PATCHED" "${guest_args[@]}" /usr/local/bin/
 check "guest npm --version" ok "${HARN[@]}" "$PATCHED" "${guest_args[@]}" /usr/local/bin/npm --version
 check "guest without GLIBC_TUNABLES (rseq must be answered too)" ok env -u GLIBC_TUNABLES "${HARN[@]}" "$PATCHED" "${guest_args[@]}" /bin/bash -c 'echo ok'
 
+if [[ $fail -ne 0 ]]; then
+  # Diagnostics: is it the filter, or does the guest fail to start at all? Same command, no filter, proot's own trace.
+  echo "== diagnostics: patched proot, guest /bin/true, WITHOUT the seccomp filter (-v 3)"
+  "$PATCHED" -v 3 "${guest_args[@]}" /bin/true 2>&1 | tail -n 25; echo "rc=${PIPESTATUS[0]}"
+  echo "== diagnostics: same, WITH the filter (-v 3)"
+  "${HARN[@]}" "$PATCHED" -v 3 "${guest_args[@]}" /bin/true 2>&1 | tail -n 25; echo "rc=${PIPESTATUS[0]}"
+  echo "== diagnostics: rootfs sanity"
+  ls -ld "$work/rootfs" "$work/rootfs/bin" "$work/rootfs/lib" "$work/rootfs/lib/ld-linux-aarch64.so.1" 2>&1 | head; ls -l "$work/rootfs/bin/true" 2>&1 | head -2
+fi
+
 if [[ $fail -eq 0 ]]; then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit $fail
