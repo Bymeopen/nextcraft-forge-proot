@@ -1,0 +1,36 @@
+name: PRoot bionic
+
+# Builds libproot.so and libproot_loader.so (Termux's proot, linked against Android's libc) from source with the Android
+# NDK, and compares them with the binaries shipped in app/src/main/jniLibs. Nothing is published or committed: the files
+# come out as an artifact. To change the shipped binaries, review the comparison and copy them over by hand.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["ccr-**"]
+    paths:
+      - ".github/workflows/proot-bionic.yml"
+      - "scripts/runtime-bundles/build-proot-bionic.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build proot against bionic
+        run: NEXTCRAFT_OUT_DIR="$PWD/out" scripts/runtime-bundles/build-proot-bionic.sh
+      - name: Compare with the binaries shipped in the APK
+        run: |
+          ref=app/src/main/jniLibs/arm64-v8a
+          for f in libproot.so libproot_loader.so; do
+            echo "== $f"; ls -l "$ref/$f" "out/$f"; file -b "$ref/$f" "out/$f"
+          done
+          echo "== libraries needed (shipped vs built)"
+          readelf -d "$ref/libproot.so" | grep NEEDED; readelf -d out/libproot.so | grep NEEDED
+          echo "== strings only in the shipped libproot.so (<) or only in the new one (>)"
+          diff <(strings -a "$ref/libproot.so" | sort -u) <(strings -a out/libproot.so | sort -u) | head -80 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: proot-bionic, path: out/*, compression-level: 0 }
