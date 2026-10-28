@@ -50,7 +50,9 @@ for f in libproot.so libproot_loader.so; do
   cp "$work/out/$f" "$OUT_DIR/$f"
   desc="$(file -b "$OUT_DIR/$f")"
   echo "$f: $desc"
-  [[ "$desc" == *"ARM aarch64"* && "$desc" == *"statically linked"* ]] || { echo "Unexpected binary $f" >&2; exit 1; }
+  # Alpine's gcc defaults to PIE, so `-static` yields "static-pie linked": still no interpreter and no shared libraries.
+  [[ "$desc" == *"ARM aarch64"* && ( "$desc" == *"statically linked"* || "$desc" == *"static-pie linked"* ) ]] \
+    || { echo "Unexpected binary $f" >&2; exit 1; }
 done
 "$OUT_DIR/libproot.so" --version | head -3
 sha256sum "$OUT_DIR/libproot.so" "$OUT_DIR/libproot_loader.so"
