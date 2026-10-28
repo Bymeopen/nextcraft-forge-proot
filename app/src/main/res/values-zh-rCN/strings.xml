@@ -1372,6 +1372,7 @@
     <string name="auto_backup_target">目标：%1$s</string>
     <string name="auto_backup_no_target">尚未选择目标文件</string>
     <string name="auto_backup_choose_target">选择目标文件（云端硬盘、文件夹…）</string>
+    <string name="auto_backup_choose_folder">选择目标文件夹（云端硬盘，保留最近 5 份）</string>
     <string name="auto_backup_off">关闭</string>
     <string name="auto_backup_daily">每天</string>
     <string name="auto_backup_weekly">每周</string>
