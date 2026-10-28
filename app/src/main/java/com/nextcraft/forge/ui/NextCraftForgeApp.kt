@@ -300,7 +300,7 @@ fun NextCraftForgeApp(viewModel: MainViewModel) {
             val bannerClears = state.bannerAction == null && (bannerKey as? UiText.Res)?.id in transientBanners
             LaunchedEffect(bannerKey, bannerClears) {
                 if (bannerKey != null && bannerClears) {
-                    kotlinx.coroutines.delay(8_000)
+                    kotlinx.coroutines.delay(3_000) // confirm banners disappear in 3 s
                     viewModel.dismissBanner()
                 }
             }
@@ -581,6 +581,7 @@ private val transientBanners = setOf(
     R.string.msg_queue_discarded,
     R.string.msg_caches_cleared,
     R.string.msg_parallel_queued,
+    R.string.msg_git_waiting_queue,   // informational status, not an error — auto-dismiss in 3 s
     R.string.branch_enabled,
     R.string.branch_auto,
     R.string.branch_merged,
