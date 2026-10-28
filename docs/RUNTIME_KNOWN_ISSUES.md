@@ -113,6 +113,9 @@ sh scripts/runtime-bundles/proot-diag.sh      # laporan di ~/proot-diag.log, log
 android-shell logcat -d | grep -iE 'SIGSYS|seccomp|audit.*syscall'   # nomor syscall (arm64)
 ```
 
+Bila guest mati karena sinyal, `proot-exec.sh` juga menjalankan `libsigsys_probe.so` (sumber `scripts/runtime-bundles/sigsys-probe.c`,
+statis tanpa libc) yang mencetak syscall yang ditolak filter seccomp perangkat (`BLOCKED (SIGSYS, nr=N)`).
+
 Probe pertama yang berstatus `[159]` menunjukkan komponen yang memicu (Node biasa, `fs`, `worker_threads`, atau
 `npm` saja). Belum ada perbaikan permanen: nomor syscall dari logcat diperlukan sebelum bisa dibuat penanganannya.
 

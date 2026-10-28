@@ -149,6 +149,12 @@ if [ ! -e "$PREFLIGHT_OK" ]; then
         ( proot_cmd /bin/true ) >"$PREFLIGHT_LOG" 2>&1 || true
         {
             echo "proot preflight: guest /bin/true exited $pre_rc (signal $((pre_rc - 128)))"
+            # Signal 31 is seccomp; the probe names every syscall this device refuses (see sigsys-probe.c).
+            if [ -n "${NEXTCRAFT_SIGSYS_PROBE:-}" ] && [ -x "$NEXTCRAFT_SIGSYS_PROBE" ]; then
+                echo "--- syscall probe ---"
+                probe_out="$("$NEXTCRAFT_SIGSYS_PROBE" 2>&1 | grep -E "probe:|BLOCKED|KILLED")"
+                echo "${probe_out:-probe printed nothing (it may not have started)}"
+            fi
             echo "kernel=$(uname -r 2>/dev/null) sdk=$(getprop ro.build.version.sdk 2>/dev/null) seccomp_no=${PROOT_NO_SECCOMP:-unset}"
             echo "--- last proot trace lines ($PREFLIGHT_LOG) ---"
             tail -n 25 "$PREFLIGHT_LOG"

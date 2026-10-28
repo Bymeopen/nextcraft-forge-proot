@@ -854,6 +854,7 @@ class RuntimeInstaller(internal val context: Context) {
         val engineExports = if (RuntimeEngines.current() == RuntimeEngine.PROOT) {
             "export NEXTCRAFT_PROOT=${shellSingleQuote(RuntimeEngines.prootBinary(context).absolutePath)}; " +
                 "export NEXTCRAFT_PROOT_LOADER=${shellSingleQuote(RuntimeEngines.prootLoader(context).absolutePath)}; " +
+                "export NEXTCRAFT_SIGSYS_PROBE=${shellSingleQuote(RuntimeEngines.sigsysProbe(context).absolutePath)}; " +
                 "export NEXTCRAFT_PROOT_TMP=${shellSingleQuote(File(runtimeDir, "proot-tmp").apply { mkdirs() }.absolutePath)}; "
         } else {
             ""
