@@ -16,6 +16,7 @@ android {
         // The release workflow passes -PversionCode=... -PversionName=...; local builds keep the defaults.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 100
         versionName = (project.findProperty("versionName") as String?) ?: "1.0.0-forge"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -202,6 +203,12 @@ dependencies {
         testImplementation("org.robolectric:robolectric:4.12.2")
         testImplementation("androidx.compose.ui:ui-test-junit4")
     }
+    // On-device tests (src/androidTest); they need a device or emulator to run.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.1")
+    // The runner asks for tracing 1.1.0 / jsr305 2.0.2, which are not in the offline Maven cache; these versions are.
+    androidTestImplementation("androidx.tracing:tracing:1.2.0")
+    androidTestImplementation("com.google.code.findbugs:jsr305:3.0.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
