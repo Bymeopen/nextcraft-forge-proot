@@ -47,6 +47,13 @@ if [[ $fail -ne 0 && "$EXPECT" == ok ]]; then
   base=("$PROOT" -v 3 --kill-on-exit --link2symlink -0 -r "$work/rootfs" -b /dev -b /proc -b /sys -w /)
   echo "== diagnostics: /bin/true WITHOUT the filter"
   "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 12; echo "rc=${PIPESTATUS[0]}"
+  if command -v strace >/dev/null && sudo -n true 2>/dev/null; then
+    echo "== diagnostics: which syscall kills it? (no proot; chroot, filter, strace from outside)"
+    sudo strace -f -o "$work/sigsys.log" "$work/run" --root "$work/rootfs" "$work/allow.txt" /usr/bin/env -i "${plain_env[@]}" /bin/true
+    echo "rc=$?"
+    grep -n "SIGSYS" "$work/sigsys.log" | head -n 5
+    echo "-- last syscalls before the end:"; tail -n 12 "$work/sigsys.log" | cut -c1-200
+  fi
   echo "== diagnostics: /bin/true WITH the filter, no preload shim"
   "$work/run" "$work/allow.txt" "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 30; echo "rc=${PIPESTATUS[0]}"
 fi

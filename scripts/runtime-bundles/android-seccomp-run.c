@@ -2,7 +2,10 @@
  * android-seccomp-run: run a command under a seccomp filter shaped like Android's per-app policy, to reproduce
  * "exit 159 (signal 31)" on an ordinary ARM64 Linux host.
  *
- *   android-seccomp-run <allowlist.txt> <cmd> [args...]
+ *   android-seccomp-run [--root <dir>] <allowlist.txt> <cmd> [args...]
+ *
+ * --root chroots into <dir> first (needs root), then installs the filter: the guest runs under the filter without proot, so
+ * `strace -f` from outside can show the syscall number of the SIGSYS that kills it.
  *
  * allowlist.txt holds one arm64 syscall number per line (gen-android-allowlist.py builds it from AOSP's lists). Anything
  * not listed raises SIGSYS (SECCOMP_RET_TRAP), as bionic's filter does. The filter is inherited by every child, including
@@ -18,6 +21,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/prctl.h>
 #include <unistd.h>
 
@@ -33,8 +37,16 @@
 
 int main(int argc, char **argv)
 {
+	if (argc >= 3 && strcmp(argv[1], "--root") == 0) {
+		if (chroot(argv[2]) < 0 || chdir("/") < 0) {
+			perror("chroot");
+			return 2;
+		}
+		argc -= 2;
+		argv += 2;
+	}
 	if (argc < 3) {
-		fprintf(stderr, "usage: %s <allowlist.txt> <cmd> [args...]\n", argv[0]);
+		fprintf(stderr, "usage: %s [--root <dir>] <allowlist.txt> <cmd> [args...]\n", argv[0]);
 		return 2;
 	}
 	unsigned nr[MAX_ALLOWED];
