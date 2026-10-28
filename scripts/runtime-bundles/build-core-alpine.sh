@@ -24,7 +24,7 @@ OUT_DIR="${NEXTCRAFT_OUT_DIR:-$ROOT_DIR/dist/runtime-bundles}"
 ARCHIVE="nextcraft-core-alpine-arm64-$VERSION.tar.zst"
 
 # Tools every guest shell, agent and project template relies on. Node comes from Alpine (v24 on 3.24), npm separately.
-PACKAGES="alpine-baselayout alpine-keys apk-tools busybox busybox-binsh musl-utils bash coreutils findutils grep sed gawk \
+PACKAGES="alpine-baselayout alpine-release alpine-keys apk-tools busybox busybox-binsh musl-utils bash coreutils findutils grep sed gawk \
   git curl ca-certificates jq ripgrep zstd unzip zip tar nodejs npm"
 # xz is left out on purpose: its CLI calls landlock_create_ruleset, which Android refuses (busybox still unpacks .xz).
 
@@ -60,7 +60,7 @@ docker run --rm -v "$rootfs:/target" -e VERSION="$VERSION" "$IMAGE" chroot /targ
     /system /apex /vendor /product /tmp /dev /proc /sys /root
   chmod 1777 /tmp
   printf "export LANG=C.UTF-8\n" > /etc/profile.d/00-nextcraft-lang.sh
-  apk info -v | sort > /.nextcraft-packages
+  apk info -v 2>/dev/null | sort > /.nextcraft-packages
   printf "alpine-%s-arm64\n" "$(cat /etc/alpine-release)" > /.nextcraft-rootfs-version
   printf "nextcraft-core-alpine-%s\n" "$VERSION" > /.nextcraft-core-tools-version
   printf "core-bundle-alpine-%s\n" "$VERSION" > /.nextcraft-runtime-ready

@@ -40,6 +40,18 @@ int faccessat(int dirfd, const char *path, int mode, int flags)
 	return syscall(SYS_faccessat, dirfd, path, mode) < 0 ? -1 : 0; /* our syscall() below forwards it; it sets errno */
 }
 
+/* musl implements eaccess/euidaccess as an internal call to faccessat(AT_EACCESS), which the PLT replacement above cannot
+ * reach; bash uses eaccess() for command lookup. */
+int eaccess(const char *path, int mode)
+{
+	return faccessat(AT_FDCWD, path, mode, AT_EACCESS);
+}
+
+int euidaccess(const char *path, int mode)
+{
+	return faccessat(AT_FDCWD, path, mode, AT_EACCESS);
+}
+
 #if defined(__aarch64__)
 #define NR_io_uring_setup 425
 #define NR_io_uring_enter 426
