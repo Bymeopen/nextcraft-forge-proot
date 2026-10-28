@@ -110,8 +110,9 @@ echo "Building proot (bionic)"
 (
   cd "$work/proot/src"
   # Termux's fork was written for an older clang: some files (ashmem_memfd.c) call strcmp/memset without <string.h>, which
-  # NDK r27's clang rejects. Include it everywhere and keep any similar implicit declaration a warning, not an error.
-  CPPFLAGS="-I$talloc_src" CFLAGS="-O2 -include string.h -Wno-error=implicit-function-declaration -ffile-prefix-map=$work=." \
+  # NDK r27's clang rejects as an error. Keep that a warning. (Do not -include string.h instead: the freestanding loader
+  # defines its own basename(), which clashes with bionic's declaration.)
+  CPPFLAGS="-I$talloc_src" CFLAGS="-O2 -Wno-error=implicit-function-declaration -ffile-prefix-map=$work=." \
     LDFLAGS="-L$work/talloc-prefix/lib -Wl,--build-id=none" \
     make -j"$(nproc)" V=1 proot loader/loader >/dev/null
   "$STRIP" --strip-all proot loader/loader
