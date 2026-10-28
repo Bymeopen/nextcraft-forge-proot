@@ -30,6 +30,10 @@ jobs:
           gradle-version: "9.8.2"
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
+      # Soft gate: existing lint findings are not yet fixed, so this reports without failing the build.
+      - name: Android Lint
+        continue-on-error: true
+        run: gradle --no-daemon :app:lintDebug
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -55,7 +59,7 @@ jobs:
         with:
           gradle-version: "9.8.2"
       - name: Assemble release APK (R8, unsigned)
-        run: gradle --no-daemon :app:assembleRelease
+        run: gradle --no-daemon :app:assembleRelease -PrequireNdk
       - name: Check R8 output
         run: |
           set -eu

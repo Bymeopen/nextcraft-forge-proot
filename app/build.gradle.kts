@@ -31,6 +31,10 @@ android {
 
     // Release signing comes from the environment so no key material lives in the repo.
     val releaseKeystore = System.getenv("FORGE_KEYSTORE_FILE")
+    // A release task without a key yields an unsigned APK; say so instead of failing silently later.
+    if (releaseKeystore.isNullOrBlank() && gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }) {
+        logger.warn("WARNING: FORGE_KEYSTORE_FILE is not set; the release APK will be unsigned.")
+    }
     if (!releaseKeystore.isNullOrBlank()) {
         signingConfigs {
             create("release") {
@@ -111,6 +115,10 @@ android {
         File("/root/android-sdk/ndk"),
     )
     val ndkAvailable = ndkCandidates.any { it.isDirectory && !it.listFiles().isNullOrEmpty() }
+    // -PrequireNdk makes a missing NDK a build error rather than a silent fallback to ProcessBuilder.
+    if (!ndkAvailable && project.hasProperty("requireNdk")) {
+        throw GradleException("NDK not found (set ANDROID_NDK_HOME); libforgespawn.so would be skipped.")
+    }
     if (ndkAvailable) {
         // AGP prefers its own default NDK and fails when only another version is installed,
         // so pin to the version found under <sdk>/ndk when there is exactly one.
