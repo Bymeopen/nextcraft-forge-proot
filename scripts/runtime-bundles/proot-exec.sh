@@ -46,6 +46,12 @@ export PROOT_TMP_DIR="${NEXTCRAFT_PROOT_TMP:-$ROOTFS/tmp}"
 if [ -n "${NEXTCRAFT_PROOT_LOADER:-}" ]; then
     export PROOT_LOADER="$NEXTCRAFT_PROOT_LOADER"
 fi
+# proot's seccomp-BPF acceleration stacks on Android's per-app seccomp filter; on some devices the guest shell then dies
+# with SIGSYS (exit 159, "signal 31") before running anything. Plain ptrace tracing is slower but safe, so it is the
+# default; set NEXTCRAFT_PROOT_SECCOMP=1 (or PROOT_NO_SECCOMP to anything) to opt back in.
+if [ -z "${PROOT_NO_SECCOMP:-}" ] && [ -z "${NEXTCRAFT_PROOT_SECCOMP:-}" ]; then
+    export PROOT_NO_SECCOMP=1
+fi
 HOST_RESP="$HOST_BRIDGE-responses"
 SHM_DIR="$ROOTFS/tmp/.nextcraft-shm"
 
