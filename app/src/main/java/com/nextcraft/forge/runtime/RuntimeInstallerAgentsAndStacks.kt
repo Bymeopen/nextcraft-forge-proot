@@ -221,6 +221,10 @@ fun RuntimeInstaller.clearGitHubAccess() {
  */
 fun RuntimeInstaller.hasClaudeLoginCredential(): Boolean {
     val file = File(rootfs, "root/.claude/.credentials.json")
+    // PRoot (no root): the guest runs as the app UID, so the file is ours and can be read directly. Without this the
+    // `su` call below fails on such phones and the app reports "signed out" although the login is there.
+    val direct = runCatching { if (file.isFile && file.canRead()) file.readText().contains("\"refreshToken\"") else null }.getOrNull()
+    if (direct != null) return direct
     val quoted = shellSingleQuote(file.absolutePath)
     return runCatching {
         val process = ProcessBuilder("su", "-c", "grep -q '\"refreshToken\"' $quoted").start()
