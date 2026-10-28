@@ -30,7 +30,7 @@ mkdir -p "$OUT_DIR" "$work/out"
 
 echo "Building proot $PROOT_TAG against musl in $ALPINE_IMAGE"
 docker run --rm -e PROOT_TAG="$PROOT_TAG" -e PROOT_COMMIT="$PROOT_COMMIT" -v "$work/out:/out" "$ALPINE_IMAGE" sh -euc '
-  apk add --no-cache build-base git linux-headers pkgconf talloc-dev talloc-static >/dev/null
+  apk add --no-cache build-base git linux-headers bsd-compat-headers pkgconf talloc-dev talloc-static >/dev/null
   git clone -q --depth 1 --branch "$PROOT_TAG" https://github.com/proot-me/proot /build/proot
   actual="$(git -C /build/proot rev-parse HEAD)"
   [ "$actual" = "$PROOT_COMMIT" ] || { echo "proot $PROOT_TAG resolved to $actual, expected $PROOT_COMMIT" >&2; exit 1; }
