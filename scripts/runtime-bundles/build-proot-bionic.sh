@@ -87,8 +87,15 @@ Checking whether the realpath function allows a NULL argument: OK
 EOF
 (
   cd "$talloc_src"
-  CFLAGS="-O2 -fPIC" ./configure --prefix="$work/talloc-prefix" --cross-compile --cross-answers="$work/cross-answers.txt" \
-    --disable-python --disable-rpath >/dev/null
+  # waf appends every check it has no answer for to the answers file and stops; print the file then, so the missing
+  # questions are visible in the log instead of just "answers file is incomplete".
+  if ! CFLAGS="-O2 -fPIC" ./configure --prefix="$work/talloc-prefix" --cross-compile --cross-answers="$work/cross-answers.txt" \
+      --disable-python --disable-rpath >"$work/talloc-configure.log" 2>&1; then
+    tail -n 15 "$work/talloc-configure.log" >&2
+    echo "--- answers file after configure (unanswered checks were appended):" >&2
+    cat "$work/cross-answers.txt" >&2
+    exit 1
+  fi
   # The shared library may fail to link under the NDK; only its object file is needed for the static archive.
   make -j"$(nproc)" >/dev/null 2>&1 || true
   ls bin/default/talloc.c.*.o >/dev/null
