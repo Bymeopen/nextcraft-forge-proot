@@ -2,6 +2,7 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.core.net.toUri
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.IntrinsicSize
 import android.content.Intent
@@ -530,7 +531,7 @@ internal fun AntigravityAccountCard(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             shape = RoundedCornerShape(100),
-                            onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } },
+                            onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) } },
                             modifier = Modifier.weight(1f).heightIn(min = 44.dp),
                         ) { Text(stringResource(R.string.agent_open_google_sign_in)) }
                         OutlinedButton(

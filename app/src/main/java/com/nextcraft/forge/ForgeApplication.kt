@@ -1,5 +1,6 @@
 package com.nextcraft.forge
 
+import androidx.core.content.edit
 import android.app.Application
 import android.content.Context
 import android.os.Build
@@ -73,7 +74,7 @@ object CrashReporter {
 
     /** Remembers that this report was shown, so the prompt appears once per crash. */
     fun markSeen(context: Context) {
-        prefs(context).edit().putLong("seen_modified", reportFile(context).lastModified()).apply()
+        prefs(context).edit {putLong("seen_modified", reportFile(context).lastModified())}
     }
 
     /** Share sheet for the report. Nothing leaves the phone unless the person picks an app and sends it. */

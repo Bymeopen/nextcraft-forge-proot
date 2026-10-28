@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import androidx.core.content.edit
 import android.content.Context
 import com.nextcraft.forge.model.Project
 import java.io.File
@@ -293,7 +294,7 @@ class BuildMatrixController(
             .put("custom", JSONArray(stored.custom.map { JSONObject().put("id", it.id).put("name", it.name).put("command", it.command) }))
             .put("disabled", JSONArray(stored.disabled.toList()))
             .put("optIn", JSONArray(stored.optIn.toList()))
-        prefs.edit().putString(prefKey(projectId), json.toString()).apply()
+        prefs.edit {putString(prefKey(projectId), json.toString())}
     }
 
     private fun appendLog(current: String, text: String): String = (current + text).takeLast(MAX_LOG_CHARS)

@@ -1,5 +1,6 @@
 package com.nextcraft.forge
 
+import androidx.core.graphics.toColorInt
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.draw.blur
 import androidx.compose.runtime.mutableIntStateOf
@@ -146,7 +147,7 @@ class MainActivity : ComponentActivity() {
         window.decorView.setBackgroundColor(tokens.windowBackgroundArgb)
         window.statusBarColor = tokens.topBarContainerColor.toArgb()
         window.navigationBarColor = if (tokens.isGlass) {
-            android.graphics.Color.parseColor("#0B1324")
+            "#0B1324".toColorInt()
         } else {
             tokens.bottomBarContainerColor.toArgb()
         }

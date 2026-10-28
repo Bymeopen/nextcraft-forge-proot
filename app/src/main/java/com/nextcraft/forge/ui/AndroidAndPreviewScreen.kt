@@ -2,6 +2,7 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.core.net.toUri
 import android.annotation.SuppressLint
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -735,7 +736,7 @@ fun WebPreviewScreen(
                 "http://$trimmed"
             else -> trimmed
         }
-        val uriScheme = android.net.Uri.parse(normalized).scheme?.lowercase()
+        val uriScheme = normalized.toUri().scheme?.lowercase()
         if (normalized.isNotEmpty() && (uriScheme == "http" || uriScheme == "https")) {
             urlInput = normalized
             viewModel.updatePreviewUrl(normalized)

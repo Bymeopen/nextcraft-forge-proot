@@ -2,6 +2,7 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.core.content.edit
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material.icons.filled.MoreVert
@@ -112,7 +113,7 @@ fun TerminalScreen(
     val prefs = remember { context.getSharedPreferences("forge_terminal", android.content.Context.MODE_PRIVATE) }
     // Starts hidden; the stored flag is read off the main thread below (SharedPreferences blocks on first access).
     var hintSeen by remember { mutableStateOf(true) }
-    val dismissHint = { if (!hintSeen) { hintSeen = true; prefs.edit().putBoolean(HINT_SEEN_KEY, true).apply() } }
+    val dismissHint = { if (!hintSeen) { hintSeen = true; prefs.edit {putBoolean(HINT_SEEN_KEY, true)} } }
     val viewClient = remember {
         ForgeTerminalViewClient(
             modifiers = modifiers,
@@ -127,7 +128,7 @@ fun TerminalScreen(
                 }
             },
             onEmulatorReady = { viewModel.flushTerminalInput(chatId) },
-        ).also { client -> client.onTextSizeChanged = { px -> prefs.edit().putInt(TEXT_SIZE_KEY, px).apply() } }
+        ).also { client -> client.onTextSizeChanged = { px -> prefs.edit {putInt(TEXT_SIZE_KEY, px)} } }
     }
     LaunchedEffect(prefs) {
         val defaultPx = viewClient.textSizePx

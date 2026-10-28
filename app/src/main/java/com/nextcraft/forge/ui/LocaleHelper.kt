@@ -1,5 +1,6 @@
 package com.nextcraft.forge.ui
 
+import androidx.core.content.edit
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.res.AssetManager
@@ -81,9 +82,9 @@ object AppStrings {
     fun saveLanguageCode(context: Context, code: String) {
         val normalized = code.trim().ifEmpty { "system" }
         context.getSharedPreferences(SHARED_PREFS_FILE, Context.MODE_PRIVATE)
-            .edit()
-            .putString(PREF_LANG_KEY, normalized)
-            .commit()
+            .edit(commit = true) {
+                putString(PREF_LANG_KEY, normalized)
+            }
     }
 
     fun context(context: Context): Context =

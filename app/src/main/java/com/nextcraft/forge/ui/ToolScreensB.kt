@@ -2,6 +2,7 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.core.net.toUri
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -356,7 +357,7 @@ fun CiCdScreen(viewModel: MainViewModel) {
                                 Text(stringResource(R.string.repo_pr_merge))
                             }
                         }
-                        ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pr.url))) } }) {
+                        ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, pr.url.toUri())) } }) {
                             Text(stringResource(R.string.tool_open))
                         }
                     }
@@ -406,7 +407,7 @@ fun CiCdScreen(viewModel: MainViewModel) {
                                 color = if (run.conclusion == "success") scheme.primary else if (run.conclusion == null) scheme.onSurfaceVariant else scheme.error,
                                 modifier = Modifier.padding(horizontal = 8.dp),
                             )
-                            ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(run.url))) } }) { Text(stringResource(R.string.tool_open)) }
+                            ForgeTextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, run.url.toUri())) } }) { Text(stringResource(R.string.tool_open)) }
                         }
                         if (isFailed) {
                             OutlinedButton(

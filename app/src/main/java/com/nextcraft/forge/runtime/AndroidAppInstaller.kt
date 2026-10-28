@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import androidx.core.content.edit
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -249,9 +250,9 @@ object AndroidAppInstaller {
 
     internal fun rememberInstalled(context: Context, packageName: String, fingerprint: String) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .edit()
-            .putString(packageName, fingerprint)
-            .apply()
+            .edit {
+                putString(packageName, fingerprint)
+            }
     }
 
     internal fun launch(context: Context, packageName: String): Boolean = runCatching {

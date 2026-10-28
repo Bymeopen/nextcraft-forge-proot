@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import androidx.core.content.edit
 import android.content.Context
 import android.os.StatFs
 import android.util.Log
@@ -61,7 +62,7 @@ class RomStudioController(
             )
         }
         val s = mutable.value
-        prefs.edit().putString("rom_manifest", s.manifestUrl).putString("rom_branch", s.branch).putString("rom_dir", s.directory).putInt("rom_jobs", s.jobs).apply()
+        prefs.edit {putString("rom_manifest", s.manifestUrl).putString("rom_branch", s.branch).putString("rom_dir", s.directory).putInt("rom_jobs", s.jobs)}
     }
 
     fun refreshStorage() {

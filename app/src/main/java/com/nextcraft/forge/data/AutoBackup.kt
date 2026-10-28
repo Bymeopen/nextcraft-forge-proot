@@ -1,5 +1,6 @@
 package com.nextcraft.forge.data
 
+import androidx.core.content.edit
 import android.content.Context
 import android.net.Uri
 import androidx.work.Constraints
@@ -26,30 +27,30 @@ class AutoBackupSettings(context: Context) {
 
     var interval: Interval
         get() = runCatching { Interval.valueOf(prefs.getString("interval", Interval.OFF.name)!!) }.getOrDefault(Interval.OFF)
-        set(value) = prefs.edit().putString("interval", value.name).apply()
+        set(value) = prefs.edit {putString("interval", value.name)}
 
     /** The destination file (content:// URI with a persisted write permission), or null when none was chosen. */
     var target: Uri?
         get() = prefs.getString("target", null)?.let(Uri::parse)
-        set(value) = prefs.edit().putString("target", value?.toString()).apply()
+        set(value) = prefs.edit {putString("target", value?.toString())}
 
     /** Shown in the screen: the file name as the picker reported it. */
     var targetLabel: String
         get() = prefs.getString("target_label", "") ?: ""
-        set(value) = prefs.edit().putString("target_label", value).apply()
+        set(value) = prefs.edit {putString("target_label", value)}
 
     var includeApiKeys: Boolean
         get() = prefs.getBoolean("api_keys", false)
-        set(value) = prefs.edit().putBoolean("api_keys", value).apply()
+        set(value) = prefs.edit {putBoolean("api_keys", value)}
 
     var lastRunAt: Long
         get() = prefs.getLong("last_run_at", 0L)
-        set(value) = prefs.edit().putLong("last_run_at", value).apply()
+        set(value) = prefs.edit {putLong("last_run_at", value)}
 
     /** Empty after a successful run, otherwise the error text. */
     var lastError: String
         get() = prefs.getString("last_error", "") ?: ""
-        set(value) = prefs.edit().putString("last_error", value).apply()
+        set(value) = prefs.edit {putString("last_error", value)}
 
     var password: String
         get() = vault.get(PASSWORD_ID).orEmpty()

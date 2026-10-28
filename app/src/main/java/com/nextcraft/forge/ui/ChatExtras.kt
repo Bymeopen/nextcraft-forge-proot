@@ -6,6 +6,7 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -937,7 +938,7 @@ private fun ComposerAutocompletePopover(
     }
 
     // Resolved outside remember so the catalogue follows the active locale; passed in as a key.
-    val res = LocalContext.current.resources
+    val res = LocalResources.current
     val suggestions = remember(slashMatch, atMatch, workspaceFiles, readyAgents, connectors, res) {
         when {
             slashMatch != null -> {
