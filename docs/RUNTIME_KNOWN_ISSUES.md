@@ -116,10 +116,16 @@ android-shell logcat -d | grep -iE 'SIGSYS|seccomp|audit.*syscall'   # nomor sys
 Bila guest mati karena sinyal, `proot-exec.sh` juga menjalankan `libsigsys_probe.so` (sumber `scripts/runtime-bundles/sigsys-probe.c`,
 statis tanpa libc) yang mencetak syscall yang ditolak filter seccomp perangkat (`BLOCKED (SIGSYS, nr=N)`).
 
-Probe pertama yang berstatus `[159]` menunjukkan komponen yang memicu (Node biasa, `fs`, `worker_threads`, atau
-`npm` saja). Belum ada perbaikan permanen: nomor syscall dari logcat diperlukan sebelum bisa dibuat penanganannya.
+**Selesai (2026-10-28).** Penyebab exit 159 adalah biner PRoot, bukan rootfs: `libproot.so` statis (glibc) dari
+`build-proot-static.sh` mati dengan SIGSYS di perangkat non-root Android 16, juga build musl yang dicoba. Ganti ke
+`libproot.so` yang di-link ke bionic (`/system/bin/linker64`, SHA-256 `f6d4a32166dd41199e9da1f812aa5950ecd33de082bb65e9f114b79b8569a83f`)
+dan `libproot_loader.so` statis (SHA-256 `be8635349125a2ad645269ac7c095db5cea104fa1bf03719cc5a9677e010e629`), diambil
+dari APK buatan pengguna tanggal 22. Dengan keduanya, bundle Core 2026.10.1 apa adanya (Ubuntu 24.04.5, glibc 2.39
+stok) berjalan di perangkat: Terminal terbuka, Claude Code dan Antigravity CLI bisa dipasang (dikonfirmasi pengguna).
+Skrip sumber untuk build bionic itu belum ada di repo; sebelum mengganti biner, catat cara membangunnya.
+Eksperimen yang tidak dipakai (glibc yang ditambal, rootfs Alpine, proot musl, harness seccomp) dihapus dari
+repo dan masih ada di riwayat git sebelum commit pembersihan.
 
-**Belum diuji di perangkat.** Sandbox hanya bisa membangun binernya; `ptrace` tidak tersedia di bawah `qemu-user`.
 
 ## Belum terverifikasi
 
