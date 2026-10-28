@@ -31,15 +31,8 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Assemble debug APK
-        # Same identity as release-debug.yml. On the PRoot repo the APK must be com.nextcraft.forge.proot, signed with the
-        # PRoot debug key and above versionCode 2000; the bare default (com.nextcraft.forge, versionCode 100) is refused by
-        # Android ("package appears invalid") as a downgrade or key mismatch on a phone that already has the app.
-        run: |
-          args=""
-          if [[ "$GITHUB_REPOSITORY" == *-proot ]]; then
-            args="-PversionCode=$((2000 + GITHUB_RUN_NUMBER)) -PversionName=1.0.${GITHUB_RUN_NUMBER}-forge -Pnextcraft.sideBySideSuffix=proot"
-          fi
-          gradle --no-daemon :app:assembleDebug $args
+        # Same identity as release-debug.yml: one app, com.nextcraft.forge.proot, versionCode above 2000.
+        run: gradle --no-daemon :app:assembleDebug -PversionCode="$((2000 + GITHUB_RUN_NUMBER))" -PversionName="1.0.${GITHUB_RUN_NUMBER}-forge"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: app-debug

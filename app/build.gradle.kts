@@ -10,11 +10,11 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.nextcraft.forge"
+        applicationId = "com.nextcraft.forge.proot"
         minSdk = 31
         targetSdk = 35
         // The release workflow passes -PversionCode=... -PversionName=...; local builds keep the defaults.
-        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 100
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 2000
         versionName = (project.findProperty("versionName") as String?) ?: "1.0.0-forge"
 
         ndk {
@@ -25,7 +25,7 @@ android {
         manifestPlaceholders["appLabel"] = "@string/app_name"
         // Manifest asset of the latest GitHub release; build with -PappUpdateManifestUrl=... to point elsewhere.
         val updateManifestUrl = (project.findProperty("appUpdateManifestUrl") as String?)
-            ?: "https://github.com/bymeopen/nextcraft-forge/releases/latest/download/update-manifest.json"
+            ?: "https://github.com/bymeopen/nextcraft-forge-proot/releases/latest/download/update-manifest.json"
         buildConfigField("String", "APP_UPDATE_MANIFEST_URL", "\"$updateManifestUrl\"")
     }
 
@@ -46,11 +46,9 @@ android {
         // A fixed, public debug key: CI runners otherwise sign each debug APK with a fresh random key, so a newer
         // build cannot be installed over an older one and the app (rootfs, chats, root grant) must be uninstalled.
         create("sharedDebug") {
-            // The PRoot edition keeps the debug key of the earlier PRoot fork (1.0.0-proot.200), so a copy installed from
-            // that fork still updates in place: Android refuses an update signed with a different key.
-            storeFile = file(
-                if ((project.findProperty("nextcraft.sideBySideSuffix") as String?) == "proot") "debug-proot.keystore" else "debug.keystore",
-            )
+            // One app only (com.nextcraft.forge.proot). Its debug key is the one of the earlier PRoot fork (1.0.0-proot.200), so
+            // a copy installed from that fork still updates in place: Android refuses an update signed with a different key.
+            storeFile = file("debug-proot.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
@@ -59,17 +57,12 @@ android {
 
     buildTypes {
         debug {
-            // Same applicationId as release (com.nextcraft.forge): one app, one data dir and rootfs. Debug is signed with
+            // Same applicationId as release (com.nextcraft.forge.proot): one app, one data dir and rootfs. Debug is signed with
             // the shared public key below, release with the FORGE_KEYSTORE_* key, so a build of one kind cannot be
             // installed over the other without uninstalling (the updater checks the certificate and says so).
             signingConfig = signingConfigs.getByName("sharedDebug")
             isMinifyEnabled = false
             buildConfigField("String", "APP_VARIANT", "\"debug\"")
-            // Side-by-side test build (gradle.properties: nextcraft.sideBySideSuffix=x): its own package, data dir and
-            // rootfs (com.nextcraft.forge.x, "NextCraft Dev X"), so it installs from scratch next to the main app.
-            (project.findProperty("nextcraft.sideBySideSuffix") as String?)?.takeIf { it.isNotBlank() }?.let {
-                applicationIdSuffix = ".$it"
-            }
         }
         release {
             isMinifyEnabled = true
@@ -80,10 +73,9 @@ android {
         }
     }
 
-    (project.findProperty("nextcraft.sideBySideSuffix") as String?)?.takeIf { it.isNotBlank() }?.let { suffix ->
-        // The PRoot edition (com.nextcraft.forge.proot) has its own name; any other suffix is a throw-away test build.
-        sourceSets.getByName("debug").res.srcDir(if (suffix == "proot") "src/proot/res" else "src/sideBySide/res")
-    }
+    // App name overlay ("NextCraft Forge PRoot") for every variant.
+    sourceSets.getByName("debug").res.srcDir("src/proot/res")
+    sourceSets.getByName("release").res.srcDir("src/proot/res")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
