@@ -1397,6 +1397,7 @@
     <string name="auto_backup_target">Destination: %1$s</string>
     <string name="auto_backup_no_target">No destination chosen yet</string>
     <string name="auto_backup_choose_target">Choose destination file (Drive, folder…)</string>
+    <string name="auto_backup_choose_folder">Choose destination folder (Drive, keeps last 5)</string>
     <string name="auto_backup_off">Off</string>
     <string name="auto_backup_daily">Daily</string>
     <string name="auto_backup_weekly">Weekly</string>

@@ -3,6 +3,7 @@ package com.nextcraft.forge.data
 import androidx.core.content.edit
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -34,6 +35,14 @@ class AutoBackupSettings(context: Context) {
         get() = prefs.getString("target", null)?.let(Uri::parse)
         set(value) = prefs.edit {putString("target", value?.toString())}
 
+    /**
+     * Optional destination folder (tree URI, e.g. a Drive folder). When set it wins over [target]: each run adds a
+     * time-stamped file and only the newest [KEEP_VERSIONS] are kept.
+     */
+    var folder: Uri?
+        get() = prefs.getString("folder", null)?.let(Uri::parse)
+        set(value) = prefs.edit {putString("folder", value?.toString())}
+
     /** Shown in the screen: the file name as the picker reported it. */
     var targetLabel: String
         get() = prefs.getString("target_label", "") ?: ""
@@ -56,15 +65,18 @@ class AutoBackupSettings(context: Context) {
         get() = vault.get(PASSWORD_ID).orEmpty()
         set(value) = if (value.isEmpty()) vault.remove(PASSWORD_ID) else vault.put(PASSWORD_ID, value)
 
-    private companion object {
-        const val PASSWORD_ID = "auto_backup_password"
+    companion object {
+        private const val PASSWORD_ID = "auto_backup_password"
+        const val KEEP_VERSIONS = 5
     }
 }
 
 class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val settings = AutoBackupSettings(applicationContext)
-        val target = settings.target ?: return Result.success()
+        val folder = settings.folder
+        val target = settings.target
+        if (folder == null && target == null) return Result.success()
         val password = settings.password
         return runCatching {
             // Build the archive in a private temp file first so a failure mid-way never truncates the previous backup.
@@ -75,8 +87,12 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
                     BackupManager.Options(apiKeys = settings.includeApiKeys && password.isNotEmpty()),
                     password.toCharArray().takeIf { it.isNotEmpty() },
                 )
-                val out = applicationContext.contentResolver.openOutputStream(target, "wt") ?: error("The backup file is no longer reachable")
-                out.use { sink -> temp.inputStream().use { it.copyTo(sink) } }
+                if (folder != null) {
+                    writeVersioned(folder, temp)
+                } else {
+                    val out = applicationContext.contentResolver.openOutputStream(target!!, "wt") ?: error("The backup file is no longer reachable")
+                    out.use { sink -> temp.inputStream().use { it.copyTo(sink) } }
+                }
             } finally {
                 temp.delete()
             }
@@ -95,7 +111,42 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         )
     }
 
+    /** Adds a time-stamped backup to [tree], then deletes all but the newest [AutoBackupSettings.KEEP_VERSIONS]. */
+    private fun writeVersioned(tree: Uri, source: File) {
+        val resolver = applicationContext.contentResolver
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+        val created = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", "$VERSION_PREFIX$stamp$VERSION_SUFFIX")
+            ?: error("The backup folder is no longer reachable")
+        try {
+            val out = resolver.openOutputStream(created, "wt") ?: error("The backup folder is no longer writable")
+            out.use { sink -> source.inputStream().use { it.copyTo(sink) } }
+        } catch (e: Exception) {
+            runCatching { DocumentsContract.deleteDocument(resolver, created) }
+            throw e
+        }
+        // Prune best effort: a failed delete must not fail a backup that was written.
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val old = mutableListOf<Pair<String, Uri>>()
+        runCatching {
+            resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val name = c.getString(1).orEmpty()
+                    if (name.startsWith(VERSION_PREFIX) && name.endsWith(VERSION_SUFFIX)) {
+                        old += name to DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0))
+                    }
+                }
+            }
+        }
+        // Names embed a sortable timestamp, so name order is age order.
+        old.sortedByDescending { it.first }.drop(AutoBackupSettings.KEEP_VERSIONS).forEach { (_, uri) ->
+            runCatching { DocumentsContract.deleteDocument(resolver, uri) }
+        }
+    }
+
     companion object {
+        private const val VERSION_PREFIX = "nextcraft-auto-backup-"
+        private const val VERSION_SUFFIX = ".ncbak"
         private const val WORK_NAME = "auto-backup"
         private const val NOW_NAME = "auto-backup-now"
 
@@ -109,7 +160,7 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
         fun sync(context: Context) {
             val settings = AutoBackupSettings(context)
             val manager = WorkManager.getInstance(context)
-            if (settings.interval == AutoBackupSettings.Interval.OFF || settings.target == null) {
+            if (settings.interval == AutoBackupSettings.Interval.OFF || (settings.target == null && settings.folder == null)) {
                 manager.cancelUniqueWork(WORK_NAME)
                 return
             }
