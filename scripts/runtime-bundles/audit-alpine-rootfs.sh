@@ -29,6 +29,11 @@ mount --bind /dev "$rootfs/dev"
 mount -t proc proc "$rootfs/proc"
 mkdir -p "$rootfs/trace"
 
+# Is the shim in the guest, and does the preload take effect? (printed for the log; the audit below is what fails the job)
+echo "== preload check"
+ls -l "$rootfs/opt/nextcraft/lib/" || true
+chroot "$rootfs" /usr/bin/env -i LD_PRELOAD=/opt/nextcraft/lib/libnextcraft-compat.so /bin/bash -c 'grep -c nextcraft-compat /proc/self/maps; type -a bash | head -1' || true
+
 n=0
 run() { # run <label> <command string run by bash inside the guest>
   n=$((n + 1))
