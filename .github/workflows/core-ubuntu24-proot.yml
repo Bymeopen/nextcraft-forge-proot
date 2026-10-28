@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: sudo apt-get update && sudo apt-get install -y zstd strace python3-pip && sudo pip install --break-system-packages capstone
+      - run: sudo apt-get update && sudo apt-get install -y zstd strace python3-pip auditd && sudo pip install --break-system-packages capstone && sudo auditctl -e 1 || true
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with: { name: nextcraft-core-ubuntu24-proot, path: new-core }
       - name: Plain musl proot (no ptrace tricks, runs as in the app)

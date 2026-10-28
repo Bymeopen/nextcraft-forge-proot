@@ -50,7 +50,10 @@ if [[ $fail -ne 0 && "$EXPECT" == ok ]]; then
   echo "== diagnostics: same run, filter refuses with ENOSYS instead of SIGSYS (-38 = 0xffffffffffffffda)"
   NEXTCRAFT_FILTER_ERRNO=1 "$work/run" "$work/allow.txt" "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 14 | cut -c1-230; echo "rc=${PIPESTATUS[0]}"
   echo "== diagnostics: /bin/true WITH the filter, no preload shim"
-  "$work/run" "$work/allow.txt" "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 30; echo "rc=${PIPESTATUS[0]}"
+  "$work/run" "$work/allow.txt" "${base[@]}" /usr/bin/env -i "${plain_env[@]}" /bin/true 2>&1 | tail -n 6 | cut -c1-200; echo "rc=${PIPESTATUS[0]}"
+  # The kernel's audit record for the SIGSYS names the syscall number (arm64: 99 set_robust_list, 278 getrandom, ...).
+  echo "== diagnostics: kernel audit records of the seccomp kills (syscall=N)"
+  { sudo grep -a 'type=SECCOMP' /var/log/audit/audit.log 2>/dev/null; sudo dmesg 2>/dev/null | grep -a 'type=1326'; } | tail -n 8 | grep -ao 'comm="[^"]*".*syscall=[0-9]*' || echo "(no audit records)"
 fi
 
 if [[ $fail -eq 0 ]]; then echo "RESULT: as expected ($EXPECT)"; else echo "RESULT: NOT as expected"; fi
