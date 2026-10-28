@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Findings that are intentional or deferred; each has a reason. Everything else stays visible. -->
+<lint>
+    <!-- targetSdk is raised deliberately, after on-device testing. -->
+    <issue id="OldTargetApi" severity="ignore" />
+    <!-- Newer versions are not in the offline Maven cache; bumps are done online. -->
+    <issue id="GradleDependency" severity="ignore" />
+    <!-- libtermux.so comes from the pinned Termux terminal-emulator artifact; not alignable here. -->
+    <issue id="Aligned16KB" severity="ignore" />
+    <!-- Sideloaded app, not published on Play: battery exemption and ARM64-only are product decisions (docs/PERMISSIONS.md). -->
+    <issue id="BatteryLife" severity="ignore" />
+    <issue id="ChromeOsAbiSupport" severity="ignore" />
+    <!-- Distributed as a universal APK, not an app bundle. -->
+    <issue id="AppBundleLocaleChanges" severity="ignore" />
+    <!-- android:allowBackup is false, so there is nothing to extract. -->
+    <issue id="DataExtractionRules" severity="ignore" />
+</lint>

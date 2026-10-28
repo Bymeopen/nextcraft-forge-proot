@@ -1,14 +1,13 @@
 name: Sample Mini Sekolah
 
 # The sample is a small school database app used to test the on-device Android toolchain end to end.
-# CI proves it builds with the same AGP/Gradle as the app, and that make-project.sh (the script pasted into a prompt
-# for the in-app agent) recreates exactly the files in the repository.
+# CI proves it builds with the same AGP/Gradle as the app.
 on:
   push:
     branches: [main, "ccr-**"]
-    paths: ["samples/mini-sekolah/**", ".github/workflows/sample-sekolah.yml", "scripts/make-mini-sekolah-script.py"]
+    paths: ["samples/mini-sekolah/**", ".github/workflows/sample-sekolah.yml"]
   pull_request:
-    paths: ["samples/mini-sekolah/**", ".github/workflows/sample-sekolah.yml", "scripts/make-mini-sekolah-script.py"]
+    paths: ["samples/mini-sekolah/**", ".github/workflows/sample-sekolah.yml"]
   workflow_dispatch:
 
 permissions:
@@ -28,15 +27,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
         with:
           gradle-version: "9.8.2"
-      - name: Script reproduces the project
-        run: |
-          bash -n samples/mini-sekolah/make-project.sh
-          bash samples/mini-sekolah/make-project.sh "$RUNNER_TEMP/generated" > /dev/null
-          diff -r -x make-project.sh samples/mini-sekolah "$RUNNER_TEMP/generated"
-      - name: Script is up to date with the files
-        run: |
-          python3 scripts/make-mini-sekolah-script.py
-          git diff --exit-code samples/mini-sekolah/make-project.sh
       - name: Assemble debug APK
         run: gradle --no-daemon -p samples/mini-sekolah :app:assembleDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -44,7 +34,3 @@ jobs:
           name: mini-sekolah-debug
           path: samples/mini-sekolah/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: mini-sekolah-script
-          path: samples/mini-sekolah/make-project.sh

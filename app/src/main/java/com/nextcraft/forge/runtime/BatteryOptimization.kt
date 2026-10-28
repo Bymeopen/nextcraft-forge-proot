@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import androidx.core.net.toUri
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -20,7 +21,7 @@ object BatteryOptimization {
      * resolved the general battery-optimization list is opened instead.
      */
     fun requestIntent(context: Context): Intent {
-        val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+        val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri())
         return if (request.resolveActivity(context.packageManager) != null) {
             request
         } else {

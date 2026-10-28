@@ -1,5 +1,6 @@
 package com.nextcraft.forge.data
 
+import androidx.core.content.edit
 import android.content.Context
 import android.content.SharedPreferences
 import android.system.Os
@@ -40,7 +41,7 @@ class AppPreferences(private val context: Context) {
             store.getBoolean(key, default)
 
         override fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
-            store.edit().putBoolean(key, value).apply()
+            store.edit {putBoolean(key, value)}
         }
     }
 
@@ -49,7 +50,7 @@ class AppPreferences(private val context: Context) {
             store.getString(key, default) ?: default
 
         override fun setValue(thisRef: Any?, property: KProperty<*>, value: String) {
-            store.edit().putString(key, value).apply()
+            store.edit {putString(key, value)}
         }
     }
 
@@ -58,7 +59,7 @@ class AppPreferences(private val context: Context) {
             store.getInt(key, default)
 
         override fun setValue(thisRef: Any?, property: KProperty<*>, value: Int) {
-            store.edit().putInt(key, value).apply()
+            store.edit {putInt(key, value)}
         }
     }
 
@@ -67,7 +68,7 @@ class AppPreferences(private val context: Context) {
             store.getLong(key, default)
 
         override fun setValue(thisRef: Any?, property: KProperty<*>, value: Long) {
-            store.edit().putLong(key, value).apply()
+            store.edit {putLong(key, value)}
         }
     }
 
@@ -79,7 +80,7 @@ class AppPreferences(private val context: Context) {
     var initialLanguageSelected: Boolean
         get() = store.getBoolean("initial_language_selected", onboardingComplete || runtimeSetupComplete)
         set(value) {
-            store.edit().putBoolean("initial_language_selected", value).apply()
+            store.edit {putBoolean("initial_language_selected", value)}
         }
 
     var runtimeEngine: String by strPref("runtime_engine", "auto")
@@ -96,7 +97,7 @@ class AppPreferences(private val context: Context) {
         get() = store.getString("agent_antigravity_model", DEFAULT_AGY_MODEL)
             ?.takeIf { it.isNotBlank() } ?: DEFAULT_AGY_MODEL
         set(value) {
-            store.edit().putString("agent_antigravity_model", value).apply()
+            store.edit {putString("agent_antigravity_model", value)}
         }
 
     var claudeAccountEmail: String by strPref("claude_account_email", "")
@@ -118,9 +119,9 @@ class AppPreferences(private val context: Context) {
     var pendingProjectWipe: String?
         get() = store.getString("pending_project_wipe", null)?.takeIf { it.isNotBlank() }
         set(value) {
-            store.edit().apply {
+            store.edit {
                 if (value == null) remove("pending_project_wipe") else putString("pending_project_wipe", value)
-            }.apply()
+            }
         }
 
     var autoBranchChats: Boolean by boolPref("auto_branch_chats", false)
@@ -129,7 +130,7 @@ class AppPreferences(private val context: Context) {
     var interactiveHighRiskApprovals: Boolean
         get() = store.getBoolean("interactive_high_risk_approvals", !autoApproveAllTools)
         set(value) {
-            store.edit().putBoolean("interactive_high_risk_approvals", value).apply()
+            store.edit {putBoolean("interactive_high_risk_approvals", value)}
         }
 
     var autoVerifyBuild: Boolean by boolPref("auto_verify_build", false)
@@ -162,7 +163,7 @@ class AppPreferences(private val context: Context) {
             for (item in value.sorted()) {
                 array.put(item)
             }
-            store.edit().putString("selected_dev_stacks", array.toString()).apply()
+            store.edit {putString("selected_dev_stacks", array.toString())}
         }
 
     /** Routing mode, agent list, weights and rules of one chat, or null when that chat never saved its own. */
@@ -179,7 +180,7 @@ class AppPreferences(private val context: Context) {
         AgentKind.fromStoredOrNull(store.getString("chat_agent${chatScope(projectId, chatId)}", null))
 
     fun saveChatAgent(projectId: String, chatId: String, agent: AgentKind) {
-        store.edit().putString("chat_agent${chatScope(projectId, chatId)}", agent.stableId).apply()
+        store.edit {putString("chat_agent${chatScope(projectId, chatId)}", agent.stableId)}
     }
 
     private fun chatScope(projectId: String, chatId: String) = "_chat_${projectId}_$chatId"
@@ -243,19 +244,19 @@ class AppPreferences(private val context: Context) {
         }
         val agentCsv = cfg.agents.joinToString(",") { it.stableId }
         val weightCsv = cfg.weights.entries.joinToString(",") { "${it.key.stableId}:${it.value}" }
-        store.edit()
-            .putString("routing_mode$scope", cfg.mode.stableId)
-            .putString("routing_agents$scope", agentCsv)
-            .putString("routing_rules$scope", rulesArray.toString())
-            .putString("routing_weights$scope", weightCsv)
-            .apply()
+        store.edit {
+                putString("routing_mode$scope", cfg.mode.stableId)
+                .putString("routing_agents$scope", agentCsv)
+                .putString("routing_rules$scope", rulesArray.toString())
+                .putString("routing_weights$scope", weightCsv)
+            }
     }
 
     fun saveAgentConversation(agent: AgentKind, projectId: String, chatId: String, conversationId: String?) {
         val prefKey = buildConversationPrefKey(agent, projectId, chatId)
-        store.edit().apply {
+        store.edit(commit = true) {
             if (conversationId.isNullOrBlank()) remove(prefKey) else putString(prefKey, conversationId)
-        }.commit()
+        }
     }
 
     fun loadAgentConversation(agent: AgentKind, projectId: String, chatId: String): String? =
@@ -267,9 +268,9 @@ class AppPreferences(private val context: Context) {
         val prefixV2 = "agent_conversation_v2_${idToken}_"
         val matchingKeys = store.all.keys.filter { it.startsWith(prefixV1) || it.startsWith(prefixV2) }
         if (matchingKeys.isEmpty()) return
-        store.edit().apply {
+        store.edit {
             for (k in matchingKeys) remove(k)
-        }.apply()
+        }
     }
 
     private fun buildConversationPrefKey(agent: AgentKind, projectId: String, chatId: String): String {
@@ -278,18 +279,18 @@ class AppPreferences(private val context: Context) {
     }
 
     fun saveProvider(profile: ProviderProfile, agent: AgentKind? = null) {
-        val tx = store.edit()
-        writeProfileFields(tx, "provider_", profile)
-        if (agent != null) {
-            writeProfileFields(tx, agentKeyPrefix(agent), profile)
+        store.edit {
+            writeProfileFields(this, "provider_", profile)
+            if (agent != null) {
+                writeProfileFields(this, agentKeyPrefix(agent), profile)
+            }
         }
-        tx.apply()
     }
 
     fun saveAgentProfile(profile: ProviderProfile, agent: AgentKind) {
-        val tx = store.edit()
-        writeProfileFields(tx, agentKeyPrefix(agent), profile)
-        tx.apply()
+        store.edit {
+            writeProfileFields(this, agentKeyPrefix(agent), profile)
+        }
     }
 
     private fun writeProfileFields(
@@ -338,7 +339,7 @@ class AppPreferences(private val context: Context) {
 
         val finalModel = if (resolvedKind == ProviderKind.DEEPSEEK && candidateModel in LEGACY_DEEPSEEK_MODELS) {
             resolvedKind.defaultModel.also { migrated ->
-                store.edit().putString("${activePrefix}model", migrated).apply()
+                store.edit {putString("${activePrefix}model", migrated)}
             }
         } else {
             candidateModel
@@ -393,7 +394,7 @@ class AppPreferences(private val context: Context) {
             }
             jsonList.put(node)
         }
-        store.edit().putString("projects_json", jsonList.toString()).apply()
+        store.edit {putString("projects_json", jsonList.toString())}
     }
 
     fun loadProjects(): List<Project> {
@@ -493,7 +494,7 @@ class AppPreferences(private val context: Context) {
 
     private fun preserveCorruptProjectsJson(rawPayload: String) {
         Log.w(LOG_TAG, "projects_json had unreadable entries; keeping a backup")
-        store.edit().putString("projects_json_corrupt_backup", rawPayload).apply()
+        store.edit {putString("projects_json_corrupt_backup", rawPayload)}
     }
 
     private val chatStorageRoot: File = File(context.filesDir, "chats").apply { mkdirs() }

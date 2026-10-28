@@ -1,5 +1,6 @@
 package com.nextcraft.forge.runtime
 
+import androidx.core.content.edit
 import android.content.Context
 import com.nextcraft.forge.data.ApiKeyVault
 import com.nextcraft.forge.network.LocalNetwork
@@ -294,7 +295,7 @@ class ConnectorStore(context: Context) {
             )
         }
         save(current)
-        prefs.edit().putBoolean(KEY_DEFAULTS_SEEDED, true).apply()
+        prefs.edit {putBoolean(KEY_DEFAULTS_SEEDED, true)}
     }
 
     private fun save(list: List<McpConnector>) {
@@ -305,7 +306,7 @@ class ConnectorStore(context: Context) {
                     .put("target", it.target).put("secretName", it.secretName).put("enabled", it.enabled),
             )
         }
-        prefs.edit().putString(KEY_LIST, array.toString()).apply()
+        prefs.edit {putString(KEY_LIST, array.toString())}
     }
 
     /** Adds or replaces a connector. [secret]: null keeps the saved one, blank clears it. */

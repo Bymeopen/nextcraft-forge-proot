@@ -1,5 +1,6 @@
 package com.nextcraft.forge.schedule
 
+import androidx.core.content.edit
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
@@ -176,7 +177,7 @@ class ScheduleStore(context: Context) {
                 .put("prompt", t.prompt).put("intervalMinutes", t.intervalMinutes).put("next", t.nextRunAtMillis)
                 .put("enabled", t.enabled).put("byAgent", t.byAgent).put("runCount", t.runCount).put("last", t.lastRunAtMillis))
         }
-        prefs.edit().putString(KEY, arr.toString()).apply()
+        prefs.edit {putString(KEY, arr.toString())}
         // The periodic check exists only while there is a task to check.
         ScheduleTickWorker.sync(appContext, tasks.any { it.enabled })
     }

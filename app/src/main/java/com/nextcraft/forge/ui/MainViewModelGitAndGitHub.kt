@@ -1,5 +1,6 @@
 package com.nextcraft.forge.ui
 
+import androidx.core.net.toUri
 import com.nextcraft.forge.runtime.*
 
 import android.app.Application
@@ -738,7 +739,7 @@ fun MainViewModel.createQuickProject() {
 /** Clones any http(s) git URL into a fresh workspace project (GitHub token is used only for github.com). */
 fun MainViewModel.cloneGitUrl(rawUrl: String) {
     val url = rawUrl.trim()
-    val uriScheme = android.net.Uri.parse(url).scheme?.lowercase()
+    val uriScheme = url.toUri().scheme?.lowercase()
     if (url.isEmpty() || (uriScheme != "http" && uriScheme != "https")) {
         githubAuth.report(UiText.res(R.string.msg_git_url_invalid))
         return

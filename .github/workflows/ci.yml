@@ -30,6 +30,9 @@ jobs:
           gradle-version: "9.8.2"
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
+      # Lint errors fail the build (the 4 existing ones are fixed); warnings are reported only.
+      - name: Android Lint
+        run: gradle --no-daemon :app:lintDebug
       - name: Assemble debug APK
         # Same identity as release-debug.yml: one app, com.nextcraft.forge.proot, versionCode above 2000.
         run: gradle --no-daemon :app:assembleDebug -PversionCode="$((2000 + GITHUB_RUN_NUMBER))" -PversionName="1.0.${GITHUB_RUN_NUMBER}-forge"
@@ -56,7 +59,7 @@ jobs:
         with:
           gradle-version: "9.8.2"
       - name: Assemble release APK (R8, unsigned)
-        run: gradle --no-daemon :app:assembleRelease
+        run: gradle --no-daemon :app:assembleRelease -PrequireNdk
       - name: Check R8 output
         run: |
           set -eu

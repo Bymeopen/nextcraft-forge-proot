@@ -2,6 +2,7 @@
 
 package com.nextcraft.forge.ui
 
+import androidx.core.net.toUri
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
@@ -118,7 +119,7 @@ fun GitHubSection(
                                     clipboard.setText(AnnotatedString(deviceFlow.userCode))
                                     runCatching {
                                         hostContext.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(deviceFlow.verificationUri)),
+                                            Intent(Intent.ACTION_VIEW, deviceFlow.verificationUri.toUri()),
                                         )
                                     }.onFailure { ErrorLog.swallowed("GitHubSection", it) }
                                 },
@@ -341,7 +342,7 @@ fun FigmaSection(
                 onClick = {
                     runCatching {
                         hostContext.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.figma.com/developers/api#access-tokens")),
+                            Intent(Intent.ACTION_VIEW, "https://www.figma.com/developers/api#access-tokens".toUri()),
                         )
                     }.onFailure { ErrorLog.swallowed("FigmaSection", it) }
                 },

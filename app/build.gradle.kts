@@ -12,10 +12,11 @@ android {
     defaultConfig {
         applicationId = "com.nextcraft.forge.proot"
         minSdk = 31
-        targetSdk = 35
+        targetSdk = 36
         // The release workflow passes -PversionCode=... -PversionName=...; local builds keep the defaults.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 2000
         versionName = (project.findProperty("versionName") as String?) ?: "1.0.0-forge"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -31,6 +32,10 @@ android {
 
     // Release signing comes from the environment so no key material lives in the repo.
     val releaseKeystore = System.getenv("FORGE_KEYSTORE_FILE")
+    // A release task without a key yields an unsigned APK; say so instead of failing silently later.
+    if (releaseKeystore.isNullOrBlank() && gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }) {
+        logger.warn("WARNING: FORGE_KEYSTORE_FILE is not set; the release APK will be unsigned.")
+    }
     if (!releaseKeystore.isNullOrBlank()) {
         signingConfigs {
             create("release") {
@@ -103,6 +108,10 @@ android {
         File("/root/android-sdk/ndk"),
     )
     val ndkAvailable = ndkCandidates.any { it.isDirectory && !it.listFiles().isNullOrEmpty() }
+    // -PrequireNdk makes a missing NDK a build error rather than a silent fallback to ProcessBuilder.
+    if (!ndkAvailable && project.hasProperty("requireNdk")) {
+        throw GradleException("NDK not found (set ANDROID_NDK_HOME); libforgespawn.so would be skipped.")
+    }
     if (ndkAvailable) {
         // AGP prefers its own default NDK and fails when only another version is installed,
         // so pin to the version found under <sdk>/ndk when there is exactly one.
@@ -186,6 +195,12 @@ dependencies {
         testImplementation("org.robolectric:robolectric:4.12.2")
         testImplementation("androidx.compose.ui:ui-test-junit4")
     }
+    // On-device tests (src/androidTest); they need a device or emulator to run.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.1")
+    // The runner asks for tracing 1.1.0 / jsr305 2.0.2, which are not in the offline Maven cache; these versions are.
+    androidTestImplementation("androidx.tracing:tracing:1.2.0")
+    androidTestImplementation("com.google.code.findbugs:jsr305:3.0.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

@@ -31,3 +31,4 @@
 - `visual-architecture-canvas`: `.agents/skills/visual-architecture-canvas/SKILL.md` — Mermaid system/DB/UI blueprint engine.
 - `self-healing-loop`: `.agents/skills/self-healing-loop/SKILL.md` — Git-checkpointed max-3-iteration surgical repair loop.
 - `deploy-and-preview`: `.agents/skills/deploy-and-preview/SKILL.md` — Live daemon preview, cross-compilation (`.apk`, `.exe`, Linux, iOS), and CI/CD.
+- **2026-10-28**: Aturan: file kode maks 1000 baris. Branch `refactor/split-large-files` (belum merge/push). Pecah via pemindahan blok top-level apa adanya; `private` -> `internal` hanya bila dipakai lintas file. 3 tes pre-existing gagal (LanguageCatalogueTest, MessageTextTest, PlatformPolishTest). `strings.xml` >1000 baris dibiarkan (resource).

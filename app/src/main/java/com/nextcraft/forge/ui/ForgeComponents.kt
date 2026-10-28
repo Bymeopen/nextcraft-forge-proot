@@ -496,15 +496,17 @@ fun Modifier.forgeFadingEdges(scroll: androidx.compose.foundation.ScrollState, b
 
 /** Compact live system resource bar (RAM free, App heap, Battery) with a 1-tap Clean Idle Daemons button. */
 @Composable
+@Suppress("LocalContextGetResourceValueCall") // the loop below is keyed on the configuration, so labels refresh on a language change
 fun LiveResourceMiniBar(
     onCleanIdleDaemons: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val tokens = LocalForgeThemeTokens.current
     val scheme = MaterialTheme.colorScheme
     val stats = remember { mutableStateOf("") }
-    androidx.compose.runtime.LaunchedEffect(Unit) {
+    androidx.compose.runtime.LaunchedEffect(configuration) {
         while (true) {
             // /proc reads, ActivityManager IPC and the sticky battery broadcast all block; keep them off the main thread.
             stats.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

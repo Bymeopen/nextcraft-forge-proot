@@ -1,5 +1,6 @@
 package com.nextcraft.forge.data
 
+import androidx.core.content.edit
 import android.content.Context
 import com.nextcraft.forge.BuildConfig
 import com.nextcraft.forge.model.ProviderKind
@@ -191,10 +192,11 @@ class BackupManager(private val context: Context) {
                     // would write the old map back over the restore. So the restored values are loaded through the
                     // live instance instead, which is also where the privileged flags are reset.
                     val values = PrefsXml.parse(stagedFile.readText())
-                    val editor = context.getSharedPreferences(fileName.removeSuffix(".xml"), Context.MODE_PRIVATE).edit().clear()
-                    PrefsXml.putAll(editor, values)
-                    if (fileName == "$PREFS_NAME.xml") PrefsXml.resetPrivilegedFlags(editor)
-                    editor.commit()
+                    context.getSharedPreferences(fileName.removeSuffix(".xml"), Context.MODE_PRIVATE).edit(commit = true) {
+                        clear()
+                        PrefsXml.putAll(this, values)
+                        if (fileName == "$PREFS_NAME.xml") PrefsXml.resetPrivilegedFlags(this)
+                    }
                 }
             }
             File(staging, SECRETS).takeIf { it.isFile }?.let { secrets ->
