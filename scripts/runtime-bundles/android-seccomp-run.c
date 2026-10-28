@@ -37,11 +37,9 @@
 
 int main(int argc, char **argv)
 {
-	if (argc >= 3 && strcmp(argv[1], "--root") == 0) {
-		if (chroot(argv[2]) < 0 || chdir("/") < 0) {
-			perror("chroot");
-			return 2;
-		}
+	const char *root = NULL;
+	if (argc >= 3 && strcmp(argv[1], "--root") == 0) { /* chroot happens after the allowlist is read, below */
+		root = argv[2];
 		argc -= 2;
 		argv += 2;
 	}
@@ -61,6 +59,11 @@ int main(int argc, char **argv)
 	fclose(f);
 	if (m == 0 || m > 250) { /* 8-bit BPF jump offsets */
 		fprintf(stderr, "allowlist has %d entries\n", m);
+		return 2;
+	}
+
+	if (root && (chroot(root) < 0 || chdir("/") < 0)) {
+		perror("chroot");
 		return 2;
 	}
 
