@@ -1,0 +1,72 @@
+name: Core Ubuntu 24 (PRoot)
+
+# Builds the Ubuntu 24.04 Core bundle for the PRoot engine from scratch: glibc rebuilt so it does not issue the syscalls
+# Android's seccomp filter refuses, then the rootfs, then a test that runs the guest inside an Android-shaped filter. The
+# stock Core bundle is the control: it must die there, the new one must live. Nothing is published.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Bundle version
+        default: "2026.10.4"
+  push:
+    branches: ["ccr-**"]
+    paths:
+      - ".github/workflows/core-ubuntu24-proot.yml"
+      - "scripts/runtime-bundles/build-glibc-android.sh"
+      - "scripts/runtime-bundles/glibc-android-syscalls.py"
+      - "scripts/runtime-bundles/build-core-ubuntu24-proot.sh"
+      - "scripts/runtime-bundles/test-core-android-filter.sh"
+      - "scripts/runtime-bundles/seccomp-compat.c"
+      - "scripts/runtime-bundles/android-seccomp-run.c"
+      - "scripts/runtime-bundles/gen-android-allowlist.py"
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ inputs.version || '2026.10.4' }}
+
+jobs:
+  libc:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build patched glibc
+        run: NEXTCRAFT_OUT_DIR="$PWD/out" scripts/runtime-bundles/build-glibc-android.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: glibc-android-debs, path: out/glibc-debs/*.deb, compression-level: 0 }
+
+  core:
+    needs: libc
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y zstd
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: glibc-android-debs, path: debs }
+      - name: Build Core (Ubuntu 24.04, patched glibc)
+        run: sudo -E NEXTCRAFT_GLIBC_DEBS="$PWD/debs" NEXTCRAFT_CORE_VERSION="$VERSION" NEXTCRAFT_OUT_DIR="$PWD/out" scripts/runtime-bundles/build-core-ubuntu24-proot.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: nextcraft-core-ubuntu24-proot, path: out/*.tar.zst, compression-level: 0 }
+
+  test:
+    needs: core
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y zstd
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: nextcraft-core-ubuntu24-proot, path: new-core }
+      - name: Plain musl proot (no ptrace tricks, runs as in the app)
+        run: NEXTCRAFT_PROOT_PATCH=0 NEXTCRAFT_OUT_DIR="$PWD/proot" scripts/runtime-bundles/build-proot-musl.sh
+      - name: Stock Core (control, must die under the filter)
+        run: |
+          curl -fL --retry 3 -o stock.tar.zst https://github.com/bymeopen/nextcraft-forge/releases/download/runtime-2026.10.2/nextcraft-core-arm64-2026.10.2.tar.zst
+          echo "c2dab14270aae62b21243109a5a6e75af7d0c6821fda6264b91f973e18f3ddfb  stock.tar.zst" | sha256sum -c -
+          scripts/runtime-bundles/test-core-android-filter.sh proot/libproot.so proot/libproot_loader.so stock.tar.zst die
+      - name: New Core (must live under the filter)
+        run: scripts/runtime-bundles/test-core-android-filter.sh proot/libproot.so proot/libproot_loader.so new-core/nextcraft-core-arm64-${VERSION}.tar.zst ok
