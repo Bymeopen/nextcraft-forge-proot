@@ -16,6 +16,14 @@ internal object GameProjectTemplateGenerator {
     /** ABIs whose libGDX natives are packed into the APK. */
     private val ANDROID_ABIS = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 
+    private val JAVA_KEYWORDS = setOf(
+        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default",
+        "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import",
+        "instanceof", "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "return",
+        "short", "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try",
+        "void", "volatile", "while", "true", "false", "null", "_",
+    )
+
     fun generate(destination: File, appName: String) {
         check(!File(destination, "settings.gradle.kts").exists()) { "The folder already contains a Gradle project" }
         destination.mkdirs()
@@ -26,7 +34,9 @@ internal object GameProjectTemplateGenerator {
 
     /** Relative path to file content for a game called [appName]. */
     fun files(appName: String): Map<String, String> {
-        val slug = projectSlug(appName).replace(Regex("[^a-z0-9]"), "").ifBlank { "game" }
+        val rawSlug = projectSlug(appName).replace(Regex("[^a-z0-9]"), "").ifBlank { "game" }
+        // A package segment cannot start with a digit ("2048 Game") or be a Java keyword ("New"); both break javac and AGP.
+        val slug = if (rawSlug.first().isDigit() || rawSlug in JAVA_KEYWORDS) "game$rawSlug" else rawSlug
         val namespace = "com.forge.$slug"
         val pkgPath = namespace.replace('.', '/')
         return linkedMapOf(
@@ -220,7 +230,7 @@ internal object GameProjectTemplateGenerator {
         import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
         import com.badlogic.gdx.utils.ScreenUtils;
 
-        /** $appName: shared game code for Android and desktop. */
+        /** ${appName.replace("*/", "* /").replace("\\", "/").replace(Regex("\\s+"), " ")}: shared game code for Android and desktop. */
         public class ForgeGame extends ApplicationAdapter {
             private ShapeRenderer shapes;
             private float x = 200f, y = 200f, vx = 320f, vy = 260f;
@@ -270,7 +280,7 @@ internal object GameProjectTemplateGenerator {
     """.trimIndent() + "\n"
 
     private fun kotlinString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\""
-    private fun javaString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    private fun javaString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ") + "\""
     private fun xmlEscape(value: String) = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace("'", "\\'").replace("\"", "\\\"")
 }

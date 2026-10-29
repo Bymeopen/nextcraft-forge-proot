@@ -204,6 +204,9 @@ internal fun writeIosWorkflow(workspace: File): Boolean {
  */
 internal fun iosWorkflowYaml(project: String, scheme: String): String {
     val flag = if (project.endsWith(".xcworkspace")) "-workspace" else "-project"
+    // A project folder name with a quote would end the shell quotes in the workflow's run step.
+    val shellProject = project.replace("'", "'\\''")
+    val shellScheme = scheme.replace("'", "'\\''")
     return """
         name: Build iOS
         on:
@@ -217,7 +220,7 @@ internal fun iosWorkflowYaml(project: String, scheme: String): String {
               - uses: actions/checkout@v4
               - name: Build for the simulator (no signing)
                 run: |
-                  xcodebuild $flag '$project' -scheme '$scheme' -sdk iphonesimulator \
+                  xcodebuild $flag '$shellProject' -scheme '$shellScheme' -sdk iphonesimulator \
                     -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
               - uses: actions/upload-artifact@v4
                 with:

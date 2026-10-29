@@ -1459,6 +1459,7 @@
     <string name="restore_failed">فشلت الاستعادة: %1$s</string>
     <string name="restore_wrong_password">كلمة المرور خاطئة أو النسخة تالفة.</string>
     <string name="restore_needs_password">هذه النسخة مشفّرة: أدخل كلمة المرور.</string>
+    <string name="restore_password">كلمة المرور</string>
     <string name="restore_restart">إعادة التشغيل الآن</string>
     <string name="backup_busy">أوقف الوكيل أو أمر الطرفية الجاري أولًا.</string>
     <string name="agent_auto_retry_notice">إعادة المحاولة تلقائيًا مرة واحدة…</string>

@@ -36,8 +36,9 @@ class ApiKeyVault(context: Context) {
      * Decryption of the old key only works shortly after an unlock, so this retries on each launch
      * until it succeeds and never deletes anything on failure.
      */
-    @Synchronized
-    private fun migrateAuthBoundKeyIfNeeded() {
+    private fun migrateAuthBoundKeyIfNeeded() { synchronized(MIGRATION_LOCK) {
+        // Process-wide lock: the vault is constructed in many places, and two instances migrating at once could
+        // delete each other's new keystore alias (both derive it from the clock) and orphan every secret.
         runCatching {
             val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             if (!keyStore.containsAlias(alias)) return
@@ -67,7 +68,8 @@ class ApiKeyVault(context: Context) {
                 plaintexts.forEach { (storageId, secret) ->
                     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                     cipher.init(Cipher.ENCRYPT_MODE, newKey)
-                    val encrypted = cipher.doFinal(cleanSecret(secret).toByteArray(Charsets.UTF_8))
+                    // storageId matters: cleanSecret keeps the internal spaces of backup passphrases.
+                    val encrypted = cipher.doFinal(cleanSecret(secret, storageId).toByteArray(Charsets.UTF_8))
                     edit.putString("$storageId.iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
                     edit.putString("$storageId.value", Base64.encodeToString(encrypted, Base64.NO_WRAP))
                 }
@@ -82,7 +84,7 @@ class ApiKeyVault(context: Context) {
         }.onFailure { error ->
             android.util.Log.w("ApiKeyVault", "Keystore migration deferred: ${error::class.simpleName}")
         }
-    }
+    } }
 
     @Synchronized
     fun put(providerId: String, secret: String) {
@@ -239,9 +241,10 @@ class ApiKeyVault(context: Context) {
         val legacySecret = getEncrypted(providerId) ?: return emptyList()
         val legacy = ApiKeyInfo("legacy", "Primary", true)
         putEncrypted(secretKey(providerId, legacy.id), legacySecret)
-        removeEncrypted(providerId)
         savePool(providerId, listOf(legacy))
         setActiveId(providerId, legacy.id)
+        // Last: if the process dies before this, the legacy entry is only a harmless leftover, never a lost secret.
+        removeEncrypted(providerId)
         return listOf(legacy)
     }
 
@@ -296,6 +299,7 @@ class ApiKeyVault(context: Context) {
     private companion object {
         const val LEGACY_KEY_ALIAS = "nextcraft-provider-key"
         const val KEY_ALIAS_PREF = "keystore.alias"
+        val MIGRATION_LOCK = Any()
     }
 }
 

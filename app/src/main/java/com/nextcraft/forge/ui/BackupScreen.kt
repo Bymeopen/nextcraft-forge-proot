@@ -8,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -243,6 +245,14 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
     val encrypted = password.isNotEmpty()
     val passwordsMatch = password == confirm
     val canBackup = !backup.busy && (projects || chats || settings || apiKeys) && passwordsMatch && (!apiKeys || encrypted)
+    // The outcome of a backup or restore is the last thing on a long screen: scroll to it so the user sees the result.
+    val resultRequester = remember { BringIntoViewRequester() }
+    androidx.compose.runtime.LaunchedEffect(backup) {
+        if (backup.message != null || backup.restartNeeded) {
+            androidx.compose.runtime.withFrameNanos { } // let the result be laid out before it is scrolled to
+            resultRequester.bringIntoView()
+        }
+    }
 
     val createFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) viewModel.backup.backup(uri, BackupManager.Options(projects, chats, settings, apiKeys && encrypted), password)
@@ -255,9 +265,10 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
         }
     }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    if (pendingRestore != null) {
-        androidx.compose.runtime.LaunchedEffect(pendingRestore) {
-            restoreEncrypted = viewModel.backup.isEncrypted(pendingRestore!!)
+    val currentPendingRestore = pendingRestore
+    if (currentPendingRestore != null) {
+        androidx.compose.runtime.LaunchedEffect(currentPendingRestore) {
+            restoreEncrypted = viewModel.backup.isEncrypted(currentPendingRestore)
         }
     }
 
@@ -425,18 +436,27 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
             Text(stringResource(R.string.backup_busy), fontSize = ForgeType.secondary, color = scheme.onSurfaceVariant)
         }
         if (backup.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        backup.message?.let { Text(it.asString(), fontSize = ForgeType.control) }
-        if (backup.restartNeeded) {
-            ForgePrimaryButton(
-                text = stringResource(R.string.restore_restart),
-                onClick = viewModel.backup::restartApp,
-                modifier = Modifier.fillMaxWidth(),
-            )
+        if (backup.message != null || backup.restartNeeded) {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier.bringIntoViewRequester(resultRequester),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                backup.message?.let { Text(it.asString(), fontSize = ForgeType.control) }
+                if (backup.restartNeeded) {
+                    ForgePrimaryButton(
+                        text = stringResource(R.string.restore_restart),
+                        onClick = viewModel.backup::restartApp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
     }
 
     if (confirmRestore && pendingRestore != null) {
         val tokens = LocalForgeThemeTokens.current
+        // An encrypted backup cannot be restored without its password: the button stays off until one is typed.
+        val canRestore = !restoreEncrypted || restorePassword.isNotEmpty()
         ForgeAlertDialog(
             modifier = Modifier.forgePopIn(),
             onDismissRequest = { confirmRestore = false; pendingRestore = null },
@@ -450,7 +470,7 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
                             kind = ForgeFieldKind.SECRET, imeAction = ImeAction.Done,
                             value = restorePassword,
                             onValueChange = { restorePassword = it },
-                            label = { Text(stringResource(R.string.backup_password)) },
+                            label = { Text(stringResource(R.string.restore_password)) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -464,8 +484,14 @@ fun BackupScreen(state: ForgeUiState, viewModel: MainViewModel) {
                         pendingRestore = null
                         scope.launch { viewModel.backup.restore(uri, restorePassword) }
                     },
-                    enabled = !restoreEncrypted || restorePassword.isNotEmpty(),
-                ) { Text(stringResource(R.string.restore_confirm), color = tokens.dangerText) }
+                    enabled = canRestore,
+                ) {
+                    // An explicit text colour ignores the button's disabled state, so dim it by hand.
+                    Text(
+                        stringResource(R.string.restore_confirm),
+                        color = if (canRestore) tokens.dangerText else scheme.onSurface.copy(alpha = 0.38f),
+                    )
+                }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmRestore = false; pendingRestore = null }) {

@@ -6,6 +6,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -66,8 +67,16 @@ class GeminiVideoClient {
             val uri = video.stringOrEmpty("uri")
             if (uri.isBlank()) return@withContext GeminiVideoResult.Failure("The video had neither data nor an address.")
             waitUntilActive(apiKey, uri)?.let { return@withContext GeminiVideoResult.Failure(it) }
-            download(apiKey, uri, output)?.let { return@withContext GeminiVideoResult.Failure(it) }
+            download(apiKey, uri, output)?.let {
+                // A refused or cut-off download leaves a partial file (up to the size cap) behind.
+                runCatching { output.delete() }
+                return@withContext GeminiVideoResult.Failure(it)
+            }
             GeminiVideoResult.Success
+        } catch (e: CancellationException) {
+            // waitUntilActive suspends in delay(); a cancelled generation must stay cancelled, not become a Failure.
+            runCatching { output.delete() }
+            throw e
         } catch (e: Exception) {
             runCatching { output.delete() }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("GeminiVideoClient", it) }
             GeminiVideoResult.Failure(redact(e.message ?: e.javaClass.simpleName))

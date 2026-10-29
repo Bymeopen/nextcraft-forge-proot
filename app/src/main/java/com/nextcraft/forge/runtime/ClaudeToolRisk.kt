@@ -232,6 +232,8 @@ private fun isSafeBashSegment(segment: String): Boolean {
     if (args.any { UNSAFE_TOOL_FLAG_REGEX.matches(it) }) return false
     // -o may sit inside a cluster (-uo out) and getopt_long accepts prefixes of --output.
     if ((first == "sort" || first == "tree") && args.any { it.startsWith("--out") || it.shortFlagCluster().contains('o') }) return false
+    // sed/awk read their program from a file with -f/--file; that file may hold `e`/system() the inline check cannot see.
+    if ((first == "sed" || first == "awk") && args.any { it == "--file" || it.startsWith("--file=") || it.shortFlagCluster().contains('f') }) return false
     // `date -s` sets the system clock.
     if (first == "date" && args.any { it.shortFlagCluster().contains('s') || it.startsWith("--set") }) return false
     if (mutatesFiles(first, words) && words.drop(1).any(::isOutsideWorkspacePath)) return false

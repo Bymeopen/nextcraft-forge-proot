@@ -134,10 +134,16 @@ internal object BackupCrypto {
                     throw WrongPasswordException() // ended before the flagged last chunk: truncated
                 }
                 require(size in 16..(CHUNK + 16)) { "Damaged backup" }
-                val sealed = ByteArray(size).also(data::readFully)
+                val sealed = try {
+                    ByteArray(size).also(data::readFully)
+                } catch (_: EOFException) {
+                    throw WrongPasswordException() // cut off inside a chunk: same verdict as a cut between chunks
+                }
                 // The last chunk is the one the stream ends after; try it as "not last" first, the common case.
                 val plain = open(sealed, last = false) ?: open(sealed, last = true)?.also { done = true }
                     ?: throw WrongPasswordException()
+                // Nothing may follow the final chunk: appended or spliced-in bytes mean the file is not what was written.
+                if (done && data.read() != -1) throw WrongPasswordException()
                 chunk = plain
                 pos = 0
                 index++

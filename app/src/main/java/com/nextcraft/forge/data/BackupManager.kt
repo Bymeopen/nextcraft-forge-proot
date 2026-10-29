@@ -138,7 +138,8 @@ class BackupManager(private val context: Context) {
         }
         val staging = File(context.cacheDir, "restore-staging").apply { deleteRecursively(); mkdirs() }
         val stagingRoot = staging.canonicalFile.toPath()
-        var files = 0
+        var entries = 0 // every archive entry, for the size guard
+        var files = 0 // user files only, like the backup count: the manifest is not one of them
         var bytes = 0L
         try {
             onProgress("reading")
@@ -147,7 +148,7 @@ class BackupManager(private val context: Context) {
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (entry.isDirectory) continue
-                    require(files < MAX_RESTORE_FILES) { "Backup archive has too many files" }
+                    require(entries < MAX_RESTORE_FILES) { "Backup archive has too many files" }
                     val target = File(staging, entry.name).canonicalFile
                     require(target.toPath().startsWith(stagingRoot)) { "Unsafe path in backup: ${entry.name}" }
                     target.parentFile?.mkdirs()
@@ -160,7 +161,8 @@ class BackupManager(private val context: Context) {
                             out.write(buffer, 0, count)
                         }
                     }
-                    files++
+                    entries++
+                    if (entry.name != MANIFEST) files++
                 }
             }
             val manifest = File(staging, MANIFEST).takeIf { it.isFile }?.let { JSONObject(it.readText()) }
@@ -192,9 +194,21 @@ class BackupManager(private val context: Context) {
                     // would write the old map back over the restore. So the restored values are loaded through the
                     // live instance instead, which is also where the privileged flags are reset.
                     val values = PrefsXml.parse(stagedFile.readText())
-                    context.getSharedPreferences(fileName.removeSuffix(".xml"), Context.MODE_PRIVATE).edit(commit = true) {
+                    val live = context.getSharedPreferences(fileName.removeSuffix(".xml"), Context.MODE_PRIVATE)
+                    // An unencrypted backup proves nothing about who wrote it, so it must not change where API keys
+                    // and updates are sent: this device keeps its own endpoints and the file's are ignored. An
+                    // encrypted backup needs its password, like the schedule and build-matrix files above.
+                    val protectEndpoints = !encrypted && fileName == "$PREFS_NAME.xml"
+                    val restored = if (protectEndpoints) PrefsXml.withoutEndpointKeys(values) else values
+                    val ownEndpoints = if (protectEndpoints) {
+                        live.all.filterKeys(PrefsXml::isEndpointKey).mapNotNull { (key, value) -> value?.let { key to it } }.toMap()
+                    } else {
+                        emptyMap()
+                    }
+                    live.edit(commit = true) {
                         clear()
-                        PrefsXml.putAll(this, values)
+                        PrefsXml.putAll(this, restored)
+                        PrefsXml.putAll(this, ownEndpoints)
                         if (fileName == "$PREFS_NAME.xml") PrefsXml.resetPrivilegedFlags(this)
                     }
                 }
@@ -329,6 +343,17 @@ internal object PrefsXml {
     fun resetPrivilegedFlags(editor: android.content.SharedPreferences.Editor) {
         PRIVILEGED_RESETS.forEach { (key, value) -> editor.putBoolean(key, value) }
     }
+
+    private val ENDPOINT_KEY = Regex("^provider_(?:[a-z0-9_]+_)?base_url$")
+
+    /**
+     * Preferences that decide where credentials or updates are sent: the provider base URL of the default and of every
+     * agent-scoped profile (`provider_base_url`, `provider_<agent>_base_url`) and the debug update manifest.
+     */
+    fun isEndpointKey(name: String): Boolean = ENDPOINT_KEY.matches(name) || name == "debug_update_manifest_url"
+
+    /** [values] without the endpoint keys, so an unauthenticated archive cannot redirect credentials. Pure, for tests. */
+    fun withoutEndpointKeys(values: Map<String, Any>): Map<String, Any> = values.filterKeys { !isEndpointKey(it) }
 
     /** [values] with the privileged flags reset; what a restore ends up with. Pure, for tests. */
     fun withPrivilegedReset(values: Map<String, Any>): Map<String, Any> = values + PRIVILEGED_RESETS
