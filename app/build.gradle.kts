@@ -199,7 +199,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.1")
     // The runner asks for tracing 1.1.0 / jsr305 2.0.2, which are not in the offline Maven cache; these versions are.
-    androidTestImplementation("androidx.tracing:tracing:1.2.0")
+    androidTestImplementation("androidx.tracing:tracing:2.0.5")
     androidTestImplementation("com.google.code.findbugs:jsr305:3.0.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
