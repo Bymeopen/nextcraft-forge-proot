@@ -103,7 +103,7 @@ internal data class RuntimeBundle(
 )
 
 /** Release hosting the Ubuntu 24.04 bundles built from scripts/runtime-bundles. */
-internal const val RUNTIME_RELEASE_BASE_URL = "https://github.com/bymeopen/nextcraft-forge/releases/download/runtime-2026.10.2"
+internal const val RUNTIME_RELEASE_BASE_URL = "https://github.com/bymeopen/nextcraft-forge/releases/download/runtime-2026.10.1"
 
 internal data class GitConfigEntry(
     val section: String,

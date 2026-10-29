@@ -583,8 +583,17 @@ fun MainViewModel.syncProjectWithGitHub(
                     append("git push -f origin \"HEAD:ccr-auto-sync-${'$'}branch\" >/dev/null 2>&1 || true; ")
                     append("fi && ")
                     append("if git remote get-url proot >/dev/null 2>&1; then ")
+                    // Never force-push main: commits made in the repo itself (other sessions, CI fixes) must survive.
+                    // Bring the proot main in first (merge, abort on conflict), then a plain push; if that is refused the
+                    // snapshot goes to a branch of its own.
                     append("git branch -f proot-main HEAD >/dev/null 2>&1 || true; ")
-                    append("git push -f proot HEAD:main >/dev/null 2>&1 || true; ")
+                    append("git fetch proot main >/dev/null 2>&1 || true; ")
+                    append("if ! git merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then ")
+                    append("(git pull --no-rebase --no-edit --autostash proot main >/dev/null 2>&1 || git merge --abort >/dev/null 2>&1 || true); ")
+                    append("fi; ")
+                    append("if ! git push proot HEAD:main >/dev/null 2>&1; then ")
+                    append("git push -f proot \"HEAD:ccr-auto-sync-main\" >/dev/null 2>&1 || true; ")
+                    append("fi; ")
                     append("fi; ")
                     append("else echo 'No origin remote configured in workspace' >&2; false; fi")
                 }

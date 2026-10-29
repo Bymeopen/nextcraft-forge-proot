@@ -493,6 +493,7 @@ class RuntimeInstaller(internal val context: Context) {
         val engineExports = if (RuntimeEngines.current() == RuntimeEngine.PROOT) {
             "export NEXTCRAFT_PROOT=${shellSingleQuote(RuntimeEngines.prootBinary(context).absolutePath)}; " +
                 "export NEXTCRAFT_PROOT_LOADER=${shellSingleQuote(RuntimeEngines.prootLoader(context).absolutePath)}; " +
+                "export NEXTCRAFT_SIGSYS_PROBE=${shellSingleQuote(RuntimeEngines.sigsysProbe(context).absolutePath)}; " +
                 "export NEXTCRAFT_PROOT_TMP=${shellSingleQuote(File(runtimeDir, "proot-tmp").apply { mkdirs() }.absolutePath)}; "
         } else {
             ""
@@ -788,9 +789,9 @@ class RuntimeInstaller(internal val context: Context) {
         internal const val DSH_ANDROID_COMPATIBILITY_VERSION = "copyfile-excl-v2"
         internal val CORE_BUNDLE = RuntimeBundle(
             label = "Core",
-            fileName = "nextcraft-core-arm64-2026.10.2.tar.zst",
-            sha256 = "c2dab14270aae62b21243109a5a6e75af7d0c6821fda6264b91f973e18f3ddfb",
-            compressedBytes = 74_457_771L,
+            fileName = "nextcraft-core-arm64-2026.10.1.tar.zst",
+            sha256 = "fe63d1dececdcd5e861debe0936835d39c2eb6eb787bb7bd71bcab5c3db4d4cf",
+            compressedBytes = 74_269_605L,
         )
         internal const val CLAUDE_BUNDLED_VERSION = "2.1.308"
         internal const val CLAUDE_GUEST_PATH = "/usr/local/bin/claude"
@@ -800,34 +801,34 @@ class RuntimeInstaller(internal val context: Context) {
         internal const val CLAUDE_NPM_VERSION = "2.1.112"
         internal val CLAUDE_BUNDLE = RuntimeBundle(
             label = "Claude Code",
-            fileName = "nextcraft-claude-arm64-2026.10.2.tar.zst",
-            sha256 = "cc479f683e0e581e055d6fa2c033897c1aa6e306b6c065c9cff9e65e55c8e7a4",
-            compressedBytes = 102_137_744L,
+            fileName = "nextcraft-claude-arm64-2026.10.1.tar.zst",
+            sha256 = "bb993c0a80ff2ea8d9c994e03cf587bf7ef996bdecdab3d95ce51e1e0f04f2bd",
+            compressedBytes = 75_422_659L,
         )
         internal val PYTHON_BUNDLE = RuntimeBundle(
             label = "Python",
-            fileName = "nextcraft-python-arm64-2026.10.2.tar.zst",
-            sha256 = "6f4a847ffe7d36cea16c4fb3e1dc1ad2d7619ef9dff31560cfaa9b5e47a833d8",
-            compressedBytes = 15_018_991L,
+            fileName = "nextcraft-python-arm64-2026.10.1.tar.zst",
+            sha256 = "43a23a3e2d73e46f5c242ac4e3d8f7adef356b987559e1474e4cc9072118a7f3",
+            compressedBytes = 15_053_684L,
         )
         /** Built by scripts/runtime-bundles/build-android-bundle.sh; versions in [AndroidToolchain]. */
         internal val ANDROID_BUNDLE = RuntimeBundle(
             label = "Android",
-            fileName = "nextcraft-android-arm64-2026.10.2.tar.zst",
-            sha256 = "84ca85c6578fe210ca7ada5ad7dd7117e769254c1faf597609f50fe3e5ed165d",
-            compressedBytes = 584_339_354L,
+            fileName = "nextcraft-android-arm64-2026.10.1.tar.zst",
+            sha256 = "8b4ecf057daa6fd54acd950712f8adb4eb7722c7bc557136f2ea31d7a2bbfd60",
+            compressedBytes = 584_522_930L,
         )
         internal val DSH_BUNDLE = RuntimeBundle(
             label = "DeepSeek",
-            fileName = "nextcraft-dsh-arm64-2026.10.2.tar.zst",
-            sha256 = "0036adeef3f30a7b535821e7f4594c3a296ff16f7dfbbcaec6b93bc6ef44ff25",
-            compressedBytes = 90_508_623L,
+            fileName = "nextcraft-dsh-arm64-2026.10.1.tar.zst",
+            sha256 = "d3137b607c32f3714c655f5e0f101d7e7292841a056d3b9bc928e704656c220f",
+            compressedBytes = 28_066_921L,
         )
         internal val AGY_BUNDLE = RuntimeBundle(
             label = "Antigravity CLI",
-            fileName = "nextcraft-agy-arm64-2026.10.2.tar.zst",
-            sha256 = "0a3e344817ada663f5cb79b0b86707fd76581cef794194d31dc360ec5b5d889b",
-            compressedBytes = 48_493_274L,
+            fileName = "nextcraft-agy-arm64-2026.10.1.tar.zst",
+            sha256 = "001cbb373a1110ce32c939c2b27138b46b676b157c9329b50c34e790aa2b7eff",
+            compressedBytes = 42_003_928L,
         )
         internal const val ROOT_GRANT_TIMEOUT_SECONDS = 45L
         internal const val ENV_CLEANUP_POLL_MS = 1_000L
