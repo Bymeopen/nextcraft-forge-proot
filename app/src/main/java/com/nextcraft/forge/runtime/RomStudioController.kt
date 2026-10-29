@@ -98,7 +98,8 @@ class RomStudioController(
         val dir = ChrootRunner.quote(s.directory)
         launchStep(
             "repo init",
-            "mkdir -p $dir && cd $dir && git config --global user.name >/dev/null 2>&1 || git config --global user.name forge; " +
+            "mkdir -p $dir && cd $dir || exit 1; " +
+                "git config --global user.name >/dev/null 2>&1 || git config --global user.name forge; " +
                 "git config --global user.email >/dev/null 2>&1 || git config --global user.email forge@android.local; " +
                 "repo init --depth=1 --no-clone-bundle -u ${ChrootRunner.quote(s.manifestUrl)} -b ${ChrootRunner.quote(s.branch)} </dev/null",
         )
