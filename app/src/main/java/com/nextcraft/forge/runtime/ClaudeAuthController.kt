@@ -268,10 +268,18 @@ class ClaudeAuthController(
                     }
                     val now = android.os.SystemClock.elapsedRealtime()
                     val exited = !running.isAlive
+                    val exitZero = exited && runCatching { running.exitValue() }.getOrDefault(-1) == 0
                     val looksDone = clean.contains("login successful", true) || clean.contains("logged in as", true)
                     if (exited || looksDone || now - lastCredentialCheck > CREDENTIAL_POLL_MS) {
                         lastCredentialCheck = now
-                        if ((exited || looksDone || mutableState.value.status == ClaudeAuthStatus.COMPLETING) && hasCredential()) {
+                        // A first login (stateBeforeLogin == null) keeps the lenient rule: any exit with a credential counts.
+                        // A re-login must not trust the credential of the previous session when the CLI died or failed, so an
+                        // exit alone only counts when it was clean and the browser step had been reached.
+                        val allowedToFinish = looksDone ||
+                            mutableState.value.status == ClaudeAuthStatus.COMPLETING ||
+                            (exited && (stateBeforeLogin == null ||
+                                (exitZero && mutableState.value.status == ClaudeAuthStatus.AWAITING_BROWSER)))
+                        if (allowedToFinish && hasCredential()) {
                             val account = readAccountEmail()
                             account?.let { com.nextcraft.forge.data.AppPreferences(context).claudeAccountEmail = it }
                             mutableState.value = ClaudeAuthState(
