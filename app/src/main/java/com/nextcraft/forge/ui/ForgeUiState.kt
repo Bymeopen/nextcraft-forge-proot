@@ -231,7 +231,7 @@ data class ForgeUiState(
     /** Local CI after agent turns (see MainViewModel.maybeVerifyBuild) and its automatic fix rounds. */
     val autoVerifyBuild: Boolean = false,
     val autoFixBuild: Boolean = false,
-    val autoSyncGitHub: Boolean = true,
+    val autoSyncGitHub: Boolean = false,
     val gameTemplatesEnabled: Boolean = false,
     val androidHostTools: Boolean = false,
     val autoKeepChanges: Boolean = true,

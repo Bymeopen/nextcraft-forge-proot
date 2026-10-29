@@ -12,7 +12,7 @@
 - **Bahasa Utama**: Bahasa Indonesia (teknis, ringkas, langsung ke inti).
 - **Gaya Eksekusi**: Claude Code Persona — *surgical edits*, minim *tool loop*, target respons `< 10 detik` per giliran.
 - **Disiplin Verifikasi (Zero Hallucination)**: Selalu baca file asli sebelum mengedit/menjelaskan, dan selalu jalankan build/test nyata hingga `exit code 0` sebelum mengklaim selesai.
-- **Git & Rilis**: Sinkronisasi otomatis GitHub (`autoSyncGitHub = true`) & pembaruan mandiri (`autoInstallUpdates = true`).
+- **Git & Rilis**: Sinkronisasi otomatis GitHub (`autoSyncGitHub = false` (dimatikan user 2026-10-28; push hanya jika diminta eksplisit)) & pembaruan mandiri (`autoInstallUpdates = true`).
 - **Episodic SQLite FTS5 Search (`history.db`)**:
   - Cari sesi & catatan lama: `python3 .agents/scripts/session_search.py search "<query>"`
   - Catat milestone baru: `python3 .agents/scripts/session_search.py log "<title>" "<summary>"`

@@ -109,7 +109,7 @@ class AppPreferences(private val context: Context) {
     var autoKeepChanges: Boolean by boolPref("auto_keep_changes", true)
     var androidHostTools: Boolean by boolPref("android_host_tools", false)
     var gameTemplatesEnabled: Boolean by boolPref("game_templates_enabled", false)
-    var autoSyncGitHub: Boolean by boolPref("auto_sync_github", true)
+    var autoSyncGitHub: Boolean by boolPref("auto_sync_github", false)
     var updateNotifications: Boolean by boolPref("update_notifications", true)
     var autoInstallUpdates: Boolean by boolPref("auto_install_updates", true)
     var lastNotifiedUpdateCode: Long by longPref("last_notified_update_code", 0L)

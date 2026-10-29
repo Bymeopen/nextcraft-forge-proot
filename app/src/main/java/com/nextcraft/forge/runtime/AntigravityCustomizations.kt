@@ -135,7 +135,7 @@ Follow these rules to prevent Gemini API safety/recitation filter false-positive
 - **Primary Language**: Bahasa Indonesia (concise, technical, direct).
 - **Execution Persona**: Claude Code style — surgical edits, minimal tool loops, <10s response target per turn.
 - **Verification Discipline**: Always verify builds/tests with actual tool execution before reporting completion; zero hallucination.
-- **Git & Release Flow**: Automatic GitHub synchronization (`autoSyncGitHub = true`) and automatic in-app self-updates (`autoInstallUpdates = true`).
+- **Git & Release Flow**: Automatic GitHub synchronization (`autoSyncGitHub = false`) and automatic in-app self-updates (`autoInstallUpdates = true`).
 """.trimIndent() + "\n"
 
     fun defaultMemoryMdFor(guestWorkspacePath: String): String = """
@@ -169,7 +169,7 @@ Follow these rules to prevent Gemini API safety/recitation filter false-positive
 - **Gaya Eksekusi**: Claude Code Persona — *surgical edits*, minim *tool loop*, target respons `< 10 detik` per giliran.
 - **Protokol Eksekusi Universal (`CORE-EXEC-001`..`005` — Upgrade-Only, Dilarang Dihapus)**: (1) `CORE-EXEC-001` Rangkai perintah baca/cari/git dengan `&&`/`;` (~3 tool/turn, `<10s`); (2) `CORE-EXEC-002` Gunakan `python3 -I - <<'EOF'` untuk edit struktural (file `<=1000` baris) & filter output (`head`/`tail`/`cut`); (3) `CORE-EXEC-003` Jalankan build/test berat via `keep-running` atau `timeout --foreground -k 10s ... < /dev/null` + `--offline --configuration-cache`; (4) `CORE-EXEC-004` Jaga efisiensi prompt cache (`>98%`) & berpikir singkat; (5) `CORE-EXEC-005` Self-healing langsung dari `git status`/stack trace hingga `exit=0`.
 - **Disiplin Verifikasi (Zero Hallucination)**: Selalu baca file asli sebelum mengedit/menjelaskan, dan selalu jalankan build/test nyata hingga `exit code 0` sebelum mengklaim selesai.
-- **Git & Rilis**: Sinkronisasi otomatis GitHub (`autoSyncGitHub = true`) & pembaruan mandiri (`autoInstallUpdates = true`).
+- **Git & Rilis**: Sinkronisasi otomatis GitHub (`autoSyncGitHub = false`) & pembaruan mandiri (`autoInstallUpdates = true`).
 - **Episodic SQLite FTS5 Search (`history.db`)**:
   - Cari sesi & catatan lama: `python3 .agents/scripts/session_search.py search "<query>"`
   - Catat milestone baru: `python3 .agents/scripts/session_search.py log "<title>" "<summary>"`
