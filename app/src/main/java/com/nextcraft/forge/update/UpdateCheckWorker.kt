@@ -25,7 +25,11 @@ class UpdateCheckWorker(context: Context, params: WorkerParameters) : Worker(con
     /** Only while no agent or build is actively running. */
     private fun canInstallNow(): Boolean {
         if (com.nextcraft.forge.runtime.RuntimeTaskController.hasActiveTask()) return false
-        return true
+        // The silent install needs root. A forced PRoot never has it, so skip the download instead of fetching the full APK
+        // every 15 minutes for nothing. The stored choice is read, not detect(): that would probe `su` from a worker.
+        val choice = com.nextcraft.forge.runtime.RuntimeEngineChoice.fromStored(AppPreferences(applicationContext).runtimeEngine)
+        if (choice == com.nextcraft.forge.runtime.RuntimeEngineChoice.PROOT) return false
+        return com.nextcraft.forge.runtime.RuntimeEngines.isRootEngine()
     }
 
     /** Downloads (verified by [AppUpdater]) and starts the silent install. False means nothing changed. */
