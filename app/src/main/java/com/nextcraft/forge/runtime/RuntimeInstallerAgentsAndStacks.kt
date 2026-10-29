@@ -53,11 +53,39 @@ fun RuntimeInstaller.removeAgent(agent: AgentKind) {
     check(!isAgentInstalled(agent)) { "Could not fully remove ${agent.title}" }
 }
 
+/**
+ * Whether the guest file at [guestPath] is executable. `File.canExecute()` follows symlinks on the host, where an
+ * absolute guest target (the PRoot npm install links `/usr/local/bin/claude` to `/usr/local/lib/claude-code/...`) does
+ * not exist, so an installed agent looked missing. Each hop is re-rooted inside [rootfs] instead, and a link that
+ * leaves the rootfs, loops or dangles counts as not executable.
+ */
+internal fun isGuestExecutable(rootfs: File, guestPath: String): Boolean {
+    val rootPath = rootfs.canonicalFile.toPath()
+    var current = rootPath.resolve(guestPath.removePrefix("/")).normalize()
+    if (!current.startsWith(rootPath)) return false
+    var hops = 0
+    while (java.nio.file.Files.isSymbolicLink(current)) {
+        if (++hops > 16) return false
+        val parent = current.parent ?: return false
+        current = try {
+            RuntimeInstaller.resolveSafeSymlinkTarget(
+                rootPath = rootPath,
+                parentDir = parent,
+                linkName = java.nio.file.Files.readSymbolicLink(current).toString(),
+                errorMessage = "Guest symlink escapes runtime",
+            )
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+    }
+    return current.toFile().canExecute()
+}
+
 fun RuntimeInstaller.isAgentInstalled(agent: AgentKind): Boolean {
     return when (agent) {
         AgentKind.CLAUDE_CODE -> {
             migrateLegacyClaudeMarker()
-            isInstalled() && File(rootfs, RuntimeInstaller.CLAUDE_GUEST_PATH.removePrefix("/")).canExecute() &&
+            isInstalled() && isGuestExecutable(rootfs, RuntimeInstaller.CLAUDE_GUEST_PATH) &&
                 !claudeMarker.readTextOrNull().isNullOrBlank()
         }
         AgentKind.DEEPSEEK_HARNESS -> isInstalled() &&
@@ -568,7 +596,8 @@ internal suspend fun RuntimeInstaller.installClaudeViaNpm(
         chrootExec = chrootExec,
         command = "set -e; dir=${RuntimeInstaller.CLAUDE_NPM_GUEST_DIR}; rm -rf \"${'$'}dir\"; mkdir -p \"${'$'}dir\"; cd \"${'$'}dir\"; " +
             "npm init -y >/dev/null; npm install --omit=dev --no-audit --no-fund @anthropic-ai/claude-code@$version; " +
-            "ln -sfn ${RuntimeInstaller.CLAUDE_NPM_GUEST_DIR}/node_modules/.bin/claude ${RuntimeInstaller.CLAUDE_GUEST_PATH}",
+            // Relative on purpose: /usr/local/bin -> ../lib/claude-code resolves on the host too (see isGuestExecutable).
+            "ln -sfn ../lib/claude-code/node_modules/.bin/claude ${RuntimeInstaller.CLAUDE_GUEST_PATH}",
         displayCommand = "npm install @anthropic-ai/claude-code@$version",
         fraction = fraction,
         timeoutMs = 20 * 60 * 1_000L,
