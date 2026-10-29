@@ -363,9 +363,12 @@ private fun LazyListScope.renderCustomSkillsSection(
                 text = stringResource(R.string.skill_save),
                 onClick = {
                     viewModel.saveSkill(skillIdDraft, skillSummaryDraft, skillMarkdownDraft)
-                    skillIdDraft = ""
-                    skillSummaryDraft = ""
-                    skillMarkdownDraft = ""
+                    // An invalid name is rejected with a banner; keep the draft so the typed body is not lost.
+                    if (com.nextcraft.forge.runtime.ClaudeSkillStore.skillName(skillIdDraft) != null) {
+                        skillIdDraft = ""
+                        skillSummaryDraft = ""
+                        skillMarkdownDraft = ""
+                    }
                 },
                 enabled = skillIdDraft.isNotBlank() && skillMarkdownDraft.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),

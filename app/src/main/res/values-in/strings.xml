@@ -1370,6 +1370,7 @@
     <string name="restore_failed">Pemulihan gagal: %1$s</string>
     <string name="restore_wrong_password">Kata sandi salah, atau backup rusak.</string>
     <string name="restore_needs_password">Backup ini terenkripsi: masukkan kata sandinya.</string>
+    <string name="restore_password">Kata sandi</string>
     <string name="restore_restart">Mulai ulang sekarang</string>
     <string name="backup_busy">Hentikan agent atau perintah terminal yang sedang berjalan dulu.</string>
     <string name="agent_auto_retry_notice">Mencoba ulang otomatis sekali…</string>

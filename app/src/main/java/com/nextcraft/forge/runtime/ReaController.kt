@@ -62,6 +62,9 @@ class ReaController(
     val state: StateFlow<ReaState> = mutable.asStateFlow()
     private var job: Job? = null
 
+    /** Bumped by every launch and by [cancel], so a cancelled task finishing late cannot clear `busy` of the task that replaced it. */
+    private val taskGeneration = java.util.concurrent.atomic.AtomicInteger()
+
     fun refresh() {
         scope.launch {
             val version = withContext(Dispatchers.IO) { readInstalledVersion() }
@@ -230,6 +233,7 @@ class ReaController(
     }
 
     fun cancel() {
+        taskGeneration.incrementAndGet()
         job?.cancel()
         mutable.update { it.copy(busy = false) }
     }
@@ -237,6 +241,7 @@ class ReaController(
     private fun launchTask(@androidx.annotation.StringRes label: Int, showTransfer: Boolean = false, block: suspend () -> Unit) {
         if (mutable.value.busy) return
         pendingLine = ""
+        val generation = taskGeneration.incrementAndGet()
         mutable.update { it.copy(busy = true, message = UiText.res(label), log = "", progressPercent = null, progressLabel = null, transfer = null) }
         job = scope.launch {
             val meter = if (showTransfer) launchTransferMeter() else null
@@ -248,8 +253,10 @@ class ReaController(
                 mutable.update { it.copy(message = UiText.Raw(error.message ?: error.javaClass.simpleName)) }
             } finally {
                 meter?.cancel()
-                flushPendingLog()
-                mutable.update { it.copy(busy = false) }
+                if (taskGeneration.get() == generation) {
+                    flushPendingLog()
+                    mutable.update { it.copy(busy = false) }
+                }
             }
         }
     }

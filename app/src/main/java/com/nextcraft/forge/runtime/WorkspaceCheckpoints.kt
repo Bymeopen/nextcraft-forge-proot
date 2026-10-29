@@ -186,7 +186,13 @@ class WorkspaceCheckpoints(
             val baselineRoot = File(checkpointDir(token), "project")
             if (!baselineRoot.isDirectory) return@synchronized false
 
-            restoreSingleEntry(workspace, baselineRoot, path)
+            try {
+                restoreSingleEntry(workspace, baselineRoot, path)
+            } catch (e: IllegalArgumentException) {
+                ErrorLog.swallowed("WorkspaceCheckpoints.revertFile", e)
+                updateOrClearPendingManifest(token, pendingList.filter { it != path })
+                return@synchronized false
+            }
             updateOrClearPendingManifest(token, pendingList.filter { it != path })
             true
         }
@@ -200,11 +206,18 @@ class WorkspaceCheckpoints(
             val pendingList = loadPendingListUnlocked(token).filterNot(::isInternalRuntimePath)
             if (!baselineRoot.isDirectory || pendingList.isEmpty()) return@synchronized emptyList()
 
+            val restored = ArrayList<String>()
             for (relPath in pendingList) {
-                restoreSingleEntry(workspace, baselineRoot, relPath)
+                try {
+                    restoreSingleEntry(workspace, baselineRoot, relPath)
+                    restored += relPath
+                } catch (e: IllegalArgumentException) {
+                    // A symlinked path is never written through; skip it instead of leaving the turn half reverted.
+                    ErrorLog.swallowed("WorkspaceCheckpoints.revertLatestTurn", e)
+                }
             }
             cpFolder.deleteRecursively()
-            pendingList
+            restored
         }
     }
 
@@ -226,7 +239,12 @@ class WorkspaceCheckpoints(
             val pendingList = loadPendingListUnlocked(token)
             if (path !in pendingList) return@synchronized false
             val baselineRoot = File(checkpointDir(token), "project")
-            val liveFile = safeWorkspaceFile(workspace, path)
+            val liveFile = safeWorkspaceFileOrNull(workspace, path)
+            if (liveFile == null) {
+                // A symlinked path cannot be copied into the baseline; keeping it just ends the pending entry.
+                updateOrClearPendingManifest(token, pendingList.filter { it != path })
+                return@synchronized true
+            }
             val backupFile = safeWorkspaceFile(baselineRoot, path)
 
             if (liveFile.isFile) {
@@ -249,7 +267,8 @@ class WorkspaceCheckpoints(
             val baselineRoot = File(checkpointDir(token), "project")
             if (!baselineRoot.isDirectory) return@synchronized false
 
-            val liveFile = safeWorkspaceFile(workspace, path)
+            val liveFile = safeWorkspaceFileOrNull(workspace, path)
+                ?: return@synchronized revertFile(projectId, workspace, path)
             val backupFile = safeWorkspaceFile(baselineRoot, path)
             if (!backupFile.isFile || !liveFile.isFile) {
                 return@synchronized revertFile(projectId, workspace, path)
@@ -349,8 +368,9 @@ class WorkspaceCheckpoints(
         val baselineRoot = File(checkpointDir(token), "project")
         val noOpPaths = ArrayList<String>()
         val items = paths.mapNotNull { relPath ->
-            val oldFile = safeWorkspaceFile(baselineRoot, relPath).takeIf { it.isFile }
-            val newFile = safeWorkspaceFile(workspace, relPath).takeIf { it.isFile }
+            // A path that became a symlink reads as deleted, like in snapshot(); it must not abort the whole list.
+            val oldFile = safeWorkspaceFileOrNull(baselineRoot, relPath)?.takeIf { it.isFile }
+            val newFile = safeWorkspaceFileOrNull(workspace, relPath)?.takeIf { it.isFile }
             if (oldFile == null && newFile == null) {
                 noOpPaths.add(relPath)
                 return@mapNotNull null
@@ -572,6 +592,14 @@ class WorkspaceCheckpoints(
         }
         return target
     }
+
+    /** [safeWorkspaceFile], or null when the path is unsafe (for example a tracked file that became a symlink). */
+    private fun safeWorkspaceFileOrNull(root: File, relPath: String): File? =
+        try {
+            safeWorkspaceFile(root, relPath)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
 
     fun snapshot(root: File): Map<String, String> {
         val rootBoundary = root.canonicalFile.toPath()

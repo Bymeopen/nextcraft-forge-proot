@@ -1421,6 +1421,7 @@
     <string name="restore_failed">Ошибка восстановления: %1$s</string>
     <string name="restore_wrong_password">Неверный пароль или копия повреждена.</string>
     <string name="restore_needs_password">Эта копия зашифрована: введите пароль.</string>
+    <string name="restore_password">Пароль</string>
     <string name="restore_restart">Перезапустить</string>
     <string name="backup_busy">Сначала остановите работающего агента или команду терминала.</string>
     <string name="agent_auto_retry_notice">Автоматическая повторная попытка…</string>

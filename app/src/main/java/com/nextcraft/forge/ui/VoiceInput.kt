@@ -160,7 +160,8 @@ internal class VoiceController(
     private fun toast(resId: Int) = Toast.makeText(context, resId, Toast.LENGTH_SHORT).show()
 
     fun toggle() {
-        if (listening) {
+        // wantListening also covers the pause between two sentences, when a second start() would race the queued restart.
+        if (listening || wantListening) {
             stop()
         } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             start()

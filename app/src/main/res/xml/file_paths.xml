@@ -3,5 +3,6 @@
     <!-- Only locations that APKs are shared from; never expose the whole filesDir (runtime env, chats, rootfs). -->
     <files-path name="workspaces" path="workspaces/" />
     <files-path name="updates" path="updates/" />
-    <cache-path name="internal_cache" path="." />
+    <!-- Camera captures only (AgentScreen); the rest of cacheDir holds auth logs, downloads and restore staging. -->
+    <cache-path name="internal_cache" path="camera/" />
 </paths>

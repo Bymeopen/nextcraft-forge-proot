@@ -1383,6 +1383,7 @@
     <string name="restore_failed">रिस्टोर विफल: %1$s</string>
     <string name="restore_wrong_password">गलत पासवर्ड, या बैकअप खराब है।</string>
     <string name="restore_needs_password">यह बैकअप एन्क्रिप्टेड है: इसका पासवर्ड डालें।</string>
+    <string name="restore_password">पासवर्ड</string>
     <string name="restore_restart">अभी फिर से शुरू करें</string>
     <string name="backup_busy">पहले चल रहे एजेंट या टर्मिनल कमांड को रोकें।</string>
     <string name="agent_auto_retry_notice">अपने आप एक बार फिर से कोशिश की जा रही है…</string>

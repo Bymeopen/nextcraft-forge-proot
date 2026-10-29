@@ -27,7 +27,7 @@ class AutoBackupSettings(context: Context) {
     enum class Interval(val days: Long) { OFF(0), DAILY(1), WEEKLY(7) }
 
     var interval: Interval
-        get() = runCatching { Interval.valueOf(prefs.getString("interval", Interval.OFF.name)!!) }.getOrDefault(Interval.OFF)
+        get() = runCatching { Interval.valueOf(prefs.getString("interval", Interval.OFF.name) ?: Interval.OFF.name) }.getOrDefault(Interval.OFF)
         set(value) = prefs.edit {putString("interval", value.name)}
 
     /** The destination file (content:// URI with a persisted write permission), or null when none was chosen. */
@@ -90,7 +90,8 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 if (folder != null) {
                     writeVersioned(folder, temp)
                 } else {
-                    val out = applicationContext.contentResolver.openOutputStream(target!!, "wt") ?: error("The backup file is no longer reachable")
+                    val destUri = target ?: error("The backup file is no longer reachable")
+                    val out = applicationContext.contentResolver.openOutputStream(destUri, "wt") ?: error("The backup file is no longer reachable")
                     out.use { sink -> temp.inputStream().use { it.copyTo(sink) } }
                 }
             } finally {

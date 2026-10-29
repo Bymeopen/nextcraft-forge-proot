@@ -271,10 +271,11 @@ class GitHubClient(@Suppress("UNUSED_PARAMETER") private val context: Context? =
             array.optJSONObject(i)?.let {
                 GitHubWorkflowRun(
                     id = it.optLong("id"),
-                    name = it.optString("name").ifBlank { it.optString("display_title") },
+                    // org.json turns a JSON null into the text "null"; head_branch and name can be null.
+                    name = it.stringOrEmpty("name").ifBlank { it.stringOrEmpty("display_title") },
                     status = it.optString("status"),
                     conclusion = it.optString("conclusion").takeIf { c -> c.isNotBlank() && c != "null" },
-                    branch = it.optString("head_branch"),
+                    branch = it.stringOrEmpty("head_branch"),
                     event = it.optString("event"),
                     createdAt = it.optString("created_at"),
                     url = it.optString("html_url"),

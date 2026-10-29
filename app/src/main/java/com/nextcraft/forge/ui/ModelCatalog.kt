@@ -90,7 +90,8 @@ internal fun providerPresetModels(kind: ProviderKind): List<ModelOption> = when 
 
 internal fun providerModelOptions(kind: ProviderKind, discovered: List<DiscoveredModel>, current: String): List<ModelOption> {
     val base = if (discovered.isNotEmpty()) {
-        discovered.map { ModelOption(it.id, it.displayName.ifBlank { it.id }) }
+        // The picker uses the id as LazyColumn key; a gateway listing one id twice would crash it.
+        discovered.distinctBy { it.id }.map { ModelOption(it.id, it.displayName.ifBlank { it.id }) }
     } else {
         providerPresetModels(kind)
     }

@@ -88,9 +88,12 @@ class GitHubAuthControllerTest {
 
     @Test
     fun theCodeIsShownWhileWaiting() {
-        val r = rig({ GitHubTokenPoll.Failure("x") })
+        var shownDuringPoll: GitHubDeviceCode? = null
+        lateinit var r: Rig
+        r = rig({ shownDuringPoll = r.state.deviceCode; GitHubTokenPoll.Failure("x") })
         r.controller.startDeviceSignIn()
-        // The failure cleared it again; the message before that named the code to type.
+        assertEquals(code, shownDuringPoll)
+        // The failure cleared it again.
         assertNull(r.state.deviceCode)
     }
 

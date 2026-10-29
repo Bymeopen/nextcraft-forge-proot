@@ -52,7 +52,9 @@ PY
 # 2. Stage and commit any local modifications. Key material and env files are never staged, and a lightweight
 #    secret scan over the staged diff aborts the sync before anything is committed.
 git add -A -- . ':!*.env' ':!.env.*' ':!*.pem' ':!*.jks' ':!*.p12' ':!*.keystore' ':!*.key'
-if git diff --cached -U0 | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Eq 'ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}'; then
+# No `grep -q` here: it exits at the first match, the upstream grep then dies of SIGPIPE and pipefail turns the
+# pipeline into "failed", so a real secret in a large diff would pass the scan.
+if git diff --cached -U0 | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -E 'ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' >/dev/null; then
     echo "sync-github: a GitHub/OpenAI/AWS-style secret is present in the staged changes; aborting. Remove it and run again." >&2
     git reset -q
     exit 1
@@ -63,6 +65,11 @@ fi
 
 # 3. Sync with GitHub remote origin/main
 if git remote get-url origin >/dev/null 2>&1; then
+    # `git push origin main` sends the local main branch; from another branch it would push nothing of what was just committed.
+    if [[ "$(git symbolic-ref --short -q HEAD || true)" != "main" ]]; then
+        echo "sync-github: committed locally, but not pushing: current branch is not main." >&2
+        exit 0
+    fi
     git pull --rebase=merges --autostash origin main
     git push -u origin main
 fi

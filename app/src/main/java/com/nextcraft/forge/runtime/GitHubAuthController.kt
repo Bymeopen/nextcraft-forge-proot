@@ -190,7 +190,8 @@ class GitHubAuthController(
             return
         }
         pollJob?.cancel()
-        scope.launch {
+        // Tracked in pollJob so disconnect() or a new sign-in cancels it before it can store the token again.
+        pollJob = scope.launch {
             report(UiText.res(R.string.msg_gh_verifying_token))
             val result = withContext(io) {
                 runCatching {

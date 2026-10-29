@@ -506,7 +506,9 @@ class AppPreferences(private val context: Context) {
             .onFailure { ErrorLog.swallowed(LOG_TAG, it) }
     }
 
-    private fun writeDurableFile(target: File, payload: String) {
+    // AppPreferences is instantiated all over the app, so the per-instance @Synchronized of the callers does not stop two
+    // instances from sharing one ".name.tmp" staging file; the lock here is process-wide.
+    private fun writeDurableFile(target: File, payload: String): Unit = synchronized(FILE_WRITE_LOCK) {
         val stagingFile = File(target.parentFile, ".${target.name}.tmp")
         FileOutputStream(stagingFile).use { stream ->
             stream.write(payload.encodeToByteArray())
@@ -763,6 +765,7 @@ class AppPreferences(private val context: Context) {
 
     private companion object {
         const val LOG_TAG = "AppPreferences"
+        val FILE_WRITE_LOCK = Any()
         const val PREFS_FILE_NAME = "nextcraft_preferences"
         const val DEFAULT_AGY_MODEL = "claude-sonnet-5-5-low"
         val LEGACY_DEEPSEEK_MODELS = setOf("deepseek-chat", "deepseek-reasoner")

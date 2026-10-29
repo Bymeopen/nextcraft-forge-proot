@@ -136,7 +136,10 @@ internal fun classifyImageSource(src: String, projectSlug: String): ChatImageSou
     return when {
         value.startsWith("data:image/", ignoreCase = true) -> {
             val comma = value.indexOf(',')
-            if (comma < 0 || !value.substring(0, comma).contains(";base64", ignoreCase = true)) null
+            // Same 10 MB ceiling as files and downloads (base64 is 4/3 of the bytes): a data URI loads without a tap.
+            if (comma < 0 || !value.substring(0, comma).contains(";base64", ignoreCase = true) ||
+                value.length - comma - 1 > ChatImageDecoder.MAX_BYTES / 3 * 4 + 4
+            ) null
             else ChatImageSource.Data(value.substring(comma + 1))
         }
         value.startsWith("https://", ignoreCase = true) || value.startsWith("http://", ignoreCase = true) ->
