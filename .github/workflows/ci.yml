@@ -34,7 +34,8 @@ jobs:
       - name: Android Lint
         run: gradle --no-daemon :app:lintDebug
       - name: Assemble debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        # Same identity as release-debug.yml: one app, com.nextcraft.forge.proot, versionCode = minutes since the epoch.
+        run: gradle --no-daemon :app:assembleDebug -PversionCode="$(($(date +%s) / 60))" -PversionName="1.0.${GITHUB_RUN_NUMBER}-forge"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: app-debug

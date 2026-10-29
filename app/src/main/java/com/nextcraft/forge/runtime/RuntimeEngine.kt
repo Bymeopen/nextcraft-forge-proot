@@ -36,12 +36,16 @@ object RuntimeEngines {
     private var detectionDone = false
 
     const val PROOT_LOADER_LIBRARY = "libproot_loader.so"
+    const val SIGSYS_PROBE_LIBRARY = "libsigsys_probe.so"
 
     /** The PRoot binary lives in the APK's native library directory: the only place Android lets an app exec from. */
     fun prootBinary(context: Context): File = File(context.applicationInfo.nativeLibraryDir, PROOT_LIBRARY)
 
     /** proot's ELF loader, which every guest execve runs through; it must be exec-able too, so it ships beside proot. */
     fun prootLoader(context: Context): File = File(context.applicationInfo.nativeLibraryDir, PROOT_LOADER_LIBRARY)
+
+    /** Diagnostic: prints which syscalls this device's seccomp filter refuses (source: scripts/runtime-bundles/sigsys-probe.c). */
+    fun sigsysProbe(context: Context): File = File(context.applicationInfo.nativeLibraryDir, SIGSYS_PROBE_LIBRARY)
 
     fun isProotAvailable(context: Context): Boolean =
         prootBinary(context).let { it.isFile && it.canExecute() } && prootLoader(context).let { it.isFile && it.canExecute() }
