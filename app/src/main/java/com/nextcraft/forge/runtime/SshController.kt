@@ -3,6 +3,7 @@ package com.nextcraft.forge.runtime
 import androidx.core.content.edit
 import android.content.Context
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -162,7 +163,9 @@ class SshController(
         if (forward.isNotEmpty()) {
             scope.launch {
                 // "[s]sh" keeps pkill from matching this very shell command line.
-                val escapedForward = Regex.escape(forward)
+                // pkill takes a POSIX ERE: Regex.escape's \Q..\E is Java-only and never matched. The forward only
+                // holds [A-Za-z0-9._:-] (SSH_FORWARD), so escaping the dot is enough.
+                val escapedForward = forward.replace(".", "\\.")
                 runCatching { runner.run(workspace(), SLUG, "pkill -f ${ChrootRunner.quote("[s]sh .* -N .*-L $escapedForward ")} || true", timeoutMillis = 15_000L) }.onFailure { com.nextcraft.forge.runtime.ErrorLog.swallowed("SshController", it) }
             }
         }
@@ -179,6 +182,8 @@ class SshController(
                 if (!quiet) mutable.update { it.copy(log = append(it.log, chunk)) }
             }
         }.getOrElse { error ->
+            // Cancel (user pressed Cancel) must stop the task, not be reported as an ordinary failure.
+            if (error is CancellationException) throw error
             mutable.update { it.copy(log = append(it.log, "✕ ${error.message}\n")) }
             ChrootResult(-1, error.message.orEmpty())
         }
