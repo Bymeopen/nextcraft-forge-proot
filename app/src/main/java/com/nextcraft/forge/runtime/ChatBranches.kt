@@ -509,9 +509,12 @@ class ChatBranches(context: Context) {
             cd "§C"
             # `add -A` marks every conflicted file as resolved. After a merge that stopped on conflicts, a file that still
             # holds conflict markers must not be committed: the markers would end up in the user's project.
-            for f in §(G diff --name-only --diff-filter=U); do
-              if grep -q '^<<<<<<< ' "§f" 2>/dev/null; then echo "unresolved conflict in §f" >&2; exit 3; fi
-            done
+            # Read line by line: an unquoted `for` would split a conflicted file name that contains spaces and skip the check.
+            # The loop is the last command of a pipeline, so its `exit` only leaves that subshell; the `if` turns its status
+            # into the script's own exit 3 (a bare `exit 3` inside the pipe would let `add -A` commit the markers).
+            if G -c core.quotePath=false diff --name-only --diff-filter=U | while IFS= read -r f; do
+              if grep -q '^<<<<<<< ' "§f" 2>/dev/null; then echo "unresolved conflict in §f" >&2; exit 1; fi
+            done; then :; else exit 3; fi
             G add -A
             if ! G diff --cached --quiet; then G commit -q -m "§MSG"; fi
             if [ -z "§(G diff --name-only --diff-filter=U)" ] && [ -d "§M/.git" ] && G fetch -q "§M" HEAD >/dev/null 2>&1; then
