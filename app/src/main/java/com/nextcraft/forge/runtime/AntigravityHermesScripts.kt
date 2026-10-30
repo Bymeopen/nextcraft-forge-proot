@@ -10,7 +10,10 @@ import re
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
+# Claude Code exports CLAUDE_PROJECT_DIR to its hooks; a shared copy of this script (not inside the project) needs it to
+# know which project it guards. Anything that is not an absolute path is ignored.
+_PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", "")
+WORKSPACE_ROOT = os.path.abspath(_PROJECT_DIR) if os.path.isabs(_PROJECT_DIR) else os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
 MEMORY_FILES = {
     os.path.join(WORKSPACE_ROOT, "AGENTS.md"),
     os.path.join(WORKSPACE_ROOT, ".agents/memory/USER.md"),
@@ -52,6 +55,24 @@ SECRET_AND_INJECTION_PATTERNS = [
     (r"(?i)(ignore\s+(all\s+)?(previous|prior)\s+instructions|disregard\s+system\s+prompt|you\s+are\s+now\s+in\s+developer\s+mode)", "Blocked by Memory Guard: Prompt injection pattern detected in memory/skill file."),
 ]
 
+# 2b. Protected surface: the permission hook itself, Claude's settings, SSH keys and stored credentials. A command or
+# path that touches one is never auto-allowed (decision "ask": the app's approval flow decides), so an agent cannot
+# rewrite the hook or the settings that constrain it.
+PROTECTED_SURFACE = (
+    "permission-hook",
+    ".claude/settings",
+    "/opt/nextcraft",
+    ".ssh/",
+    ".git-credentials",
+    ".config/gh",
+)
+
+
+def touches_protected_surface(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(part in lowered for part in PROTECTED_SURFACE)
+
+
 def check_command(args: dict):
     cmd = args.get("CommandLine", "") or args.get("command", "")
     for pattern, reason in DENY_CMD_PATTERNS:
@@ -60,6 +81,8 @@ def check_command(args: dict):
     for pattern, reason in ASK_CMD_PATTERNS:
         if re.search(pattern, cmd):
             return {"decision": "ask", "reason": reason}
+    if touches_protected_surface(cmd):
+        return {"decision": "ask", "reason": "Touches a protected file (permission hook, Claude settings, SSH keys or credentials). Confirm?"}
     return {"decision": "allow"}
 
 def is_protected_cognitive_file(path: str) -> bool:
@@ -102,6 +125,8 @@ def check_file_mutation(args: dict, tool_name: str = ""):
     )
     if is_outside_workspace(path):
         return {"decision": "deny", "reason": f"Blocked: writes are confined to {WORKSPACE_ROOT} (plus ~/.gemini, ~/.claude, /tmp, agent config root); got {path}"}
+    if touches_protected_surface(path):
+        return {"decision": "ask", "reason": f"Touches a protected file ({path}). Confirm?"}
     if not is_protected_cognitive_file(path):
         return {"decision": "allow"}
 
@@ -139,23 +164,78 @@ def check_file_mutation(args: dict, tool_name: str = ""):
 
     return {"decision": "allow"}
 
-def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        print(json.dumps({"decision": "allow"}))
-        return
+CLAUDE_FILE_TOOLS = {"Write": "write_file", "Edit": "edit_file", "MultiEdit": "edit_file", "NotebookEdit": "edit_file"}
 
+
+def evaluate_claude(payload: dict) -> dict:
+    ""${'"'}PreToolUse / PermissionRequest payload from Claude Code: tool_name + tool_input.""${'"'}
+    tool = payload.get("tool_name", "") or ""
+    tool_input = payload.get("tool_input") or {}
+    if tool == "Bash":
+        return check_command({"CommandLine": tool_input.get("command", "")})
+    if tool in CLAUDE_FILE_TOOLS:
+        path = tool_input.get("file_path", "") or tool_input.get("notebook_path", "")
+        if tool == "Write":
+            content = tool_input.get("content", "")
+        elif tool == "MultiEdit":
+            content = "\n".join(str(e.get("new_string", "")) for e in tool_input.get("edits") or [] if isinstance(e, dict))
+        elif tool == "NotebookEdit":
+            content = tool_input.get("new_source", "")
+        else:
+            content = tool_input.get("new_string", "")
+        return check_file_mutation({"Path": path, "Replacement": content}, CLAUDE_FILE_TOOLS[tool])
+    return {"decision": "allow", "no_opinion": True}  # Read, Grep, web tools, ...: nothing for this gate to decide
+
+
+def evaluate_antigravity(payload: dict) -> dict:
     tool_call = payload.get("toolCall", {})
     tool_name = tool_call.get("name", "") or payload.get("toolName", "")
     args = tool_call.get("args", {})
-
     if tool_name in ("write_file", "edit_file", "replace_file_content", "multi_replace_file_content") or any(k in args for k in ("Path", "path", "TargetFile")):
-        result = check_file_mutation(args, tool_name)
-    else:
-        result = check_command(args)
+        return check_file_mutation(args, tool_name)
+    return check_command(args)
 
-    print(json.dumps(result))
+
+def claude_output(payload: dict, result: dict) -> dict:
+    if result.get("no_opinion"):
+        return {}  # an explicit "allow" would skip Claude's own permission prompt for a tool this gate never judged
+    decision = result.get("decision", "allow")
+    if payload.get("hook_event_name") == "PermissionRequest":
+        if decision in ("allow", "deny"):
+            return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": decision}}}
+        return {}  # "ask": no verdict here, the next handler (the app's approval flow) decides
+    output = {"hookEventName": "PreToolUse", "permissionDecision": decision}
+    if result.get("reason"):
+        output["permissionDecisionReason"] = result["reason"]
+    return {"hookSpecificOutput": output}
+
+
+def main():
+    # `--decision` prints only allow|deny|ask for the permission hook and never fails open: unreadable input is "ask".
+    decision_only = "--decision" in sys.argv[1:]
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("payload is not an object")
+    except Exception:
+        print("ask" if decision_only else json.dumps({"decision": "allow"}))
+        return
+
+    is_claude = "tool_name" in payload or "tool_input" in payload
+    try:
+        result = evaluate_claude(payload) if is_claude else evaluate_antigravity(payload)
+    except Exception as error:  # a bug in the gate must not silently allow in --decision mode
+        if decision_only:
+            print("ask")
+            return
+        result = {"decision": "allow", "reason": f"gate error: {error}"}
+
+    if decision_only:
+        print("ask" if result.get("no_opinion") else result.get("decision", "ask"))
+    elif is_claude:
+        print(json.dumps(claude_output(payload, result)))
+    else:
+        print(json.dumps(result))
 
 if __name__ == "__main__":
     main()
@@ -431,6 +511,39 @@ def make_executable(path: str) -> None:
     st = os.stat(path)
     os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
+def bootstrap_claude(target_dir: str) -> None:
+    ""${'"'}Claude Code reads .claude/ (settings, subagents, skills) and CLAUDE.md; existing files are never overwritten.""${'"'}
+    src_claude = os.path.join(SOURCE_WORKSPACE, ".claude")
+    dst_claude = os.path.join(target_dir, ".claude")
+    if os.path.isdir(src_claude) and os.path.abspath(src_claude) != os.path.abspath(dst_claude):
+        os.makedirs(dst_claude, exist_ok=True)
+        src_settings = os.path.join(src_claude, "settings.json")
+        dst_settings = os.path.join(dst_claude, "settings.json")
+        if os.path.isfile(src_settings) and not os.path.exists(dst_settings):
+            with open(src_settings, "r", encoding="utf-8") as fh:
+                text = fh.read().replace(SOURCE_WORKSPACE, target_dir)
+            with open(dst_settings, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        for sub in ("agents", "skills"):
+            src_sub = os.path.join(src_claude, sub)
+            dst_sub = os.path.join(dst_claude, sub)
+            if not os.path.isdir(src_sub):
+                continue
+            os.makedirs(dst_sub, exist_ok=True)
+            for item in os.listdir(src_sub):
+                s_item = os.path.join(src_sub, item)
+                d_item = os.path.join(dst_sub, item)
+                if os.path.lexists(d_item):
+                    continue
+                if os.path.isdir(s_item):
+                    shutil.copytree(s_item, d_item)
+                else:
+                    shutil.copy2(s_item, d_item)
+    claude_md = os.path.join(target_dir, "CLAUDE.md")
+    if os.path.isfile(os.path.join(target_dir, "AGENTS.md")) and not os.path.lexists(claude_md):
+        os.symlink("AGENTS.md", claude_md)  # relative, so it resolves on the host and in the guest alike
+
+
 def bootstrap_workspace(target_dir: str) -> None:
     target_dir = os.path.abspath(target_dir)
     if not target_dir.startswith("/workspace"):
@@ -440,7 +553,7 @@ def bootstrap_workspace(target_dir: str) -> None:
         os.makedirs(os.path.join(target_dir, sub), exist_ok=True)
     if os.path.abspath(SOURCE_WORKSPACE) != target_dir:
         for script_name in os.listdir(SOURCE_SCRIPTS_DIR):
-            if not script_name.endswith(".py"):
+            if not script_name.endswith((".py", ".sh")):
                 continue
             src_file = os.path.join(SOURCE_SCRIPTS_DIR, script_name)
             dst_file = os.path.join(target_dir, ".agents/scripts", script_name)
@@ -451,7 +564,7 @@ def bootstrap_workspace(target_dir: str) -> None:
             make_executable(dst_file)
     else:
         for script_name in os.listdir(SOURCE_SCRIPTS_DIR):
-            if script_name.endswith(".py"):
+            if script_name.endswith((".py", ".sh")):
                 make_executable(os.path.join(SOURCE_SCRIPTS_DIR, script_name))
     src_hooks = os.path.join(SOURCE_WORKSPACE, ".agents/hooks.json")
     dst_hooks = os.path.join(target_dir, ".agents/hooks.json")
@@ -476,6 +589,7 @@ def bootstrap_workspace(target_dir: str) -> None:
                 text = fh.read().replace(SOURCE_WORKSPACE, target_dir)
             with open(dst_p, "w", encoding="utf-8") as fh:
                 fh.write(text)
+    bootstrap_claude(target_dir)
     print(f"[OK] Hermes-Lite v2 initialized in: {target_dir}")
 
 def main():
@@ -839,5 +953,6 @@ if __name__ == "__main__":
         "hermes_init.py" to HERMES_INIT_PY,
         "web_and_ui_tool.py" to WEB_AND_UI_TOOL_PY,
         "forge_reference_index.py" to FORGE_REFERENCE_INDEX_PY,
+        "permission-hook.sh" to ClaudeWorkspaceFiles.PERMISSION_HOOK_SH,
     )
 }
