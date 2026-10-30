@@ -333,6 +333,7 @@ internal fun RuntimeInstaller.ensureAppAccess() {
 /** Keeps the coloured prompt block in /root/.bashrc ([ShellPrompt]); an unreadable file is left alone. */
 internal fun RuntimeInstaller.ensureShellPrompt() {
     ensureX86Wrapper()
+    silenceSudoHint()
     val bashrc = File(rootfs, "root/.bashrc")
     val current = runCatching { if (bashrc.isFile) bashrc.readText() else "" }.getOrNull() ?: return
     val updated = ShellPrompt.apply(current)
@@ -340,6 +341,18 @@ internal fun RuntimeInstaller.ensureShellPrompt() {
         runCatching { writeRootfsFileAtomically(bashrc, updated, mode = 0b110100100) }
             .onFailure { Log.w("RuntimeInstaller", "Could not write the shell prompt", it) }
     }
+}
+
+/**
+ * Ubuntu's /etc/bash.bashrc runs `groups` for a sudo hint unless ~/.sudo_as_admin_successful exists. Under PRoot the
+ * guest keeps the app's Android supplementary groups, which have no name in /etc/group, so every new shell printed
+ * "groups: cannot find name for group ID ...". /etc/bash.bashrc runs before ~/.bashrc, so only this file helps.
+ */
+internal fun RuntimeInstaller.silenceSudoHint() {
+    val marker = File(rootfs, "root/.sudo_as_admin_successful")
+    if (marker.exists()) return
+    runCatching { writeRootfsFileAtomically(marker, "", mode = 0b110100100) }
+        .onFailure { Log.w("RuntimeInstaller", "Could not silence the sudo hint", it) }
 }
 
 /** Installs `run-x86` (see [X86Wrapper]) in the guest; skipped while it is up to date. */
