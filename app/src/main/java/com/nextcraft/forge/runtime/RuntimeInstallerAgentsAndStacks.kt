@@ -615,14 +615,39 @@ internal suspend fun RuntimeInstaller.ensureAgyInstalled(
     onProgress: suspend (RuntimeInstallProgress) -> Unit,
 ) {
     if (isAgentInstalled(AgentKind.ANTIGRAVITY)) return
-    installRuntimeOverlay(
-        bundle = RuntimeInstaller.AGY_BUNDLE,
-        message = "Installing Antigravity CLI ${RuntimeInstaller.AGY_VERSION}…",
-        from = fraction,
-        to = 0.995f,
-        onProgress = onProgress,
-        forceEmbedded = isAssetAvailable("runtime/${RuntimeInstaller.AGY_BUNDLE.fileName}"),
-    )
+    val bundleError = try {
+        installRuntimeOverlay(
+            bundle = RuntimeInstaller.AGY_BUNDLE,
+            message = "Installing Antigravity CLI ${RuntimeInstaller.AGY_VERSION}…",
+            from = fraction,
+            to = 0.995f,
+            onProgress = onProgress,
+            forceEmbedded = isAssetAvailable("runtime/${RuntimeInstaller.AGY_BUNDLE.fileName}"),
+        )
+        null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        e
+    }
+    if (bundleError != null) {
+        // The pinned bundle is a release asset and can be missing (HTTP 404). The upstream release is the only source
+        // left, so install from it, as an update would. If that fails too, keep the first error attached.
+        com.nextcraft.forge.runtime.ErrorLog.swallowed("RuntimeInstaller", bundleError)
+        try {
+            val latest = fetchAgyManifest().getString("version")
+            updateAgy(installedRuntime(), latest, onProgress)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e.addSuppressed(bundleError)
+            throw e
+        }
+        require(isAgentInstalled(AgentKind.ANTIGRAVITY)) {
+            "Antigravity CLI installation is incomplete"
+        }
+        return
+    }
     verifyGuest(chrootExec, "${RuntimeInstaller.AGY_GUEST_PATH} --version", "Failed to verify Antigravity CLI")
     agyMarker.writeMarker(RuntimeInstaller.AGY_VERSION)
     require(isAgentInstalled(AgentKind.ANTIGRAVITY)) {
