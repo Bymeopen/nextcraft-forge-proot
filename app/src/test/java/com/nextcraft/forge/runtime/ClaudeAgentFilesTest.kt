@@ -205,7 +205,8 @@ class ClaudeAgentFilesTest {
         val command = preToolUse.getJSONArray("hooks").getJSONObject(0).getString("command")
         assertTrue(command.contains("/opt/nextcraft/permission-hook.sh"))
 
-        val agents = File(ws, ".claude/agents").list().orEmpty().map { it.removeSuffix(".md") }.toSet()
+        // Only the .md files are agents: syncManagedFile keeps its hash sidecars in a .forge-managed folder next to them.
+        val agents = File(ws, ".claude/agents").list().orEmpty().filter { it.endsWith(".md") }.map { it.removeSuffix(".md") }.toSet()
         assertEquals(
             setOf("universal-lead-architect", "ui-frontend-designer", "backend-systems-engineer", "universal-fullstack-auditor", "universal-qa-verifier"),
             agents,
