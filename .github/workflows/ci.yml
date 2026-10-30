@@ -109,6 +109,7 @@ jobs:
           sh -n scripts/runtime-bundles/chroot-exec.sh
           sh scripts/test-chroot-reaper.sh
           sh -n scripts/runtime-bundles/unmount-chroot.sh
+          sh -n .agents/scripts/permission-hook.sh
           for s in scripts/runtime-bundles/build-*.sh scripts/make-update-manifest.sh; do bash -n "$s"; done
       - name: Chroot supervisor rejects unsafe arguments
         run: |
@@ -120,3 +121,5 @@ jobs:
           fi
       - name: Shipped scripts match the copies in the repository
         run: python3 scripts/check-embedded-scripts.py
+      - name: Embedded agent files match the repository
+        run: python3 scripts/embed-agent-files.py --check

@@ -335,6 +335,67 @@ Diperkuat secara otomatis oleh `.agents/hooks.json` (`PreToolUse` pada `run_comm
             val skillContent = SKILLS[skillKey] ?: continue
             syncManagedFile(File(File(File(agentsDir, "skills"), skillKey), "SKILL.md"), skillContent, executable = false)
         }
+
+        // Claude Code reads .claude/ (settings, subagents, skills) and CLAUDE.md. Settings are written once and never
+        // replaced; subagents and skills follow the same "user edits win" rule as the scripts above.
+        val claudeDir = File(workspace, ".claude")
+        val claudeSettings = File(claudeDir, "settings.json")
+        if (!claudeSettings.isFile) {
+            runCatching {
+                claudeDir.mkdirs()
+                claudeSettings.writeText(claudeProjectSettingsJson())
+            }
+        }
+        for ((agentName, agentContent) in ClaudeWorkspaceFiles.AGENTS) {
+            syncManagedFile(File(File(claudeDir, "agents"), "$agentName.md"), agentContent, executable = false)
+        }
+        for (skillKey in CLAUDE_SKILL_KEYS) {
+            val skillContent = SKILLS[skillKey] ?: continue
+            syncManagedFile(File(File(File(claudeDir, "skills"), skillKey), "SKILL.md"), skillContent, executable = false)
+        }
+        // CLAUDE.md -> AGENTS.md, relative so that it resolves on the host and in the guest alike.
+        val claudeMd = File(workspace, "CLAUDE.md")
+        if (agentsMd.isFile && !java.nio.file.Files.exists(claudeMd.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            runCatching { java.nio.file.Files.createSymbolicLink(claudeMd.toPath(), java.nio.file.Paths.get("AGENTS.md")) }
+        }
+    }
+
+    /** The skills Claude Code gets next to the Antigravity ones (project `.claude/skills` and global `~/.claude/skills`). */
+    internal val CLAUDE_SKILL_KEYS = listOf(
+        "claude-code-core",
+        "deploy-and-preview",
+        "multi-agent-personas",
+        "nextcraft-android-forge",
+        "nextcraft-system-tools",
+        "self-healing-loop",
+        "skill-creator",
+        "visual-architecture-canvas",
+    )
+
+    /**
+     * Project settings for Claude Code in a new workspace. The tools are allowed, and every Bash/Edit/Write call first
+     * goes through the PreToolUse hook (the same script as the host's PermissionRequest hook), whose security gate
+     * denies destructive commands and asks about protected files. When the hook script or python3 is missing the answer
+     * is "ask", not "allow", so the app's own approval flow stays in charge.
+     */
+    internal fun claudeProjectSettingsJson(): String {
+        val hookCommand = "[ -x /opt/nextcraft/permission-hook.sh ] && exec /opt/nextcraft/permission-hook.sh || " +
+            "printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"," +
+            "\"permissionDecisionReason\":\"permission hook is not installed\"}}'"
+        val allow = org.json.JSONArray(
+            listOf(
+                "Bash", "Bash(*)", "Edit", "Write", "NotebookEdit", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill",
+                "mcp__forge-forge-design-android__*", "mcp__forge-context7__*",
+            ),
+        )
+        val hook = org.json.JSONObject().put("type", "command").put("command", hookCommand).put("timeout", 10)
+        val preToolUse = org.json.JSONObject()
+            .put("matcher", "Bash|Edit|Write|MultiEdit|NotebookEdit")
+            .put("hooks", org.json.JSONArray().put(hook))
+        return org.json.JSONObject()
+            .put("permissions", org.json.JSONObject().put("allow", allow).put("defaultMode", "acceptEdits"))
+            .put("hooks", org.json.JSONObject().put("PreToolUse", org.json.JSONArray().put(preToolUse)))
+            .toString(2) + "\n"
     }
 
     /**
@@ -415,6 +476,19 @@ Diperkuat secara otomatis oleh `.agents/hooks.json` (`PreToolUse` pada `run_comm
         val claudeMd = File(claudeConfigRoot, "CLAUDE.md")
         if (runCatching { claudeMd.takeIf { it.isFile }?.readText() }.getOrNull() != GLOBAL_GEMINI_MD) {
             runCatching { write(claudeMd, GLOBAL_GEMINI_MD) }
+        }
+        for (skillKey in CLAUDE_SKILL_KEYS) {
+            val skillContent = SKILLS[skillKey] ?: continue
+            val skillFile = File(File(File(claudeConfigRoot, "skills"), skillKey), "SKILL.md")
+            if (runCatching { skillFile.takeIf { it.isFile }?.readText() }.getOrNull() != skillContent) {
+                runCatching { write(skillFile, skillContent) }
+            }
+        }
+        for ((agentName, agentContent) in ClaudeWorkspaceFiles.AGENTS) {
+            val agentFile = File(File(claudeConfigRoot, "agents"), "$agentName.md")
+            if (runCatching { agentFile.takeIf { it.isFile }?.readText() }.getOrNull() != agentContent) {
+                runCatching { write(agentFile, agentContent) }
+            }
         }
         val dshConfigRoot = File(rootfs, "root/.dsh")
         val dshAgentsMd = File(dshConfigRoot, "AGENTS.md")

@@ -33,38 +33,13 @@ fun RuntimeInstaller.applyAndroidHostTools() {
 fun RuntimeInstaller.ensureSettingsAndHooks() {
     val hook = File(rootfs, "opt/nextcraft/permission-hook.sh")
     hook.parentFile?.mkdirs()
-    // Hands every permission request to the app through the shared bridge directory and
-    // waits for the user's/guardrail decision. The app classifies risk, auto-answers
-    // SAFE/REVIEW and prompts for HIGH. No answer within the timeout means deny.
+    // security_gate.py judges each request first: "allow" and "deny" are answered at once. "ask" (protected files,
+    // pipe-to-shell, ...) and anything the gate cannot judge (no python3, missing script, an error) go to the app through
+    // the shared bridge directory, which classifies the request and prompts if needed; no answer within the timeout
+    // means deny. The same script serves the PreToolUse event of project settings (see ClaudeWorkspaceFiles).
     // Written atomically: a Claude session may be executing this script, and truncating it in place makes the hook
     // answer nothing, which Claude Code treats as a refusal.
-    writeRootfsFileAtomically(
-        hook,
-        """#!/bin/sh
-BRIDGE="${'$'}{NEXTCRAFT_BRIDGE_DIR:-/nextcraft-bridge}"
-RESP="${'$'}{NEXTCRAFT_RESPONSE_DIR:-/nextcraft-bridge-responses}"
-# Parallel chats share this directory: the session id (set by the app) tags the request so only its owner answers it.
-SID="${'$'}{NEXTCRAFT_SESSION_ID:-}"
-ID="${'$'}{SID:+${'$'}{SID}_}${'$'}(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "${'$'}${'$'}-${'$'}(date +%s)")"
-DECISION=deny
-if [ -d "${'$'}BRIDGE" ] && cat > "${'$'}BRIDGE/${'$'}ID.request.tmp" && mv "${'$'}BRIDGE/${'$'}ID.request.tmp" "${'$'}BRIDGE/${'$'}ID.request"; then
-i=0
-while [ "${'$'}i" -lt 600 ]; do
-    if [ -f "${'$'}RESP/${'$'}ID.response" ]; then
-        [ "${'$'}(cat "${'$'}RESP/${'$'}ID.response")" = "allow" ] && DECISION=allow
-        break
-    fi
-    sleep 0.1
-    i=${'$'}((i + 1))
-done
-rm -f "${'$'}BRIDGE/${'$'}ID.request" "${'$'}BRIDGE/${'$'}ID.request.tmp"
-else
-cat > /dev/null
-fi
-printf '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"%s"}}}\n' "${'$'}DECISION"
-""",
-        mode = 0b111101101,
-    )
+    writeRootfsFileAtomically(hook, ClaudeWorkspaceFiles.PERMISSION_HOOK_SH, mode = 0b111101101)
 
     // BROWSER handler for `claude auth login`: there is no browser in the chroot, so the sign-in URL is handed to
     // the app through the bridge directory and opened in the Android browser. The browser then redirects to

@@ -95,8 +95,26 @@
       "Bash(gh repo view:*)",
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
-      "Bash(gradle:*)"
+      "Bash(gradle:*)",
+      "Bash(*)",
+      "mcp__forge-forge-design-android__*",
+      "mcp__forge-context7__*"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x /opt/nextcraft/permission-hook.sh ] && exec /opt/nextcraft/permission-hook.sh || exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
